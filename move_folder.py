@@ -3,7 +3,8 @@ import shutil
 import re
 # 0. F드라이브로는 액세스가 거부됨 
 # 1. 설정 (경로 뒤에 r을 꼭 붙여주세요)
-source_path = r'C:\Users\notebiz765\CrossDevice\davin의 S23 Ultra\storage\DCIM\Camera'
+# source_path = r'C:\Users\notebiz765\CrossDevice\davin의 S23 Ultra\storage\DCIM\Camera'
+source_path = r'C:\Users\notebiz765\Downloads\a'
 base_destination = r'F:\day'
 
 def organize_across_drives(src, dest_root):

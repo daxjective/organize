@@ -3,7 +3,9 @@ import shutil
 import re  # 정규 표현식을 사용하기 위한 도구
 
 # 1. 경로 설정
-target_path = r'C:\Users\notebiz765\CrossDevice\davin의 S23 Ultra\storage\DCIM\Camera'
+
+## target_path = r'C:\Users\notebiz765\CrossDevice\davin의 S23 Ultra\storage\DCIM\Camera'
+target_path = r'C:\Users\notebiz765\Downloads\a'
 
 def organize_photos(path):
     if not os.path.exists(path):
