@@ -1,4 +1,3 @@
-import os
 from datetime import date
 from pathlib import Path
 
@@ -80,24 +79,36 @@ def test_when_filter_limits_the_files(tmp_path):
     assert quarantined(plan) == ["a (1).pdf"]
 
 
-def test_when_excluded_duplicate_always_wins_the_keeper_role(tmp_path):
-    """when 범위 밖 파일과 내용이 같으면, 범위 안 후보는 이름·나이와 무관하게 치워진다.
+def test_when_filter_does_not_pull_in_unrelated_files(tmp_path):
+    """[A] `when` 으로 걸러진 파일은 참고용으로도 쓰지 않는다 — 아예 뺀다.
 
-    범위 밖 파일은 이 스텝이 건드릴 수 없다 — 하위 폴더 파일과 같은 처지다
-    ("읽기 범위엔 있지만 치울 수는 없다"). 그러니 그 파일이 이미 있는 이상
-    범위 안 파일은 내용이 이미 다른 곳에 있는 여분이라 남길 이유가 없다.
-    이걸 확인하려고 범위 안 파일을 일부러 더 오래된 것으로 만들었다 — 이름이나
-    나이가 우연히 유리해도(옛 코드처럼 그룹 전체를 한 번에 랭킹하면) 결과가
-    달라지면 안 된다는 뜻이다.
+    라운드 1 판정 오류의 재발 방지 테스트. `when={"ext": [".png"]}` 인데
+    무관한 `.txt` 를 "참고용(protected)" 취급했더니, 그 `.txt` 가 남길 파일로
+    뽑히면서 정작 대상인 png 두 개가 **전부** 치워지는 사고가 났다.
+    `.txt` 는 하위 폴더 파일과 처지가 다르다 — 사용자가 "이 작업의 대상이
+    아니다"라고 명시한 것이므로 중복 판정에서 통째로 빠져야 한다.
     """
-    a = write(tmp_path / "in_scope.png", b"SAME")
-    b = write(tmp_path / "out_of_scope.txt", b"SAME")
-    os.utime(a, (1000.0, 1000.0))   # 범위 안 파일이 훨씬 오래됨 — 옛 랭킹이면 이게 이긴다
-    os.utime(b, (2000.0, 2000.0))
+    write(tmp_path / "메모.txt", b"SAME")
+    write(tmp_path / "사진.png", b"SAME")
+    write(tmp_path / "사진 (1).png", b"SAME")
     plan = build(ctx_for(tmp_path), BlockConfig(when={"ext": [".png"]}))
-    assert quarantined(plan) == ["in_scope.png"]
+    assert quarantined(plan) == ["사진 (1).png"]     # 복사본 표식 있는 쪽만 치운다
     a = next(x for x in plan.actions if x.kind == "quarantine")
-    assert "out_of_scope.txt" in a.reason
+    assert "메모.txt" not in a.reason                # 무관한 파일이 이유에 등장하면 안 된다
+
+
+def test_when_filter_still_allows_subfolder_reference(tmp_path):
+    """[B] `when` 을 통과하는 하위 폴더 파일은 여전히 대조 대상이다.
+
+    [A] 를 고치다가 하위 폴더 대조 기능 자체를 죽이면 안 된다 — `when` 으로
+    빠지는 건 조건에 안 맞는 파일뿐이고, 조건을 통과하는 하위 폴더 파일은
+    그대로 `readable` 에 남아 원본 대접(protected)을 받아야 한다.
+    """
+    write(tmp_path / "정리됨" / "여행사진.png", b"SAME")
+    write(tmp_path / "사진.png", b"SAME")
+    plan = build(ctx_for(tmp_path), BlockConfig(when={"ext": [".png"]}))
+    assert quarantined(plan) == ["사진.png"]
+    assert all(a.dst.parent.name == "20260821-120000" for a in plan.actions)
 
 
 def test_virtual_files_are_skipped_with_a_clear_reason(tmp_path):
