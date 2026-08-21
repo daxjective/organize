@@ -2160,8 +2160,12 @@ def ctx(*entries):
     return Context(root=ROOT, entries=list(entries), today=TODAY)
 
 
-def move(entry, dst_rel, block="route"):
-    return Action(kind="move", src=entry.path, dst=ROOT / dst_rel, reason="테스트", block=block)
+def move(entry, dst_rel, block="route", src=None):
+    # 실제 블록은 언제나 ctx.current_path(entry) 를 넘긴다. 이미 한 번 옮겨진 파일에
+    # 원래 경로를 넘기면 Context 가 못 찾아 이동이 무시된다 — 그게 정상 동작이다.
+    # 두 번째 이동을 시험하는 테스트는 반드시 src= 를 명시해야 한다.
+    return Action(kind="move", src=src or entry.path, dst=ROOT / dst_rel,
+                  reason="테스트", block=block)
 
 
 def test_files_at_root_are_direct_children_only():
@@ -2189,8 +2193,10 @@ def test_two_moves_in_a_row_chain():
     a = e("a.png")
     c = ctx(a)
     c.apply(Plan(actions=[move(a, "02_Media/a.png")]))
-    c.apply(Plan(actions=[move(a, "02_Media/캡처/a.png", block="route2")]))
+    c.apply(Plan(actions=[move(a, "02_Media/캡처/a.png", block="route2",
+                              src=c.current_path(a))]))
     assert c.rel_of(a) == "02_Media/캡처"
+    assert c.current_path(a) == ROOT / "02_Media" / "캡처" / "a.png"
 
 
 def test_quarantined_file_disappears_from_the_view():
@@ -2305,6 +2311,11 @@ class FileEntry:
 블록은 파일을 만지지 않으므로, 2번 블록이 1번 블록의 결과를 보려면
 "이 블록이 끝나면 어디에 있을 것인가"를 따로 들고 있어야 한다.
 Context 가 그 장부다. 키는 항상 **원래 경로** 이므로 여러 번 옮겨도 추적된다.
+
+블록은 Action 의 `src` 에 반드시 `ctx.current_path(entry)` 를 넣어야 한다.
+이미 옮겨진 파일에 옛 경로를 넘기면 `_by_current` 에서 찾지 못해 그 이동이 장부에
+반영되지 않는다. 그러면 다음 블록이 파일을 엉뚱한 곳에서 찾아 0건이 된다.
+(미리보기와 실행이 어긋나지는 않는다 — 실행기는 Context 가 아니라 Plan 을 그대로 쓴다.)
 """
 
 from datetime import date
