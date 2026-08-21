@@ -119,3 +119,15 @@ def test_unreadable_entry_is_reported_not_dropped(tmp_path):
     assert [e.name for e in result.entries] == ["정상.txt"]
     assert [p.name for p, _ in result.skipped] == ["깨진링크.txt"]
     assert "읽을 수 없다" in result.skipped[0][1]
+
+
+def test_symlink_to_a_directory_is_not_a_file(tmp_path):
+    """폴더를 가리키는 링크는 폴더로 취급해야 한다. 파일로 새면 그 폴더의
+    크기·수정시각을 가진 항목이 정리 대상이 된다."""
+    import os
+    (tmp_path / "실제폴더").mkdir()
+    touch(tmp_path / "실제폴더" / "안쪽.txt")
+    touch(tmp_path / "정상.txt")
+    os.symlink(tmp_path / "실제폴더", tmp_path / "폴더링크")
+    result = scan(tmp_path)
+    assert [e.name for e in result.entries] == ["정상.txt"]

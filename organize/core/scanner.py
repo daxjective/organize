@@ -101,7 +101,12 @@ def scan(
             with os.scandir(root) as it:
                 for e in it:
                     try:
-                        if e.is_dir(follow_symlinks=False):
+                        # 기본값(follow_symlinks=True)을 쓴다. False 로 두면 폴더를
+                        # 가리키는 심볼릭 링크가 파일로 새어나가고, 그 폴더의 크기와
+                        # 수정시각을 가진 FileEntry 가 만들어진다.
+                        # 깨진 링크는 기본값에서도 예외 없이 False 를 돌려주므로
+                        # 아래 stat 에서 사유가 남는다.
+                        if e.is_dir():
                             continue
                     except OSError:
                         pass          # 판정 못 하면 파일로 보고 아래에서 사유를 남긴다
