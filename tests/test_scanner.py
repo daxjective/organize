@@ -123,11 +123,22 @@ def test_unreadable_entry_is_reported_not_dropped(tmp_path):
 
 def test_symlink_to_a_directory_is_not_a_file(tmp_path):
     """폴더를 가리키는 링크는 폴더로 취급해야 한다. 파일로 새면 그 폴더의
-    크기·수정시각을 가진 항목이 정리 대상이 된다."""
+    크기·수정시각을 가진 항목이 정리 대상이 된다.
+
+    **대상 폴더의 mtime 도 과거로 돌려야 한다.** 갓 만든 폴더는 "최근 1분 내 수정"
+    필터에 걸리므로, 링크가 파일로 새어나와도 entries 가 아니라 skipped 로 빠진다.
+    그러면 버그가 있는 코드에서도 이 테스트가 통과해 버린다 — 실측으로 확인했다.
+    회귀 테스트는 옛 코드에서 반드시 실패해야 한다.
+    """
     import os
-    (tmp_path / "실제폴더").mkdir()
-    touch(tmp_path / "실제폴더" / "안쪽.txt")
+    inner = tmp_path / "실제폴더"
+    inner.mkdir()
+    touch(inner / "안쪽.txt")
     touch(tmp_path / "정상.txt")
-    os.symlink(tmp_path / "실제폴더", tmp_path / "폴더링크")
+    os.symlink(inner, tmp_path / "폴더링크")
+    past = time.time() - 3600
+    os.utime(inner, (past, past))          # 폴더 자체도 과거로 돌린다
+
     result = scan(tmp_path)
     assert [e.name for e in result.entries] == ["정상.txt"]
+    assert result.skipped == []            # 링크는 건너뛴 게 아니라 아예 대상이 아니다
