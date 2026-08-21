@@ -1,0 +1,9 @@
+{
+  "paths": {
+    "archive": "@documents/Archive",
+    "photos": "@pictures",
+    "work": "@documents"
+  },
+  "folder_names": {},
+  "pins": []
+}
