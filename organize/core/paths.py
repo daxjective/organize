@@ -67,6 +67,17 @@ def unique_path(dst: Path) -> Path:
 
 
 def same_drive(a: Path, b: Path) -> bool:
+    """두 경로의 드라이브 문자가 같은가. **안전 판정에 쓰지 말 것.**
+
+    `Path.drive` 는 윈도우 경로에서만 값이 있다. WSL 마운트 경로
+    (`/mnt/c`, `/mnt/d`)는 둘 다 빈 문자열이라 **다른 드라이브인데 같다고
+    답한다.** 이 함수의 답을 믿고 안전 검사를 건너뛰면 그 검사가 통째로
+    사라진다 — 실제로 그런 결함이 있었다.
+
+    `move_file` 은 이 함수를 쓰지 않는다. `os.replace` 를 해 보고 운영체제가
+    `EXDEV` 를 주면 그때 다른 드라이브로 판정한다. 추측이 아니라 사실이다.
+    이 함수는 안내 문구를 만들 때처럼 틀려도 안전한 곳에만 쓴다.
+    """
     return a.drive.lower() == b.drive.lower()
 
 
@@ -93,7 +104,28 @@ def move_file(src: Path, dst: Path) -> Path:
         ) from e
 
     final = claim_path(dst)        # 이름을 먼저 잡는다 — 이제 이 자리는 우리 것이다
+    try:
+        return _move_onto(src, final)
+    except OrganizeError:
+        raise                      # 아래에서 이미 정리하고 안내까지 만들었다
+    except BaseException:
+        # Ctrl-C 나 예상 못 한 오류. 우리가 잡아 둔 빈 자리가 남으면 사용자
+        # 폴더에 0바이트 파일이 생기고, 다음 실행 때 그 이름이 막혀 _(1) 이
+        # 계속 밀린다. 아직 아무것도 안 옮겼을 때만 치운다.
+        _discard_placeholder(src, final)
+        raise
 
+
+def _discard_placeholder(src: Path, final: Path) -> None:
+    """아직 아무것도 안 옮겼으면 잡아 둔 빈 자리를 치운다."""
+    try:
+        if src.exists() and final.stat().st_size == 0:
+            final.unlink(missing_ok=True)
+    except OSError:
+        pass                       # 정리에 실패해도 원래 오류를 덮지 않는다
+
+
+def _move_onto(src: Path, final: Path) -> Path:
     try:
         os.replace(src, final)     # 우리가 만든 빈 파일 위에 덮는다. 원자적이다.
         return final
@@ -115,7 +147,15 @@ def move_file(src: Path, dst: Path) -> Path:
             hint="대상 드라이브의 남은 공간과 연결 상태를 확인해 주세요.",
         ) from e
 
-    if final.stat().st_size != src.stat().st_size:      # 검증 전에는 절대 안 지운다
+    try:                                   # 검증 전에는 절대 안 지운다
+        copied_ok = final.stat().st_size == src.stat().st_size
+    except OSError as e:                   # 확인조차 못 했으면 지우지 않는다
+        final.unlink(missing_ok=True)
+        raise OrganizeError(
+            f"복사한 파일을 확인하지 못했습니다: {src.name}",
+            hint="대상 드라이브의 연결 상태를 확인해 주세요. 원본은 그대로 있습니다.",
+        ) from e
+    if not copied_ok:
         final.unlink(missing_ok=True)
         raise OrganizeError(
             f"복사가 끝나지 않아 옮기지 못했습니다: {src.name}",

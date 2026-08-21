@@ -1,10 +1,11 @@
 import errno
 import os
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 import pytest
 
 from organize.core.paths import claim_path, move_file, same_drive, unique_path
+from organize.errors import OrganizeError
 
 
 def test_unique_path_returns_input_when_free(tmp_path):
@@ -307,3 +308,71 @@ def test_unlink_failure_after_copy_is_a_friendly_error_and_keeps_both_files(tmp_
     assert src.exists() and src.read_bytes() == b"DATA"           # 원본도 남아있다
     assert final.exists() and final.read_bytes() == b"DATA"        # 사본도 남아있다 — 안 잃었다
     assert str(final) in (err.hint or "")                           # 안내가 사본 위치를 알려준다
+
+
+def test_same_drive_is_not_a_safety_check(tmp_path):
+    """`same_drive` 는 WSL 마운트 경로를 오판한다 — 알고 쓰라는 뜻으로 못박는다.
+
+    `/mnt/c` 와 `/mnt/d` 는 실제로 다른 드라이브인데 `Path.drive` 가 둘 다
+    빈 문자열이라 "같다" 고 답한다. 이 답을 믿고 안전 검사를 건너뛰면 그
+    검사가 통째로 사라진다. `move_file` 이 이 함수를 안 쓰는 이유다.
+    """
+    assert same_drive(Path("/mnt/c/사진.png"), Path("/mnt/d/사진.png")) is True
+    assert same_drive(PureWindowsPath("C:/사진.png"),
+                      PureWindowsPath("D:/사진.png")) is False
+
+
+def test_move_file_keeps_the_original_when_it_cannot_verify_the_copy(tmp_path,
+                                                                    monkeypatch):
+    """복사한 파일을 확인조차 못 하면 원본을 지우지 않는다.
+
+    크기 비교의 `stat()` 이 감싸여 있지 않으면 파이썬 예외가 그대로 새고,
+    무엇보다 "확인 못 했으니 안전한 쪽" 이라는 판단을 못 하게 된다.
+    """
+    src = tmp_path / "원본.txt"
+    src.write_bytes(b"SOURCE-DATA")
+    dst = tmp_path / "목적지" / "원본.txt"
+
+    def fake_replace(a, b):
+        raise OSError(errno.EXDEV, "cross-device")
+
+    real_stat = Path.stat
+
+    def flaky_stat(self, **kw):
+        if self.parent.name == "목적지":
+            raise OSError(errno.EIO, "I/O error")
+        return real_stat(self, **kw)
+
+    monkeypatch.setattr(os, "replace", fake_replace)
+    monkeypatch.setattr(Path, "stat", flaky_stat)
+
+    with pytest.raises(OrganizeError) as exc:
+        move_file(src, dst)
+
+    monkeypatch.undo()
+    assert "확인하지 못했습니다" in exc.value.message
+    assert src.exists()                      # 원본은 그대로다 — 이게 핵심이다
+    assert not dst.exists()                  # 우리가 만든 자리는 치웠다
+
+
+def test_interrupt_does_not_leave_an_empty_file_behind(tmp_path, monkeypatch):
+    """Ctrl-C 로 끊겨도 잡아 둔 빈 자리가 남지 않는다.
+
+    남으면 사용자 폴더에 0바이트 파일이 생기고, 다음 실행 때 그 이름이 막혀
+    `_(1)` 이 계속 밀린다. 60초가 지나면 스캐너가 그걸 진짜 파일로 잡는다.
+    """
+    src = tmp_path / "원본.txt"
+    src.write_bytes(b"SOURCE-DATA")
+    dst = tmp_path / "목적지" / "원본.txt"
+
+    def interrupted(a, b):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(os, "replace", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        move_file(src, dst)
+    monkeypatch.undo()
+
+    assert src.exists()                       # 원본 그대로
+    assert not dst.exists()                   # 빈 자리도 안 남는다
+    assert list((tmp_path / "목적지").iterdir()) == []
