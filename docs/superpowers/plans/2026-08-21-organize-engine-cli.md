@@ -2578,6 +2578,25 @@ def test_file_already_in_its_category_is_left_alone():
     c = ctx(e("01_Docs/보고서.pdf"))
     plan = build(c, BlockConfig(target="01_Docs", options={"profile": PROFILE}))
     assert [a for a in plan.actions if a.kind == "move"] == []
+
+
+def test_dest_still_moves_a_file_that_is_already_in_that_category():
+    """dest 를 콕 집어 말했으면, 같은 이름 폴더에 있더라도 그리로 옮긴다.
+
+    '이미 제자리' 판정이 dest 를 안 보면 이 파일은 영영 안 움직인다.
+    """
+    c = ctx(e("01_Docs/보고서.pdf"))
+    plan = build(c, cfg(target="01_Docs", dest="보관"))
+    move = next(a for a in plan.actions if a.kind == "move")
+    assert move.src == ROOT / "01_Docs" / "보고서.pdf"
+    assert move.dst == ROOT / "보관" / "01_Docs" / "보고서.pdf"
+
+
+def test_dest_leaves_a_file_that_is_already_at_the_destination():
+    """반대로 이미 목적지에 도착해 있으면 건드리지 않는다."""
+    c = ctx(e("보관/01_Docs/보고서.pdf"))
+    plan = build(c, cfg(target="보관/01_Docs", dest="보관"))
+    assert [a for a in plan.actions if a.kind == "move"] == []
 ```
 
 - [ ] **Step 2: 테스트가 실패하는지 확인한다**
@@ -2622,6 +2641,27 @@ class BlockConfig:
 BlockFn = Callable[[Context, BlockConfig], Plan]
 
 
+def already_there(ctx: Context, entry, rel: str, sub: str, cfg: BlockConfig) -> bool:
+    """이 파일이 이미 갈 곳에 있는가. route 와 by_date 가 같이 쓴다.
+
+    두 갈래다.
+    1) 계산한 목적지와 지금 폴더가 **정확히 같다** — 두말할 것 없이 건너뛴다.
+    2) `dest` 를 안 줬다(= "있던 자리 옆에 담아라")면, 지금 폴더가 이미 `sub` 로
+       끝나는 것으로 충분하다. 이게 없으면 재실행할 때마다 `01_Docs/01_Docs`,
+       `2023/2023` 처럼 같은 이름이 겹겹이 쌓인다.
+
+    `dest` 를 **명시했을 때는 2)를 쓰지 않는다.** 사용자가 목적지를 콕 집어 말한
+    것이므로, 이미 같은 이름 폴더에 있더라도 그리로 옮겨야 한다.
+    (`01_Docs` 안의 파일을 `보관/01_Docs` 로 보내는 경우가 여기 걸린다.)
+
+    `sub` 가 `2026/05` 처럼 여러 층일 수 있으므로 마지막 한 조각만 보면 안 된다.
+    """
+    rel_of = ctx.rel_of(entry)
+    if rel == rel_of:
+        return True
+    return cfg.dest is None and (rel_of == sub or rel_of.endswith("/" + sub))
+
+
 def _registry() -> dict[str, BlockFn]:
     from organize.blocks import by_date, dedup, route, unzip
     return {
@@ -2636,9 +2676,10 @@ REGISTRY: dict[str, BlockFn] = {}
 
 
 def get_block(name: str) -> BlockFn:
-    global REGISTRY
     if not REGISTRY:
-        REGISTRY = _registry()
+        # 다시 대입하지 않고 제자리에서 채운다. `from organize.blocks import REGISTRY`
+        # 로 먼저 참조를 잡아둔 쪽이 영원히 빈 딕셔너리를 보게 되는 걸 막는다.
+        REGISTRY.update(_registry())
     if name not in REGISTRY:
         raise OrganizeError(
             f"'{name}' 이라는 작업은 없습니다.",
@@ -2655,7 +2696,7 @@ def get_block(name: str) -> BlockFn:
 바탕화면 정리와 vault 번호 체계가 같은 블록이다. 프로파일만 바뀐다.
 """
 
-from organize.blocks import BlockConfig
+from organize.blocks import BlockConfig, already_there
 from organize.core.action import Action, Plan
 from organize.core.context import Context
 from organize.profiles import matches, route_target
@@ -2680,7 +2721,7 @@ def build(ctx: Context, cfg: BlockConfig) -> Plan:
             continue
 
         rel = f"{cfg.out}/{category}" if cfg.out else category
-        if rel == ctx.rel_of(entry):
+        if already_there(ctx, entry, rel, category, cfg):
             plan.skipped.append((entry.path, f"이미 {category} 에 있음"))
             continue
 
@@ -2689,7 +2730,7 @@ def build(ctx: Context, cfg: BlockConfig) -> Plan:
         moves.append(Action(
             kind="move",
             src=ctx.current_path(entry),
-            dst=ctx.root / rel / entry.name,
+            dst=ctx.root / rel / ctx.current_path(entry).name,
             reason=f"확장자 {entry.ext or '없음'} → {category}",
             block=BLOCK,
         ))
@@ -2705,16 +2746,21 @@ def build(ctx: Context, cfg: BlockConfig) -> Plan:
 
 Run: `python -m pytest tests/test_block_route.py -v`
 Expected: FAIL — 아직 `by_date`, `dedup`, `unzip` 모듈이 없어 `_registry()` 가 ImportError 를 낸다.
-임시로 `organize/blocks/by_date.py`, `dedup.py`, `unzip.py` 를 만들고 각각에 다음만 넣는다:
+임시로 `organize/blocks/by_date.py`, `dedup.py`, `unzip.py` 를 만들고 각각에 다음만 넣는다.
+**빈 `Plan()` 을 돌려주면 안 된다** — 그러면 레시피에 `dedup` 을 넣었을 때 오류 없이
+0건이 나오고, 사용자는 "정리할 게 없었나 보다" 라고 읽는다. 아직 없는 기능은 아직
+없다고 말해야 한다. (`<이름>` 자리에 각 블록 이름을 넣는다.)
 
 ```python
 from organize.blocks import BlockConfig
 from organize.core.action import Plan
 from organize.core.context import Context
+from organize.errors import OrganizeError
 
 
 def build(ctx: Context, cfg: BlockConfig) -> Plan:
-    return Plan()
+    raise OrganizeError("'<이름>' 작업은 아직 만들어지지 않았습니다.",
+                        hint="지금은 route 만 쓸 수 있습니다.")
 ```
 
 그 다음 다시:
@@ -2880,7 +2926,7 @@ def build(ctx: Context, cfg: BlockConfig) -> Plan:
                             month=f"{hit.value.month:02d}",
                             day=f"{hit.value.day:02d}")
         rel = f"{cfg.out}/{sub}" if cfg.out else sub
-        if rel == ctx.rel_of(entry):
+        if already_there(ctx, entry, rel, sub, cfg):
             plan.skipped.append((entry.path, "이미 해당 폴더에 있음"))
             continue
 
@@ -2889,7 +2935,7 @@ def build(ctx: Context, cfg: BlockConfig) -> Plan:
         moves.append(Action(
             kind="move",
             src=ctx.current_path(entry),
-            dst=ctx.root / rel / entry.name,
+            dst=ctx.root / rel / ctx.current_path(entry).name,
             reason=f"{hit.source} {hit.value.isoformat()}",
             block=BLOCK,
         ))
