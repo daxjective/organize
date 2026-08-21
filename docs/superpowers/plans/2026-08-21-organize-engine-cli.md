@@ -477,7 +477,7 @@ git commit -m "내장 별칭 해석 추가 — OS 에 실제 경로를 질의"
 - Produces:
   - `organize.userconfig.UserConfig` — `paths: dict[str, list[str]]`, `folder_names: dict[str, dict[str, str]]`, `pins: list[str]`
   - `organize.userconfig.load_config(repo_root: Path) -> UserConfig`
-  - `organize.userconfig.resolve_alias(spec: str, cfg: UserConfig) -> Path`
+  - `organize.userconfig.resolve_alias(spec: str, cfg: UserConfig, *, _seen: frozenset[str] = frozenset()) -> Path` — `_seen` 은 순환 참조 방어용 내부 인자다. 호출자는 두 인자로만 부른다
   - `organize.userconfig.AliasNotDefined(OrganizeError)`
 
 - [ ] **Step 1: 실패하는 테스트를 쓴다**
@@ -554,6 +554,22 @@ def test_builtin_alias_with_subpath(monkeypatch, tmp_path):
 def test_plain_path_passes_through(tmp_path):
     cfg = UserConfig(paths={}, folder_names={}, pins=[])
     assert resolve_alias(str(tmp_path), cfg) == tmp_path
+
+
+def test_self_referencing_alias_is_caught(tmp_path):
+    """손으로 고친 config.local.json 이 자기 자신을 가리켜도 트레이스백이 아니라 안내가 나와야 한다."""
+    cfg = UserConfig(paths={"archive": ["@archive"]}, folder_names={}, pins=[])
+    with pytest.raises(AliasNotDefined) as e:
+        resolve_alias("@archive", cfg)
+    assert "archive" in e.value.message
+    assert e.value.hint
+
+
+def test_mutually_referencing_aliases_are_caught():
+    cfg = UserConfig(paths={"a": ["@b"], "b": ["@a"]}, folder_names={}, pins=[])
+    with pytest.raises(AliasNotDefined) as e:
+        resolve_alias("@a", cfg)
+    assert e.value.hint
 
 
 def test_undefined_alias_says_what_to_do():
@@ -638,16 +654,23 @@ def load_config(repo_root: Path) -> UserConfig:
     return UserConfig(paths=paths, folder_names=folder_names, pins=pins)
 
 
-def _first_existing(candidates: list[str], cfg: "UserConfig") -> Path:
-    resolved = [resolve_alias(c, cfg) for c in candidates]
+def _first_existing(candidates: list[str], cfg: UserConfig,
+                    _seen: frozenset[str] = frozenset()) -> Path:
+    resolved = [resolve_alias(c, cfg, _seen=_seen) for c in candidates]
     for p in resolved:
         if p.exists():
             return p
     return resolved[-1]
 
 
-def resolve_alias(spec: str, cfg: UserConfig) -> Path:
-    """'@downloads', '@documents/메모', '~/foo', 'F:/day' 를 모두 받는다."""
+def resolve_alias(spec: str, cfg: UserConfig, *,
+                  _seen: frozenset[str] = frozenset()) -> Path:
+    """'@downloads', '@documents/메모', '~/foo', 'F:/day' 를 모두 받는다.
+
+    `_seen` 은 해석 중인 별칭 이름들이다. 별칭이 자기 자신이나 서로를 가리키면
+    무한 재귀에 빠지는데, 그러면 RecursionError 트레이스백이 그대로 노출된다.
+    사용자가 config.local.json 을 손으로 고치므로 실제로 일어날 수 있다.
+    """
     if not spec.startswith("@"):
         return Path(spec).expanduser()
 
@@ -655,12 +678,18 @@ def resolve_alias(spec: str, cfg: UserConfig) -> Path:
 
     base = builtin_path(head)
     if base is None:
+        if head in _seen:
+            chain = " → ".join(f"@{n}" for n in [*_seen, head])
+            raise AliasNotDefined(
+                f"'@{head}' 위치가 돌고 돌아 자기 자신을 가리킵니다: {chain}",
+                hint=f"config.local.json 에서 '@{head}' 가 가리키는 경로를 실제 폴더로 바꿔 주세요.",
+            )
         if head not in cfg.paths:
             raise AliasNotDefined(
                 f"'@{head}' 위치가 정해져 있지 않습니다.",
                 hint=f"다음 명령으로 지정할 수 있습니다:\n    organize paths --set {head}=<경로>",
             )
-        base = _first_existing(cfg.paths[head], cfg)
+        base = _first_existing(cfg.paths[head], cfg, _seen=_seen | {head})
 
     return base / tail if tail else base
 ```
@@ -682,7 +711,7 @@ def resolve_alias(spec: str, cfg: UserConfig) -> Path:
 - [ ] **Step 4: 테스트가 통과하는지 확인한다**
 
 Run: `python -m pytest tests/test_userconfig.py -v`
-Expected: PASS 10개
+Expected: PASS 12개
 
 - [ ] **Step 5: 커밋**
 
