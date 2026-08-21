@@ -99,3 +99,23 @@ def test_file_entry_ext_is_lowercase_with_dot(tmp_path):
     e = FileEntry(path=p, size=1, mtime=0.0)
     assert e.ext == ".png"
     assert e.name == "사진.PNG"
+
+
+def test_cloud_attribute_bits(tmp_path):
+    from organize.core.scanner import _is_cloud_attrs
+    assert _is_cloud_attrs(0x00400000)
+    assert _is_cloud_attrs(0x00040000)
+    assert _is_cloud_attrs(0x00001000)
+    assert not _is_cloud_attrs(0x20)        # ARCHIVE 뿐이면 로컬 파일이다
+    assert not _is_cloud_attrs(0xFFFFFFFF)  # 읽기 실패는 클라우드가 아니다
+    assert not _is_cloud_attrs(-1)          # 부호 있는 해석으로 들어와도 마찬가지
+
+
+def test_unreadable_entry_is_reported_not_dropped(tmp_path):
+    import os
+    touch(tmp_path / "정상.txt")
+    os.symlink(tmp_path / "없는대상.txt", tmp_path / "깨진링크.txt")
+    result = scan(tmp_path)
+    assert [e.name for e in result.entries] == ["정상.txt"]
+    assert [p.name for p, _ in result.skipped] == ["깨진링크.txt"]
+    assert "읽을 수 없다" in result.skipped[0][1]

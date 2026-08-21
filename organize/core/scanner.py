@@ -17,6 +17,10 @@ _SYSTEM_NAMES = {"desktop.ini", "thumbs.db", ".ds_store", "ehthumbs.db"}
 _IN_PROGRESS_EXT = {".crdownload", ".part", ".partial", ".tmp", ".download"}
 _SETTLE_SECONDS = 60          # 이보다 최근에 바뀐 파일은 아직 작업 중으로 본다
 _ALWAYS_EXCLUDE_DIRS = {".organize"}
+_INVALID_FILE_ATTRIBUTES = 0xFFFFFFFF
+_CLOUD_MASK = (0x00001000      # FILE_ATTRIBUTE_OFFLINE
+               | 0x00040000    # FILE_ATTRIBUTE_RECALL_ON_OPEN
+               | 0x00400000)   # FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS
 
 
 @dataclass(frozen=True)
@@ -50,24 +54,26 @@ def is_in_progress(name: str, mtime: float, now: float) -> bool:
     return (now - mtime) < _SETTLE_SECONDS
 
 
+def _is_cloud_attrs(attrs: int) -> bool:
+    if attrs < 0 or attrs == _INVALID_FILE_ATTRIBUTES:
+        return False
+    return bool(attrs & _CLOUD_MASK)
+
+
 def is_cloud_only(path: Path) -> bool:
     """디스크에 실제 내용이 없는 파일인지. Windows 밖에서는 항상 False."""
     if sys.platform != "win32":
         return False
     import ctypes
 
-    FILE_ATTRIBUTE_OFFLINE = 0x00001000
-    FILE_ATTRIBUTE_RECALL_ON_OPEN = 0x00040000
-    FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS = 0x00400000
-    INVALID = 0xFFFFFFFF
+    get_attrs = ctypes.windll.kernel32.GetFileAttributesW
+    get_attrs.restype = ctypes.c_uint32
+    get_attrs.argtypes = [ctypes.c_wchar_p]
 
-    attrs = ctypes.windll.kernel32.GetFileAttributesW(str(path))
-    if attrs == INVALID:
+    try:
+        return _is_cloud_attrs(get_attrs(str(path)))
+    except OSError:
         return False
-    mask = (FILE_ATTRIBUTE_OFFLINE
-            | FILE_ATTRIBUTE_RECALL_ON_OPEN
-            | FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS)
-    return bool(attrs & mask)
 
 
 def scan(
@@ -91,7 +97,17 @@ def scan(
             for fn in filenames:
                 paths.append(Path(dirpath) / fn)
     else:
-        paths = [p for p in root.iterdir() if p.is_file()]
+        try:
+            with os.scandir(root) as it:
+                for e in it:
+                    try:
+                        if e.is_dir(follow_symlinks=False):
+                            continue
+                    except OSError:
+                        pass          # 판정 못 하면 파일로 보고 아래에서 사유를 남긴다
+                    paths.append(Path(e.path))
+        except OSError:
+            return result
 
     for path in sorted(paths):                      # 항상 같은 순서 = 결정적
         name = path.name
