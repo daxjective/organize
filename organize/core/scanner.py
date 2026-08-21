@@ -28,6 +28,7 @@ class FileEntry:
     path: Path
     size: int
     mtime: float
+    virtual: bool = False      # 앞 블록이 만들 예정이라 디스크에 아직 없다
 
     @property
     def name(self) -> str:
