@@ -1,5 +1,4 @@
 import os
-import time
 from pathlib import Path
 
 from organize.core.hashing import find_duplicate_groups, has_copy_marker, pick_original
@@ -28,6 +27,15 @@ def test_copy_markers():
     assert has_copy_marker("guide_copy.pdf")
     assert not has_copy_marker("가이드.pdf")
     assert not has_copy_marker("2026-06-02 17 47 38.png")
+
+
+def test_camera_and_screenshot_names_are_not_copies():
+    """실제 폴더에서 나온 이름들. 일련번호·날짜를 복사본으로 오해하면 안 된다."""
+    assert not has_copy_marker("IMG_1234.jpg")
+    assert not has_copy_marker("DSC_5678.JPG")
+    assert not has_copy_marker("PXL_20260615_143022.jpg")
+    assert not has_copy_marker("20260820_085659.jpg")
+    assert not has_copy_marker("sitewalk_20260818.md")
 
 
 def test_files_of_different_size_are_never_hashed(tmp_path):

@@ -17,7 +17,7 @@ from organize.core.scanner import FileEntry
 
 _HEAD_BYTES = 8192
 _CHUNK = 65536
-_COPY_MARKER = re.compile(r"\(\d+\)|_\d+(?=\.[^.]+$)|-\s*복사본|-\s*Copy|_copy", re.IGNORECASE)
+_COPY_MARKER = re.compile(r"\(\d+\)|_\d{1,2}(?=\.[^.]+$)|-\s*복사본|-\s*Copy|_copy", re.IGNORECASE)
 
 
 def has_copy_marker(name: str) -> bool:
