@@ -25,6 +25,8 @@ _MIN_DATE = date(1990, 1, 1)
 _EXIF_DATETIME_ORIGINAL = 36867     # 촬영 시각 — Exif SubIFD 에 있다
 _EXIF_DATETIME_DIGITIZED = 36868    # 디지털화 시각 — Exif SubIFD 에 있다
 _EXIF_DATETIME = 306                # 파일 변경 시각 — IFD0 에 있다
+_EXIF_MAKE = 271                    # 카메라 제조사 — IFD0 에 있다
+_EXIF_MODEL = 272                   # 카메라 모델 — IFD0 에 있다
 
 # YYYYMMDD / YYYY-MM-DD / YYYY_MM_DD / YYYY.MM.DD  (앞뒤가 숫자가 아닐 것)
 _NUMERIC = re.compile(
@@ -113,10 +115,11 @@ def has_exif_camera(path: Path) -> bool | None:
     if not HAS_PILLOW:
         return None
     try:
-        exif = Image.open(path).getexif()
+        with Image.open(path) as img:            # 곧 이 파일을 옮기므로 확실히 닫는다
+            exif = img.getexif()
+            if exif is None:
+                return None
+            found = bool(exif.get(_EXIF_MAKE) or exif.get(_EXIF_MODEL))
     except Exception:
         return None
-    if exif is None:
-        return None
-    tag = {v: k for k, v in ExifTags.TAGS.items()}
-    return bool(exif.get(tag.get("Make")) or exif.get(tag.get("Model")))
+    return found

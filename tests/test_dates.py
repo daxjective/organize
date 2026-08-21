@@ -123,3 +123,54 @@ def test_non_image_file_returns_none(tmp_path):
 
 def test_mixed_separators_are_rejected():
     assert date_from_name("2023-12_15.png", TODAY) is None
+
+
+def _jpeg_with_camera_exif(path, *, make=None, model=None):
+    from PIL import Image
+    img = Image.new("RGB", (4, 4), (0, 255, 0))
+    exif = img.getexif()
+    if make:
+        exif[271] = make      # Make
+    if model:
+        exif[272] = model     # Model
+    img.save(path, exif=exif)
+    return path
+
+
+@pytest.mark.skipif(not dates.HAS_PILLOW, reason="Pillow 없이는 EXIF 를 만들 수 없다")
+def test_has_exif_camera_true_when_make_or_model_present(tmp_path):
+    p = _jpeg_with_camera_exif(tmp_path / "카메라.jpg", make="Canon", model="EOS R5")
+    assert dates.has_exif_camera(p) is True
+
+
+@pytest.mark.skipif(not dates.HAS_PILLOW, reason="Pillow 없이는 EXIF 를 만들 수 없다")
+def test_has_exif_camera_false_when_no_camera_exif(tmp_path):
+    p = _jpeg_with_camera_exif(tmp_path / "캡처.png")   # EXIF 없음 — 화면 캡처
+    assert dates.has_exif_camera(p) is False
+
+
+def test_has_exif_camera_none_for_non_image_file(tmp_path):
+    p = tmp_path / "문서.jpg"
+    p.write_bytes(b"this is not an image")
+    assert dates.has_exif_camera(p) is None
+
+
+def test_has_exif_camera_none_without_pillow(monkeypatch, tmp_path):
+    monkeypatch.setattr(dates, "HAS_PILLOW", False)
+    p = tmp_path / "사진.jpg"
+    p.write_bytes(b"x")
+    assert dates.has_exif_camera(p) is None
+
+
+@pytest.mark.skipif(not dates.HAS_PILLOW, reason="Pillow 없이는 EXIF 를 만들 수 없다")
+def test_has_exif_camera_closes_the_file_handle(tmp_path):
+    import gc
+    import warnings
+
+    p = _jpeg_with_camera_exif(tmp_path / "카메라.jpg", make="Canon")
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        dates.has_exif_camera(p)
+        gc.collect()
+    leaks = [w for w in caught if issubclass(w.category, ResourceWarning)]
+    assert not leaks, [str(w.message) for w in leaks]

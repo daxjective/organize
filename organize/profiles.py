@@ -52,6 +52,7 @@ class Profile:
 
 _CONDITION_KEYS = {"ext", "name_contains", "name_regex", "older_than",
                    "larger_than", "has_exif_camera"}
+_META_KEYS = {"to", "default"}          # 조건이 아니라 규칙 자체를 기술하는 키
 
 
 def load_profile(path: Path) -> Profile:
@@ -61,14 +62,39 @@ def load_profile(path: Path) -> Profile:
     try:
         data = tomllib.loads(path.read_text(encoding="utf-8"))
     except tomllib.TOMLDecodeError as e:
-        raise OrganizeError(f"분류 설정을 읽지 못했습니다: {path.name}",
-                            hint=f"{e}") from e
+        raise OrganizeError(
+            f"분류 설정을 읽지 못했습니다: {path.name} (파서 메시지: {e})",
+            hint="TOML 문법을 확인해 주세요 — 따옴표·대괄호 짝, 값이 빠진 줄이 없는지부터 봐 주세요.",
+        ) from e
+
+    raw_rules = data.get("rules", [])
 
     rules = []
-    for raw in data.get("rules", []):
+    for i, raw in enumerate(raw_rules, start=1):
+        unknown = sorted(set(raw) - _CONDITION_KEYS - _META_KEYS)
+        if unknown:
+            raise OrganizeError(
+                f"{path.name} 의 {i}번째 규칙(to=\"{raw.get('to', '?')}\")에 "
+                f"모르는 조건이 있습니다: {', '.join(unknown)}",
+                hint="쓸 수 있는 조건: " + ", ".join(sorted(_CONDITION_KEYS)),
+            )
         conditions = {k: v for k, v in raw.items() if k in _CONDITION_KEYS}
         rules.append(Rule(to=raw.get("to"), conditions=conditions,
                           is_default=bool(raw.get("default", False))))
+
+    default_indexes = [i for i, r in enumerate(rules) if r.is_default]
+    if len(default_indexes) > 1:
+        raise OrganizeError(
+            f"{path.name} 에 default 규칙이 {len(default_indexes)}개 있습니다.",
+            hint="default = true 인 규칙은 프로파일마다 하나만 둘 수 있습니다.",
+        )
+    if default_indexes and default_indexes[0] != len(rules) - 1:
+        raise OrganizeError(
+            f"{path.name} 의 default 규칙이 마지막에 있지 않습니다.",
+            hint="default = true 인 규칙은 항상 맨 마지막에 두세요. "
+                 "그 뒤에 오는 규칙은 실행되지 않습니다.",
+        )
+
     return Profile(name=data.get("name", path.stem), rules=rules,
                    synonyms=data.get("synonyms", {}))
 

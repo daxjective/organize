@@ -5,6 +5,7 @@ import pytest
 
 from organize import profiles
 from organize.core.scanner import FileEntry
+from organize.errors import OrganizeError
 from organize.profiles import load_profile, matches, parse_age, parse_size, route_target
 
 TODAY = date(2026, 8, 21)
@@ -119,3 +120,67 @@ def test_no_matching_rule_and_no_default_returns_none(tmp_path):
     toml = tmp_path / "t.toml"
     toml.write_text('name = "없음"\n[[rules]]\n to = "01_Docs"\n ext = [".pdf"]\n', encoding="utf-8")
     assert route_target(entry("사진.png"), load_profile(toml), TODAY) is None
+
+
+def test_malformed_toml_hint_is_korean_action_not_raw_parser_text(tmp_path):
+    """[1] hint 는 '무엇을 하면 되는지' 한국어 행동 지시여야 한다 — tomllib 예외 원문이 그대로 오면 안 된다."""
+    toml = tmp_path / "bad.toml"
+    toml.write_text("name = ", encoding="utf-8")   # 문법 오류 TOML
+    with pytest.raises(OrganizeError) as exc:
+        load_profile(toml)
+    hint = exc.value.hint
+    assert "Invalid value" not in hint             # tomllib 의 영어 원문이 그대로 있으면 안 된다
+    assert any("가" <= ch <= "힣" for ch in hint)   # 한국어 문장이어야 한다
+
+
+def test_unknown_condition_key_is_rejected(tmp_path):
+    """[2] 오타 난 조건 키를 조용히 버리면, 빈 조건이 되어 모든 파일에 매칭된다 — 그래서 거부해야 한다."""
+    toml = tmp_path / "t.toml"
+    toml.write_text(
+        'name = "오타"\n'
+        '[[rules]]\n to = "02_Media"\n extt = [".png"]\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(OrganizeError) as exc:
+        load_profile(toml)
+    assert "extt" in exc.value.message
+    assert "ext" in exc.value.hint
+
+
+def test_default_rule_must_be_the_last_rule(tmp_path):
+    """[3] default 규칙이 앞에 오면 뒤 규칙을 전부 가린다 — 검증해서 거부해야 한다."""
+    toml = tmp_path / "t.toml"
+    toml.write_text(
+        'name = "기본이 먼저"\n'
+        '[[rules]]\n to = "99_Unsorted"\n default = true\n'
+        '[[rules]]\n to = "02_Media"\n ext = [".png"]\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(OrganizeError):
+        load_profile(toml)
+
+
+def test_at_most_one_default_rule(tmp_path):
+    """[3] default 규칙은 최대 하나여야 한다."""
+    toml = tmp_path / "t.toml"
+    toml.write_text(
+        'name = "기본 두 개"\n'
+        '[[rules]]\n to = "A"\n default = true\n'
+        '[[rules]]\n to = "B"\n default = true\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(OrganizeError):
+        load_profile(toml)
+
+
+def test_default_rule_as_the_only_or_last_rule_is_fine(tmp_path):
+    """[3] 회귀 방지 — default 가 하나이고 마지막이면 정상적으로 로드되어야 한다."""
+    toml = tmp_path / "t.toml"
+    toml.write_text(
+        'name = "정상"\n'
+        '[[rules]]\n to = "02_Media"\n ext = [".png"]\n'
+        '[[rules]]\n to = "99_Unsorted"\n default = true\n',
+        encoding="utf-8",
+    )
+    p = load_profile(toml)
+    assert route_target(entry("무엇.xyz"), p, TODAY) == "99_Unsorted"

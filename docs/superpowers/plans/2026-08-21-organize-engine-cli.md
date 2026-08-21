@@ -1909,6 +1909,10 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'organize.profiles'`
 `organize/core/dates.py` 끝에 추가:
 
 ```python
+_EXIF_MAKE = 271                    # 카메라 제조사 — IFD0 에 있다
+_EXIF_MODEL = 272                   # 카메라 모델 — IFD0 에 있다
+
+
 def has_exif_camera(path: Path) -> bool | None:
     """카메라·휴대폰으로 찍은 사진인지. None 은 판정 불가.
 
@@ -1918,15 +1922,19 @@ def has_exif_camera(path: Path) -> bool | None:
     if not HAS_PILLOW:
         return None
     try:
-        with Image.open(path) as img:
+        with Image.open(path) as img:            # 곧 이 파일을 옮기므로 확실히 닫는다
             exif = img.getexif()
+            if exif is None:
+                return None
+            found = bool(exif.get(_EXIF_MAKE) or exif.get(_EXIF_MODEL))
     except Exception:
         return None
-    if not exif:
-        return None
-    # Make(271) / Model(272) 는 IFD0 에 있다 — 촬영일과 달리 SubIFD 를 볼 필요가 없다.
-    return bool(exif.get(271) or exif.get(272))
+    return found
 ```
+
+(수정 라운드 1/5: 최초 구현은 `Image.open(path).getexif()` 를 `with` 없이 호출해
+파일 핸들을 닫지 않았다 — `ResourceWarning: unclosed file` 이 재현됐다. `date_from_exif`
+와 같은 관례로 맞췄다.)
 
 `organize/profiles.py`:
 
@@ -1985,6 +1993,7 @@ class Profile:
 
 _CONDITION_KEYS = {"ext", "name_contains", "name_regex", "older_than",
                    "larger_than", "has_exif_camera"}
+_META_KEYS = {"to", "default"}          # 조건이 아니라 규칙 자체를 기술하는 키
 
 
 def load_profile(path: Path) -> Profile:
@@ -1994,14 +2003,39 @@ def load_profile(path: Path) -> Profile:
     try:
         data = tomllib.loads(path.read_text(encoding="utf-8"))
     except tomllib.TOMLDecodeError as e:
-        raise OrganizeError(f"분류 설정을 읽지 못했습니다: {path.name}",
-                            hint=f"{e}") from e
+        raise OrganizeError(
+            f"분류 설정을 읽지 못했습니다: {path.name} (파서 메시지: {e})",
+            hint="TOML 문법을 확인해 주세요 — 따옴표·대괄호 짝, 값이 빠진 줄이 없는지부터 봐 주세요.",
+        ) from e
+
+    raw_rules = data.get("rules", [])
 
     rules = []
-    for raw in data.get("rules", []):
+    for i, raw in enumerate(raw_rules, start=1):
+        unknown = sorted(set(raw) - _CONDITION_KEYS - _META_KEYS)
+        if unknown:
+            raise OrganizeError(
+                f"{path.name} 의 {i}번째 규칙(to=\"{raw.get('to', '?')}\")에 "
+                f"모르는 조건이 있습니다: {', '.join(unknown)}",
+                hint="쓸 수 있는 조건: " + ", ".join(sorted(_CONDITION_KEYS)),
+            )
         conditions = {k: v for k, v in raw.items() if k in _CONDITION_KEYS}
         rules.append(Rule(to=raw.get("to"), conditions=conditions,
                           is_default=bool(raw.get("default", False))))
+
+    default_indexes = [i for i, r in enumerate(rules) if r.is_default]
+    if len(default_indexes) > 1:
+        raise OrganizeError(
+            f"{path.name} 에 default 규칙이 {len(default_indexes)}개 있습니다.",
+            hint="default = true 인 규칙은 프로파일마다 하나만 둘 수 있습니다.",
+        )
+    if default_indexes and default_indexes[0] != len(rules) - 1:
+        raise OrganizeError(
+            f"{path.name} 의 default 규칙이 마지막에 있지 않습니다.",
+            hint="default = true 인 규칙은 항상 맨 마지막에 두세요. "
+                 "그 뒤에 오는 규칙은 실행되지 않습니다.",
+        )
+
     return Profile(name=data.get("name", path.stem), rules=rules,
                    synonyms=data.get("synonyms", {}))
 
@@ -2039,6 +2073,20 @@ def route_target(entry: FileEntry, profile: Profile, today: date) -> str | None:
             return rule.to
     return None
 ```
+
+(수정 라운드 1/5: 최초 구현은 두 가지를 조용히 넘어갔다.
+
+1. 알 수 없는 조건 키(예: `extt` 오타)를 만나면 그 규칙의 `conditions` 가 `{}` 가 되고,
+   빈 조건은 모든 파일에 매칭됐다 — `.png` 만 잡으려던 규칙이 `.pdf` 까지 삼켰다.
+   이제 `load_profile` 이 모르는 키를 만나면 어떤 규칙의 어떤 키인지, 쓸 수 있는 키
+   목록과 함께 `OrganizeError` 로 거부한다.
+2. `default = true` 규칙이 맨 앞이나 중간에 있으면 뒤 규칙을 전부 가렸는데도 검증이
+   없었다. 이제 default 규칙은 최대 하나이고 반드시 마지막이어야 하며, 아니면
+   `OrganizeError` 로 거부한다.
+
+또한 TOML 파싱 실패 시 `hint` 자리에 `tomllib.TOMLDecodeError` 의 영어 원문을 그대로
+넣었었다. `hint` 는 "무엇을 하면 되는지" 를 말하는 자리이므로, 파서 원문은 `message` 에
+"(파서 메시지: ...)" 로 덧붙이고 `hint` 는 한국어 행동 지시로 바꿨다.)
 
 `profiles/desktop.toml`:
 
@@ -2102,7 +2150,13 @@ has_exif_camera = false
 - [ ] **Step 4: 테스트가 통과하는지 확인한다**
 
 Run: `python -m pytest tests/test_profiles.py -v`
-Expected: PASS 14개
+Expected: PASS (수정 라운드 1/5 반영 후 23개 — hint, 모르는 조건 키 거부,
+default 위치 검증 회귀 테스트 5개가 추가됐다)
+
+`has_exif_camera` 자체의 True/False/None 판정과 파일 핸들 회귀 테스트는
+`organize.core.dates` 소속 함수이므로 `tests/test_dates.py` 에 있다 —
+그 파일의 `date_from_exif` 테스트들과 같은 관례(Pillow 로 실제 이미지를 만들어
+`tmp_path` 에서 검증)를 따른다.
 
 - [ ] **Step 5: 커밋**
 
