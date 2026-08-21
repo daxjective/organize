@@ -3150,37 +3150,63 @@ Expected: FAIL — `Context.__init__() got an unexpected keyword argument 'run_i
 from organize.blocks import BlockConfig
 from organize.core.action import Action, Plan
 from organize.core.context import Context
-from organize.core.hashing import find_duplicate_groups
+from organize.core.hashing import find_duplicate_groups, pick_original
 from organize.profiles import matches
 
 BLOCK = "dedup"
 
 
+def _within_target(rel: str, target: str) -> bool:
+    """rel 이 target 폴더 자신이거나 그 하위 폴더인가."""
+    return target == "" or rel == target or rel.startswith(target + "/")
+
+
 def build(ctx: Context, cfg: BlockConfig) -> Plan:
     plan = Plan()
 
+    # 읽기: 대상 폴더 + 그 하위 전부. 형제 폴더(대상 밖)는 읽지 않는다 —
+    # 안 그러면 target 과 무관한 폴더 내용까지 중복 판정에 끼어든다.
     readable = []
     for entry in ctx.all_files():
+        if not _within_target(ctx.rel_of(entry), cfg.target):
+            continue
         if entry.virtual:
             plan.skipped.append((entry.path, "압축을 푼 뒤에 판정합니다"))
             continue
         readable.append(entry)
 
+    # 치우기: 대상 폴더 직속 파일만.
     removable = {e.path for e in ctx.files_at(cfg.target)}
 
     for group in find_duplicate_groups(readable):
-        keeper = group[0]
-        for other in group[1:]:
-            if other.path not in removable:
-                continue                       # 하위 폴더 파일은 건드리지 않는다
+        candidates = [e for e in group if e.path in removable]
+        if not candidates:
+            continue                           # 하위 폴더 파일뿐 — 건드릴 게 없다
+
+        # 남길 파일 고르기. find_duplicate_groups 의 순위는 "경로가 얕은 쪽" 을
+        # 우선하는데, 이 블록에서는 그게 거꾸로 작동한다. 얕은 쪽이 직속 파일이고
+        # 깊은 쪽이 하위 폴더 파일이면, 남길 파일로 직속이 뽑히는데 정작 치울 수
+        # 있는 것도 직속뿐이라 아무 일도 일어나지 않는다.
+        #
+        # 이 블록은 하위 폴더 파일을 **옮길 수 없다**(폴더는 건드리지 않는다).
+        # 그러니 무리 안에 하위 폴더 파일이 하나라도 있으면 남길 쪽은 그것뿐이다.
+        # 취향이 아니라 제품 원칙에서 강제되는 규칙이다. 그리고 그게 사용자가
+        # 원하는 것이기도 하다 — 하위 폴더 파일은 이미 정리해 둔 것이고, 직속
+        # 파일이 나중에 흘러들어온 사본이다.
+        protected = [e for e in group if e.path not in removable]
+        keeper = pick_original(protected) if protected else group[0]
+
+        for other in candidates:
+            if other.path == keeper.path:
+                continue                       # 남길 파일 자신
             if cfg.when and not matches(other, cfg.when, ctx.today):
                 plan.skipped.append((other.path, "이 작업의 대상이 아님"))
                 continue
             plan.actions.append(Action(
                 kind="quarantine",
                 src=ctx.current_path(other),
-                dst=ctx.trash_dir / other.name,
-                reason=f"내용이 같음 · 남긴 파일 {keeper.name}",
+                dst=ctx.trash_dir / ctx.current_path(other).name,
+                reason=f"내용이 같음 · 남긴 파일 {ctx.current_path(keeper).name}",
                 block=BLOCK,
             ))
     return plan
