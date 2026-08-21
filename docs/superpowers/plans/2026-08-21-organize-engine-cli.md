@@ -3170,6 +3170,9 @@ def _within_target(rel: str, target: str) -> bool:
 def build(ctx: Context, cfg: BlockConfig) -> Plan:
     plan = Plan()
 
+    # 치우기: 대상 폴더 직속 파일만.
+    removable = {e.path for e in ctx.files_at(cfg.target)}
+
     # 읽기: 대상 폴더 + 그 하위 전부. 형제 폴더(대상 밖)는 읽지 않는다 —
     # 안 그러면 target 과 무관한 폴더 내용까지 중복 판정에 끼어든다.
     readable = []
@@ -3179,27 +3182,27 @@ def build(ctx: Context, cfg: BlockConfig) -> Plan:
         if entry.virtual:
             plan.skipped.append((entry.path, "압축을 푼 뒤에 판정합니다"))
             continue
+        if cfg.when and not matches(entry, cfg.when, ctx.today):
+            # `when` 에 안 맞는 파일은 중복 판정에서 **아예 뺀다.** 참고용으로도
+            # 쓰지 않는다. 하위 폴더 파일과는 다르다 — 하위 폴더 파일은 같은
+            # 정리 의도 안에 있지만, `when` 으로 빼둔 파일은 사용자가 "이 작업의
+            # 대상이 아니다" 라고 명시한 것이다. 참고용으로 두면 이런 일이 난다:
+            # "png 만 정리해줘" 라고 했는데 무관한 .txt 가 같은 내용이라는 이유로
+            # png 를 **전부** 치워 버린다. 실제로 그렇게 됐다.
+            if entry.path in removable:
+                plan.skipped.append((entry.path, "이 작업의 대상이 아님"))
+            continue
         readable.append(entry)
-
-    # 치우기: 대상 폴더 직속 파일만.
-    removable = {e.path for e in ctx.files_at(cfg.target)}
 
     for group in find_duplicate_groups(readable):
         # 무리를 둘로 가른다.
-        #   candidates 이 step 이 실제로 치울 수 있는 파일 (직속 + when 통과)
-        #   protected  옮길 수 없는 파일 — 하위 폴더 파일, when 에 안 맞는 파일.
-        #              둘 다 "참고용" 이다. 중복 판정에는 참여하되 치우지는 않는다.
-        candidates, protected = [], []
-        for e in group:
-            if e.path not in removable:
-                protected.append(e)            # 하위 폴더 — 폴더는 건드리지 않는다
-            elif cfg.when and not matches(e, cfg.when, ctx.today):
-                plan.skipped.append((e.path, "이 작업의 대상이 아님"))
-                protected.append(e)            # 이 step 의 대상이 아니다
-            else:
-                candidates.append(e)
+        #   candidates 이 step 이 실제로 치울 수 있는 파일 — 대상 폴더 직속
+        #   protected  옮길 수 없는 파일 — 하위 폴더 파일. 참고용이다.
+        #              (`when` 에 안 맞는 파일은 위에서 이미 빠졌다.)
+        candidates = [e for e in group if e.path in removable]
+        protected = [e for e in group if e.path not in removable]
         if not candidates:
-            continue                           # 치울 수 있는 게 없다
+            continue                           # 하위 폴더 파일뿐 — 건드릴 게 없다
 
         # 남길 파일 고르기. find_duplicate_groups 의 순위는 "경로가 얕은 쪽" 을
         # 우선하는데, 이 블록에서는 그게 거꾸로 작동한다. 얕은 쪽이 직속 파일이고
