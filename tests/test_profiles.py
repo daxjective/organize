@@ -156,8 +156,10 @@ def test_default_rule_must_be_the_last_rule(tmp_path):
         '[[rules]]\n to = "02_Media"\n ext = [".png"]\n',
         encoding="utf-8",
     )
-    with pytest.raises(OrganizeError):
+    with pytest.raises(OrganizeError) as exc:
         load_profile(toml)
+    # 예외 종류만 보면 TOML 문법 오류에도 통과한다 — 무엇을 잡았는지까지 확인한다.
+    assert "마지막" in exc.value.message or "마지막" in exc.value.hint
 
 
 def test_at_most_one_default_rule(tmp_path):
@@ -169,8 +171,9 @@ def test_at_most_one_default_rule(tmp_path):
         '[[rules]]\n to = "B"\n default = true\n',
         encoding="utf-8",
     )
-    with pytest.raises(OrganizeError):
+    with pytest.raises(OrganizeError) as exc:
         load_profile(toml)
+    assert "하나" in exc.value.message or "하나" in exc.value.hint
 
 
 def test_default_rule_as_the_only_or_last_rule_is_fine(tmp_path):
