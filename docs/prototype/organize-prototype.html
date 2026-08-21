@@ -1,0 +1,994 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>organize 동작 시안</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Hahmlet:wght@500;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+KR:wght@400;500;600&display=swap">
+<style>
+*{margin:0;padding:0}
+.hit{color:var(--move)} .zero{color:var(--trash)}
+
+*,*::before,*::after{box-sizing:border-box}
+:root{
+  --bg:#E6F3F6; --surface:#F6FCFD; --surface-2:#ECF7F9; --sunk:#DCEEF2;
+  --fg:#141F2B; --fg-dim:#5A6875; --fg-faint:#8695A3;
+  --line:#D2DAE3; --line-soft:#E4EAF0;
+  --accent:#1191B0; --accent-soft:#DBF1F6;
+  --move:#1191B0; --move-bg:#DBF1F6;
+  --trash:#A8501F; --trash-bg:#F5E2D5;
+  --new:#54479B; --new-bg:#E4E0F4;
+  --skip:#6E7C8A; --skip-bg:#E5EAEE;
+  --grid:#C7D3DE;
+  --doc:'Hahmlet',Georgia,'Nanum Myeongjo',serif;
+  --ui:'IBM Plex Sans KR',system-ui,-apple-system,'Malgun Gothic',sans-serif;
+  --mono:'IBM Plex Mono',ui-monospace,Consolas,monospace;
+  --r:4px;
+  --doc-w:940px; --wide-w:1180px;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#0B1A1F; --surface:#142530; --surface-2:#17303A; --sunk:#0F1E24;
+    --fg:#E2E9F0; --fg-dim:#96A6B5; --fg-faint:#6B7B8A;
+    --line:#27353F; --line-soft:#1E2B35;
+    --accent:#40B5D6; --accent-soft:#123642;
+    --move:#40B5D6; --move-bg:#123642;
+    --trash:#DE9163; --trash-bg:#3A2417;
+    --new:#A79AE4; --new-bg:#282350;
+    --skip:#8494A2; --skip-bg:#202C37;
+    --grid:#2C3B47;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0B1A1F; --surface:#142530; --surface-2:#17303A; --sunk:#0F1E24;
+  --fg:#E2E9F0; --fg-dim:#96A6B5; --fg-faint:#6B7B8A;
+  --line:#27353F; --line-soft:#1E2B35;
+  --accent:#40B5D6; --accent-soft:#123642;
+  --move:#40B5D6; --move-bg:#123642;
+  --trash:#DE9163; --trash-bg:#3A2417;
+  --new:#A79AE4; --new-bg:#282350;
+  --skip:#8494A2; --skip-bg:#202C37;
+  --grid:#2C3B47;
+}
+
+body{
+  margin:0; background:var(--bg); color:var(--fg);
+  font-family:var(--ui); font-size:16px; line-height:1.7;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:var(--doc-w);margin:0 auto;padding:0 24px}
+.wide{max-width:var(--wide-w);margin:0 auto;padding:0 24px}
+
+/* ---------- 헤더 ---------- */
+.masthead{
+  border-bottom:1px solid var(--line);
+  background:var(--surface);
+  padding:64px 0 40px;
+}
+.eyebrow{
+  font-family:var(--mono); font-size:11px; letter-spacing:.16em;
+  text-transform:uppercase; color:var(--fg-faint); margin:0 0 20px;
+}
+h1{
+  font-family:var(--doc); font-weight:700; font-size:clamp(30px,5vw,46px);
+  line-height:1.25; letter-spacing:-.01em; margin:0 0 20px; text-wrap:balance;
+}
+.lede{font-size:17px; color:var(--fg-dim); max-width:62ch; margin:0}
+.lede strong{color:var(--fg); font-weight:600}
+
+.factbar{
+  display:flex; flex-wrap:wrap; gap:0; margin-top:36px;
+  border:1px solid var(--line); border-radius:var(--r); overflow:hidden;
+  background:var(--surface-2);
+}
+.fact{flex:1 1 150px; padding:14px 18px; border-right:1px solid var(--line-soft)}
+.fact:last-child{border-right:0}
+.fact dt{font-size:11px; letter-spacing:.1em; text-transform:uppercase;
+  color:var(--fg-faint); font-family:var(--mono); margin:0 0 4px}
+.fact dd{margin:0; font-size:22px; font-weight:600; font-variant-numeric:tabular-nums; line-height:1.2}
+.fact dd small{font-size:12px; font-weight:400; color:var(--fg-dim); margin-left:4px}
+
+/* ---------- 섹션 ---------- */
+section{padding:64px 0; border-bottom:1px solid var(--line-soft)}
+section:last-of-type{border-bottom:0}
+h2{
+  font-family:var(--doc); font-weight:700; font-size:clamp(22px,3.2vw,30px);
+  margin:0 0 8px; letter-spacing:-.01em; text-wrap:balance;
+}
+.sub{color:var(--fg-dim); margin:0 0 32px; max-width:64ch}
+h3{font-family:var(--ui); font-weight:600; font-size:16px; margin:32px 0 10px}
+p{max-width:68ch}
+a{color:var(--accent)}
+
+.note{
+  border-left:2px solid var(--accent); padding:2px 0 2px 16px;
+  color:var(--fg-dim); font-size:15px; margin:20px 0; max-width:64ch;
+}
+.note strong{color:var(--fg)}
+
+/* ---------- 흐름 다이어그램 ---------- */
+.flowbox{
+  background:var(--surface); border:1px solid var(--line); border-radius:var(--r);
+  padding:8px; overflow-x:auto;
+}
+.flowbox svg{display:block; min-width:660px; width:100%; height:auto}
+
+/* ---------- 시뮬레이터 ---------- */
+.sim{
+  background:var(--surface); border:1px solid var(--line); border-radius:var(--r);
+  overflow:hidden;
+}
+.sim-head{
+  display:flex; align-items:center; justify-content:space-between; gap:16px;
+  padding:12px 16px; background:var(--surface-2); border-bottom:1px solid var(--line);
+  flex-wrap:wrap;
+}
+.sim-title{font-family:var(--mono); font-size:12px; letter-spacing:.1em;
+  text-transform:uppercase; color:var(--fg-faint); margin:0}
+.sim-body{display:grid; grid-template-columns:minmax(300px,360px) 1fr}
+@media(max-width:860px){.sim-body{grid-template-columns:1fr}}
+.panel-l{border-right:1px solid var(--line); padding:20px}
+@media(max-width:860px){.panel-l{border-right:0;border-bottom:1px solid var(--line)}}
+.panel-r{background:var(--sunk); min-height:520px; display:flex; flex-direction:column}
+
+.field{margin-bottom:20px}
+.field>label{display:block; font-size:11px; letter-spacing:.1em; text-transform:uppercase;
+  font-family:var(--mono); color:var(--fg-faint); margin-bottom:8px}
+.seg{display:flex; flex-direction:column; gap:6px}
+.seg button{
+  font-family:var(--ui); font-size:14px; text-align:left; cursor:pointer;
+  background:var(--surface-2); color:var(--fg); border:1px solid var(--line);
+  border-radius:var(--r); padding:9px 12px; display:flex; justify-content:space-between;
+  align-items:center; gap:10px; transition:background .12s,border-color .12s;
+}
+.seg button:hover{border-color:var(--accent)}
+.seg button[aria-pressed="true"]{
+  background:var(--accent-soft); border-color:var(--accent); font-weight:600;
+}
+.seg button .n{font-family:var(--mono); font-size:12px; color:var(--fg-dim);
+  font-variant-numeric:tabular-nums}
+.seg button[aria-pressed="true"] .n{color:var(--accent)}
+
+.steps{display:flex; flex-direction:column; gap:0;
+  border:1px solid var(--line); border-radius:var(--r); overflow:hidden}
+.step{display:flex; gap:10px; padding:11px 12px; align-items:flex-start;
+  border-bottom:1px solid var(--line-soft); background:var(--surface)}
+.step:last-child{border-bottom:0}
+.step.off{background:var(--surface-2)}
+.step.off .step-name{color:var(--fg-faint)}
+.step>label{display:flex; gap:10px; flex:1; min-width:0; cursor:pointer; align-items:flex-start}
+.step input[type=checkbox]{margin:4px 0 0; accent-color:var(--accent); width:15px; height:15px; cursor:pointer; flex:none}
+.step-move{display:flex; flex-direction:column; gap:2px; flex:none; padding-top:2px}
+.step-move button{
+  width:22px; height:15px; line-height:1; padding:0; font-size:8px; cursor:pointer;
+  background:var(--surface-2); border:1px solid var(--line); border-radius:2px;
+  color:var(--fg-dim); display:flex; align-items:center; justify-content:center;
+}
+.step-move button:hover:not(:disabled){border-color:var(--accent); color:var(--accent)}
+.step-move button:disabled{opacity:.28; cursor:default}
+.step-meta .zero{color:var(--trash); font-weight:500}
+.step-meta .hit{color:var(--move); font-weight:500}
+.excl{width:14px; height:14px; accent-color:var(--accent); cursor:pointer; margin:2px 0 0}
+tbody tr.off{opacity:.4}
+tbody tr.off .k{filter:grayscale(1)}
+tbody tr.off .f{text-decoration:line-through}
+.mini{
+  font-family:var(--ui); font-size:10px; cursor:pointer; background:none;
+  border:1px solid var(--line); border-radius:2px; color:var(--fg-dim); padding:2px 6px;
+}
+.mini:hover{border-color:var(--accent); color:var(--accent)}
+.step-txt{flex:1; min-width:0}
+.step-name{font-size:14px; font-weight:500; display:block}
+.step-meta{font-family:var(--mono); font-size:11px; color:var(--fg-dim);
+  display:block; margin-top:2px; word-break:break-all}
+.step-meta b{color:var(--accent); font-weight:500}
+.step-idx{font-family:var(--mono); font-size:11px; color:var(--fg-faint); flex:none; width:14px; padding-top:3px}
+
+.actions-row{display:flex; gap:8px; margin-top:20px}
+.btn{
+  font-family:var(--ui); font-size:14px; font-weight:600; cursor:pointer;
+  border-radius:var(--r); padding:10px 16px; border:1px solid var(--accent);
+  background:var(--accent); color:#fff; flex:1; transition:opacity .12s;
+}
+.btn:hover{opacity:.88}
+.btn.ghost{background:transparent; color:var(--fg-dim); border-color:var(--line)}
+.btn.ghost:hover{color:var(--fg); border-color:var(--fg-dim); opacity:1}
+:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+
+/* 결과 */
+.res-head{padding:14px 18px; border-bottom:1px solid var(--line); background:var(--surface)}
+.chips{display:flex; flex-wrap:wrap; gap:6px}
+.chip{
+  font-family:var(--mono); font-size:12px; padding:4px 9px; border-radius:2px;
+  display:inline-flex; gap:7px; align-items:center; font-variant-numeric:tabular-nums;
+}
+.chip b{font-weight:500}
+.c-move{background:var(--move-bg); color:var(--move)}
+.c-trash{background:var(--trash-bg); color:var(--trash)}
+.c-new{background:var(--new-bg); color:var(--new)}
+.c-skip{background:var(--skip-bg); color:var(--skip)}
+
+.tabs{display:flex; gap:0; border-bottom:1px solid var(--line); background:var(--surface)}
+.tabs button{
+  font-family:var(--ui); font-size:13px; cursor:pointer; background:none; border:0;
+  padding:10px 16px; color:var(--fg-dim); border-bottom:2px solid transparent;
+}
+.tabs button[aria-selected="true"]{color:var(--fg); font-weight:600; border-bottom-color:var(--accent)}
+
+.res-scroll{flex:1; overflow:auto; max-height:460px}
+table{border-collapse:collapse; width:100%; font-size:13px}
+thead th{
+  position:sticky; top:0; background:var(--surface); z-index:1; text-align:left;
+  font-family:var(--mono); font-size:10px; letter-spacing:.1em; text-transform:uppercase;
+  color:var(--fg-faint); font-weight:400; padding:8px 12px; border-bottom:1px solid var(--line);
+}
+tbody td{padding:6px 12px; border-bottom:1px solid var(--line-soft); vertical-align:top}
+tbody tr:hover{background:var(--surface)}
+.k{font-family:var(--mono); font-size:11px; padding:2px 6px; border-radius:2px; white-space:nowrap}
+.f{font-family:var(--mono); font-size:12px; word-break:break-all}
+.f .dim{color:var(--fg-faint)}
+.arrow{color:var(--fg-faint); padding:0 4px}
+.why{color:var(--fg-dim); font-size:12px}
+
+.tree{font-family:var(--mono); font-size:12.5px; padding:16px 18px; line-height:1.85}
+.tree .d{color:var(--accent); font-weight:500}
+.tree .cnt{color:var(--fg-faint)}
+.tree .ind{color:var(--line)}
+
+.empty{padding:60px 24px; text-align:center; color:var(--fg-faint); font-size:14px}
+
+/* ---------- 화면 시안 ---------- */
+.screens{display:grid; gap:24px; grid-template-columns:repeat(auto-fit,minmax(330px,1fr))}
+.scr{background:var(--surface); border:1px solid var(--line); border-radius:var(--r); overflow:hidden;
+  display:flex; flex-direction:column}
+.scr-cap{padding:12px 16px; border-bottom:1px solid var(--line); background:var(--surface-2)}
+.scr-cap h4{margin:0; font-size:14px; font-weight:600}
+.scr-cap p{margin:3px 0 0; font-size:12.5px; color:var(--fg-dim); max-width:none}
+.scr-body{padding:16px; font-size:12.5px; flex:1}
+.win{border:1px solid var(--line); border-radius:3px; overflow:hidden; background:var(--surface-2)}
+.win-bar{background:var(--sunk); border-bottom:1px solid var(--line); padding:6px 10px;
+  font-family:var(--mono); font-size:10.5px; color:var(--fg-faint); display:flex; gap:6px; align-items:center}
+.traffic{display:inline-flex; gap:5px; flex:none}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--line);flex:none}
+.dot.red{background:#FF5F56}
+.dot.yellow{background:#FFBD2E}
+.dot.green{background:#27C93F}
+.win-in{padding:12px}
+.row{display:flex; justify-content:space-between; gap:10px; padding:5px 0;
+  border-bottom:1px solid var(--line-soft); align-items:baseline}
+.row:last-child{border-bottom:0}
+.row .lbl{color:var(--fg-dim); display:inline-flex; align-items:center; gap:6px}
+.row .val{font-family:var(--mono); font-size:11.5px; text-align:right; word-break:break-all}
+.row .val.ok{color:var(--move)}
+.row .val.bad{color:var(--trash); font-weight:600}
+.fico{position:relative; width:13px; height:10px; flex:none}
+.fico::before{content:'';position:absolute;inset:0;background:#5BB6FF;border-radius:2px}
+.fico::after{content:'';position:absolute;top:-2px;left:0;width:6px;height:3px;background:#5BB6FF;border-radius:2px 2px 0 0}
+.pill{display:inline-block; font-family:var(--mono); font-size:10px; padding:1px 6px;
+  border-radius:2px; background:var(--skip-bg); color:var(--skip)}
+.pill.ok{background:var(--move-bg); color:var(--move)}
+.fakebtn{display:inline-block; padding:5px 12px; border:1px solid var(--accent);
+  border-radius:8px; font-size:12px; color:var(--accent); background:var(--accent-soft)}
+.fakebtn.solid{background:var(--accent); color:#fff; box-shadow:0 2px 6px rgba(0,0,0,.18)}
+.fakebtn.mute{border-color:var(--line); color:var(--fg-dim); background:transparent}
+.btnrow{display:flex; gap:6px; margin-top:12px; flex-wrap:wrap; justify-content:center}
+.inputish{border:1px solid var(--line); border-radius:3px; padding:5px 9px; background:var(--surface);
+  font-family:var(--mono); font-size:11.5px; flex:1; min-width:0; overflow:hidden;
+  text-overflow:ellipsis; white-space:nowrap}
+
+/* ---------- 표 ---------- */
+.tblwrap{overflow-x:auto; border:1px solid var(--line); border-radius:var(--r); background:var(--surface)}
+.tblwrap table{font-size:13.5px}
+.tblwrap thead th{background:var(--surface-2)}
+.tblwrap td{padding:9px 14px}
+
+/* ---------- 시나리오 카드 ---------- */
+.cards{display:grid; gap:16px; grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}
+.card{background:var(--surface); border:1px solid var(--line); border-radius:var(--r); padding:18px}
+.card h4{margin:0 0 4px; font-size:15px; font-weight:600}
+.card>p{margin:0 0 12px; font-size:13.5px; color:var(--fg-dim); max-width:none}
+.card pre{
+  margin:0; background:var(--sunk); border:1px solid var(--line-soft); border-radius:3px;
+  padding:11px 12px; overflow-x:auto; font-family:var(--mono); font-size:11.5px; line-height:1.6;
+}
+.card pre b{color:var(--accent); font-weight:500}
+
+footer{padding:40px 0 64px; color:var(--fg-faint); font-size:13px}
+footer code{font-family:var(--mono); font-size:12px}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+
+</style></head><body>
+<header class="masthead">
+  <div class="wrap">
+    <p class="eyebrow">설계 시안 · 2026-08-20</p>
+    <h1>파일이 어디로 가는지<br>옮기기 전에 본다</h1>
+    <p class="lede"><strong>organize</strong>는 정리 작업을 골라 순서대로 엮어 실행하는 도구입니다.
+    이 페이지는 그 흐름과 화면을 미리 보기 위한 시안이며,
+    아래 시뮬레이터는 <strong>실제 이 PC의 파일 273개</strong>를 그대로 읽어 돌아갑니다.
+    가짜 데이터가 아니라 진짜 결과입니다.</p>
+
+    <dl class="factbar">
+      <div class="fact"><dt>읽은 파일</dt><dd>273<small>개</small></dd></div>
+      <div class="fact"><dt>폴더</dt><dd>3<small>곳</small></dd></div>
+      <div class="fact"><dt>내용이 같은 중복</dt><dd>23<small>쌍</small></dd></div>
+      <div class="fact"><dt>해시 계산</dt><dd>46<small>회 / 273</small></dd></div>
+    </dl>
+  </div>
+</header>
+
+<section>
+  <div class="wrap">
+    <h2>동작 원리</h2>
+    <p class="sub">기존 스크립트는 폴더를 돌면서 곧바로 파일을 옮겼습니다. 그래서 미리보기가 원리적으로 불가능했고
+    되돌릴 수도 없었습니다. 새 구조는 <strong>“무엇을 할지 정하는 일”과 “실제로 하는 일”을 분리</strong>합니다.</p>
+
+    <div class="flowbox">
+      <svg viewBox="0 0 900 214" role="img" aria-label="스캔에서 계획, 확인, 실행으로 이어지고 되돌리기로 돌아오는 흐름도">
+        <defs>
+          <pattern id="g" width="18" height="18" patternUnits="userSpaceOnUse">
+            <path d="M18 0H0V18" fill="none" style="stroke:var(--grid)" stroke-width=".5" opacity=".45"/>
+          </pattern>
+          <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+            <path d="M0 0 10 5 0 10z" style="fill:var(--fg-faint)"/>
+          </marker>
+          <marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+            <path d="M0 0 10 5 0 10z" style="fill:var(--trash)"/>
+          </marker>
+        </defs>
+        <rect width="900" height="214" fill="url(#g)"/>
+
+        <g style="font-family:var(--ui)">
+          <g>
+            <rect x="16" y="30" width="190" height="84" rx="3" style="fill:var(--surface);stroke:var(--line)"/>
+            <text x="30" y="52" style="font-family:var(--mono);font-size:10px;fill:var(--fg-faint);letter-spacing:.1em">01</text>
+            <text x="30" y="74" style="font-size:15px;font-weight:600;fill:var(--fg)">스캔</text>
+            <text x="30" y="95" style="font-size:11.5px;fill:var(--fg-dim)">폴더를 읽기만 한다</text>
+          </g>
+          <g>
+            <rect x="238" y="30" width="190" height="84" rx="3" style="fill:var(--surface);stroke:var(--line)"/>
+            <text x="252" y="52" style="font-family:var(--mono);font-size:10px;fill:var(--fg-faint);letter-spacing:.1em">02</text>
+            <text x="252" y="74" style="font-size:15px;font-weight:600;fill:var(--fg)">계획</text>
+            <text x="252" y="95" style="font-size:11.5px;fill:var(--fg-dim)">할 일 목록을 만든다</text>
+          </g>
+          <g>
+            <rect x="460" y="30" width="190" height="84" rx="3" style="fill:var(--accent-soft);stroke:var(--accent)"/>
+            <text x="474" y="52" style="font-family:var(--mono);font-size:10px;fill:var(--accent);letter-spacing:.1em">03</text>
+            <text x="474" y="74" style="font-size:15px;font-weight:600;fill:var(--fg)">확인</text>
+            <text x="474" y="95" style="font-size:11.5px;fill:var(--fg-dim)">사람이 목록을 본다</text>
+          </g>
+          <g>
+            <rect x="682" y="30" width="190" height="84" rx="3" style="fill:var(--surface);stroke:var(--line)"/>
+            <text x="696" y="52" style="font-family:var(--mono);font-size:10px;fill:var(--fg-faint);letter-spacing:.1em">04</text>
+            <text x="696" y="74" style="font-size:15px;font-weight:600;fill:var(--fg)">실행</text>
+            <text x="696" y="95" style="font-size:11.5px;fill:var(--fg-dim)">목록대로 옮기고 기록</text>
+          </g>
+
+          <path d="M210 72H232" style="stroke:var(--fg-faint)" stroke-width="1.2" marker-end="url(#ar)"/>
+          <path d="M432 72H454" style="stroke:var(--fg-faint)" stroke-width="1.2" marker-end="url(#ar)"/>
+          <path d="M654 72H676" style="stroke:var(--fg-faint)" stroke-width="1.2" marker-end="url(#ar)"/>
+
+          <path d="M777 120v40H111v-40" style="stroke:var(--trash);fill:none" stroke-width="1.2"
+                stroke-dasharray="4 3" marker-end="url(#ar2)"/>
+          <rect x="368" y="148" width="152" height="24" rx="2" style="fill:var(--bg)"/>
+          <text x="444" y="165" text-anchor="middle" style="font-size:12px;fill:var(--trash);font-weight:600">되돌리기 · undo</text>
+
+          <text x="16" y="200" style="font-size:11.5px;fill:var(--fg-dim)">01–03 은 파일을 전혀 건드리지 않는다. 03 에서 본 목록이 04 에서 그대로 실행된다.</text>
+        </g>
+      </svg>
+    </div>
+
+    <div class="note"><strong>미리보기와 실행이 같은 목록을 씁니다.</strong>
+    “돌려봤더니 예상과 달랐다”가 구조적으로 생길 수 없습니다.</div>
+  </div>
+</section>
+
+<section>
+  <div class="wide">
+    <h2>직접 돌려보기</h2>
+    <p class="sub">왼쪽에서 폴더와 작업을 고르고 미리보기를 누르면, 실제 파일 목록에 규칙을 적용한 결과가 나옵니다.
+    작업을 켜고 끄거나 <strong>▲▼로 순서를 바꾸면 다음 작업의 대상이 따라 바뀝니다</strong> — 이게 체인 구조의 핵심입니다.
+    결과 목록의 체크를 풀면 <strong>그 파일만 빼고</strong> 실행됩니다.</p>
+
+    <div class="sim">
+      <div class="sim-head">
+        <p class="sim-title">organize — 미리보기</p>
+        <p class="sim-title" id="rootpath">@downloads</p>
+      </div>
+      <div class="sim-body">
+        <div class="panel-l">
+          <div class="field">
+            <label id="lbl-folder">대상 폴더</label>
+            <div class="seg" role="group" aria-labelledby="lbl-folder" id="roots"></div>
+          </div>
+          <div class="field">
+            <label id="lbl-steps">실행할 작업 · 위에서부터 순서대로 · ▲▼ 로 순서 변경</label>
+            <div class="steps" id="steps"></div>
+          </div>
+          <div class="actions-row">
+            <button class="btn" id="run">미리보기</button>
+            <button class="btn ghost" id="reset">처음으로</button>
+          </div>
+        </div>
+        <div class="panel-r">
+          <div class="res-head">
+            <div class="chips" id="chips"><span class="chip c-skip">미리보기를 누르세요</span></div>
+          </div>
+          <div class="tabs" role="tablist">
+            <button role="tab" aria-selected="true" data-tab="plan">실행 계획</button>
+            <button role="tab" aria-selected="false" data-tab="tree">정리 후 폴더</button>
+            <button role="tab" aria-selected="false" data-tab="skip">손대지 않음</button>
+          </div>
+          <div class="res-scroll" id="out">
+            <p class="empty">아직 아무것도 하지 않았습니다.<br>왼쪽에서 미리보기를 누르면 결과가 나옵니다.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="note" style="margin-top:20px"><strong>순서를 바꾸면 뒤 작업이 조용히 0건이 될 수 있습니다.</strong>
+    예를 들어 <em>연도별 분류</em>를 맨 위로 올리면 파일이 전부 <code style="font-family:var(--mono);font-size:12px">2026/</code> 안으로 들어가고,
+    그 뒤의 <em>종류별 분류</em>는 대상인 “폴더 전체”에 남은 파일이 없어 아무 일도 하지 않습니다.
+    그래서 각 작업 옆에 <span class="hit" style="font-family:var(--mono);font-size:12px">건수</span>와
+    <span class="zero" style="font-family:var(--mono);font-size:12px">해당 없음</span>을 미리 띄웁니다 —
+    실행 전에 순서가 잘못됐다는 걸 알 수 있어야 합니다.</div>
+  </div>
+</section>
+
+<section>
+  <div class="wide">
+    <h2>화면 시안</h2>
+    <p class="sub">화면은 셋입니다. 다른 사람에게 건네줄 수 있어야 하므로,
+    <strong>설정 파일을 손으로 여는 일이 없어야 합니다.</strong></p>
+
+    <div class="screens">
+      <div class="scr">
+        <div class="scr-cap">
+          <h4>처음 실행</h4>
+          <p>아무 설정 없이 시작된다. 경로가 아니라 <strong>파일 개수</strong>를 보여주는 게 핵심.</p>
+        </div>
+        <div class="scr-body">
+          <div class="win">
+            <div class="win-bar"><span class="traffic"><span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span></span>organize — 처음 실행</div>
+            <div class="win-in">
+              <p style="margin:0 0 10px;font-size:12.5px">폴더 위치를 자동으로 찾았습니다.</p>
+              <div class="row"><span class="lbl"><span class="fico"></span>바탕화면</span><span class="val">…\Desktop <b class="ok">6</b></span></div>
+              <div class="row"><span class="lbl"><span class="fico"></span>다운로드</span><span class="val">…\Downloads <b class="ok">121</b></span></div>
+              <div class="row"><span class="lbl"><span class="fico"></span>문서</span><span class="val">…\Documents <b class="ok">19</b></span></div>
+              <div class="row"><span class="lbl"><span class="fico"></span>사진</span><span class="val">…\Pictures <b class="ok">2</b></span></div>
+              <p style="margin:12px 0 0;font-size:12.5px">이 위치가 맞나요?</p>
+              <div class="btnrow">
+                <span class="fakebtn solid">맞아요, 시작</span>
+                <span class="fakebtn mute">직접 고를게요</span>
+              </div>
+            </div>
+          </div>
+          <div class="note" style="margin:14px 0 0;font-size:13px">
+            OneDrive 백업이 켜진 PC에서는 여기가 <strong>“바탕화면 0”</strong> 으로 뜹니다.
+            경로 문자열만 보여주면 일반 사용자는 틀린 걸 알아채지 못합니다.
+          </div>
+        </div>
+      </div>
+
+      <div class="scr">
+        <div class="scr-cap">
+          <h4>메인</h4>
+          <p>대상은 경로 입력창이 아니라 <strong>이름 드롭다운</strong>. 경로를 칠 일이 없다.</p>
+        </div>
+        <div class="scr-body">
+          <div class="win">
+            <div class="win-bar"><span class="traffic"><span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span></span>organize</div>
+            <div class="win-in">
+              <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px">
+                <span style="color:var(--fg-dim);width:44px;flex:none">레시피</span>
+                <span class="inputish">사진 정리 ▾</span>
+                <span class="fakebtn mute" style="padding:4px 8px">저장</span>
+              </div>
+              <div style="display:flex;gap:6px;align-items:center;margin-bottom:12px">
+                <span style="color:var(--fg-dim);width:44px;flex:none">대상</span>
+                <span class="inputish">다운로드 ▾</span>
+                <span class="fakebtn mute" style="padding:4px 8px">설정</span>
+              </div>
+              <div class="row"><span class="lbl">☑ 압축 해제</span><span class="val dim">zip 없음</span></div>
+              <div class="row"><span class="lbl">☑ 중복 제거</span><span class="val">해시 기준</span></div>
+              <div class="row"><span class="lbl">☑ 종류별 분류</span><span class="val">바탕화면·다운로드</span></div>
+              <div class="row"><span class="lbl">☑ 캡처·사진 분리</span><span class="val">02_Media</span></div>
+              <div class="row"><span class="lbl">☐ 연도별 분류</span><span class="val">02_Media/사진</span></div>
+              <div class="row"><span class="lbl" style="font-size:11.5px;color:var(--fg-faint)">선택한 작업 ▲▼ 순서 변경</span><span class="val dim">▲ ▼</span></div>
+              <div class="btnrow">
+                <span class="fakebtn">미리보기</span>
+                <span class="fakebtn solid">실행</span>
+                <span class="fakebtn mute">되돌리기</span>
+              </div>
+              <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--line)">
+                <span class="chip c-move"><b>이동 117</b></span>
+                <span class="chip c-trash"><b>격리 2</b></span>
+              </div>
+              <div class="row" style="margin-top:8px"><span class="lbl">☑ setup.exe</span><span class="val">04_Apps/</span></div>
+              <div class="row"><span class="lbl" style="text-decoration:line-through;opacity:.5">☐ 가이드(1).pdf</span><span class="val dim">제외함</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="scr">
+        <div class="scr-cap">
+          <h4>설정</h4>
+          <p>PC를 옮기면 <strong>없는 경로만 빨갛게</strong> 뜬다. 그것만 다시 지정하면 끝.</p>
+        </div>
+        <div class="scr-body">
+          <div class="win">
+            <div class="win-bar"><span class="traffic"><span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span></span>설정 · 폴더 위치</div>
+            <div class="win-in">
+              <p style="margin:0 0 8px;font-size:11.5px;color:var(--fg-faint)">자동으로 찾은 위치 <span class="pill">수정 불필요</span></p>
+              <div class="row"><span class="lbl"><span class="fico"></span>바탕화면</span><span class="val ok">정상</span></div>
+              <div class="row"><span class="lbl"><span class="fico"></span>다운로드</span><span class="val ok">정상</span></div>
+              <div class="row"><span class="lbl"><span class="fico"></span>사진</span><span class="val ok">정상</span></div>
+              <p style="margin:12px 0 8px;font-size:11.5px;color:var(--fg-faint)">내가 추가한 위치</p>
+              <div class="row"><span class="lbl"><span class="fico"></span>백업드라이브</span><span class="val">F:\day</span></div>
+              <div class="row"><span class="lbl"><span class="fico"></span>사진보관</span><span class="val bad">없음 · 다시 지정</span></div>
+              <p style="margin:12px 0 8px;font-size:11.5px;color:var(--fg-faint)">폴더 이름</p>
+              <div class="row"><span class="lbl"><span class="fico"></span>문서</span><span class="val">01_Docs</span></div>
+              <div class="row"><span class="lbl"><span class="fico"></span>사진/영상</span><span class="val">02_Media</span></div>
+              <div class="row"><span class="lbl"><span class="fico"></span>미분류</span><span class="val">99_Unsorted</span></div>
+              <div class="btnrow"><span class="fakebtn solid">저장</span><span class="fakebtn mute">닫기</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>실제 파일이 알려준 것</h2>
+    <p class="sub">설계를 세우고 나서 이 PC의 진짜 파일에 돌려봤습니다. 두 가지가 확인됐고, 그중 하나는 기존 방식의 결함이었습니다.</p>
+
+    <h3>스크린샷은 이름을 안 봐도 갈린다</h3>
+    <p>카메라·휴대폰 사진에는 EXIF에 제조사와 기종이 <strong>반드시</strong> 들어갑니다. 화면 캡처에는 <strong>절대</strong> 없습니다.</p>
+    <div class="tblwrap">
+      <table>
+        <thead><tr><th>파일</th><th>EXIF Make / Model</th><th>판정</th></tr></thead>
+        <tbody>
+          <tr><td class="f">20260820_085659.jpg</td><td class="f">samsung / Galaxy S23 Ultra</td><td><span class="k c-move">카메라 사진</span></td></tr>
+          <tr><td class="f">Screenshot_20260820_081614_Pinterest.jpg</td><td class="f dim">없음</td><td><span class="k c-skip">스크린샷</span></td></tr>
+          <tr><td class="f">2026-06-02 17 47 38.png <span class="dim">(PicPick)</span></td><td class="f dim">없음</td><td><span class="k c-skip">스크린샷</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="note">다운로드 폴더의 유튜브 캡처 105장은 이름이
+    <code style="font-family:var(--mono);font-size:12px">사피엔스 스튜디오 - … [영상ID - 1248x702 - 1h00m38s].png</code> 형태라
+    “screenshot”이라는 단어가 <strong>하나도 없습니다.</strong> 이름 규칙으로는 못 잡고, EXIF로는 전부 잡힙니다.</div>
+
+    <h3>이름으로 중복을 찾으면 틀린다</h3>
+    <p>PicPick 폴더 150장에 내용 해시를 돌렸더니 중복 23쌍이 나왔는데, <strong>이름이 서로 완전히 다른 파일들</strong>이었습니다.
+    같은 화면을 다른 날 다시 캡처한 것입니다.</p>
+    <div class="tblwrap">
+      <table>
+        <thead><tr><th>남김</th><th>내용이 같아 격리</th></tr></thead>
+        <tbody>
+          <tr><td class="f">2026-06-05 09 59 20.png</td><td class="f">2026-06-06 00 33 58.png</td></tr>
+          <tr><td class="f">2026-06-05 09 59 21 (2).png</td><td class="f">2026-06-06 00 33 59 (2).png</td></tr>
+          <tr><td class="f">2026-06-05 09 59 21 (3).png</td><td class="f">2026-06-06 00 33 59 (3).png</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="note"><strong>기존 메모의 “끝에 숫자 달린 중복 파일명을 제거” 방식이었다면</strong>
+    진짜 중복 23쌍은 하나도 못 찾고, 서로 다른 이미지인 <code style="font-family:var(--mono);font-size:12px">(2)</code>,
+    <code style="font-family:var(--mono);font-size:12px">(3)</code> 파일들을 지웠을 것입니다.</div>
+
+    <h3>건드리면 안 되는 파일이 있다</h3>
+    <p>세 폴더를 전부 돌려보니 <code style="font-family:var(--mono);font-size:12px">desktop.ini</code> 가
+    <strong>99_Unsorted 로 분류되고 있었습니다.</strong> Windows 가 폴더 아이콘과 이름을 저장하는 시스템 파일이라,
+    옮기면 그 폴더의 설정이 깨집니다. 실제 파일에 돌려보지 않았으면 못 잡았을 문제입니다.</p>
+    <div class="note"><strong>제외 목록을 규칙보다 먼저 적용합니다.</strong>
+    <code style="font-family:var(--mono);font-size:12px">desktop.ini</code>,
+    <code style="font-family:var(--mono);font-size:12px">Thumbs.db</code>,
+    <code style="font-family:var(--mono);font-size:12px">.DS_Store</code>,
+    Office 임시 파일<code style="font-family:var(--mono);font-size:12px">~$…</code> 은
+    어떤 프로파일을 써도 손대지 않습니다. 시뮬레이터의 “손대지 않음” 탭에서 확인할 수 있습니다.</div>
+
+    <h3>해시는 세 단계로 걸러서 계산한다</h3>
+    <div class="tblwrap">
+      <table>
+        <thead><tr><th>단계</th><th>남는 파일</th><th>해시 계산</th></tr></thead>
+        <tbody>
+          <tr><td>전체</td><td class="f">273</td><td class="f">기존 방식이라면 273회</td></tr>
+          <tr><td>① 크기가 같은 것만</td><td class="f">46</td><td class="f dim">0회</td></tr>
+          <tr><td>② 앞 8KB 해시</td><td class="f">46</td><td class="f">46회</td></tr>
+          <tr><td>③ 전체 해시</td><td class="f">46</td><td class="f">46회</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p style="margin-top:12px;color:var(--fg-dim);font-size:14px">
+    크기가 다르면 내용이 같을 수 없으므로 227개는 파일을 열어보지도 않습니다.</p>
+  </div>
+</section>
+
+<section>
+  <div class="wide">
+    <h2>어디까지 되나</h2>
+    <p class="sub">작업 하나만 켜면 예전에 만드신 단일 스크립트와 같습니다.
+    엮으면 앞 작업이 만든 폴더가 다음 작업의 대상이 됩니다.</p>
+
+    <div class="cards">
+      <div class="card">
+        <h4>하나만 쓰기</h4>
+        <p>바탕화면에서 <b>md 파일만</b> 골라 문서/메모 아래 연도별로. 나머지는 손대지 않음.</p>
+<pre>{ "root": "<b>@desktop</b>",
+  "steps": [
+    { "block": "by_date",
+      "when": { "ext": [".md"] },
+      "dest": "<b>@documents/메모</b>",
+      "layout": "{year}" }
+  ] }
+
+2026-07-12 회의록.md
+  → 문서/메모/2026/</pre>
+      </div>
+
+      <div class="card">
+        <h4>엮어 쓰기</h4>
+        <p>종류별로 가른 뒤 <b>사진 폴더만</b> 다시 캡처·사진으로, 사진만 다시 연도별로.</p>
+<pre>steps:
+  route    →  01_Docs · 02_Media …
+  route    <b>02_Media</b>  캡처 / 사진
+  by_date  <b>02_Media/사진</b>  {year}
+
+<b>@pictures</b> 실제 결과
+  02_Media/캡처/       1
+  02_Media/사진/2026/  1
+  (desktop.ini 는 제외)</pre>
+      </div>
+
+      <div class="card">
+        <h4>PC가 바뀌어도</h4>
+        <p>별칭에 대체 경로를 주면 외장하드가 없어도 <b>레시피가 죽지 않습니다.</b></p>
+<pre>"archive": [
+   "F:/day",
+   "D:/보관",
+   <b>"@documents/Archive"</b>
+]
+
+외장하드 꽂음  → F:/day
+안 꽂음        → 문서/Archive
+둘 다 없음     → 만든다</pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <p style="margin:0">시뮬레이터는 <code>C:\Users\cloocus</code> 의 Downloads · Documents\PicPick · Pictures 를
+    2026-08-20 에 읽은 실제 목록으로 동작합니다. 규칙 적용은 진짜지만 파일을 옮기지는 않습니다.</p>
+    <p style="margin:8px 0 0">설계 문서 — <code>docs/superpowers/specs/2026-08-19-organize-design.md</code></p>
+  </div>
+</footer>
+
+<script>
+const D = {"meta":{"totalFiles":273,"sizeFiltered":46,"dupGroups":23,"dupExtra":23},"files":[{"root":"downloads","name":"Everything-1.4.1.1032.x64-Setup.exe","ext":".exe","size":1998736,"mtime":"2026-08-13"},{"root":"downloads","name":"GitSSok","dir":true},{"root":"downloads","name":"LeoJ Makeup - 직업 레오제이 [qRinlrJyX84 - 1383x778 - 1m29s](1).png","ext":".png","size":1561794,"mtime":"2026-08-06","cam":false},{"root":"downloads","name":"LeoJ Makeup - 직업 레오제이 [qRinlrJyX84 - 1383x778 - 1m29s].png","ext":".png","size":1561852,"mtime":"2026-08-06","cam":false},{"root":"downloads","name":"LeoJ Makeup - 직업 레오제이 [qRinlrJyX84 - 1383x778 - 1m30s].png","ext":".png","size":1553300,"mtime":"2026-08-06","cam":false},{"root":"downloads","name":"LeoJ Makeup - 직업 레오제이 [qRinlrJyX84 - 1383x778 - 1m31s](1).png","ext":".png","size":1578538,"mtime":"2026-08-06","cam":false},{"root":"downloads","name":"LeoJ Makeup - 직업 레오제이 [qRinlrJyX84 - 1383x778 - 1m31s].png","ext":".png","size":1582530,"mtime":"2026-08-06","cam":false},{"root":"downloads","name":"Mobile Devices","dir":true},{"root":"downloads","name":"SI_02_questions_variations.md","ext":".md","size":2292,"mtime":"2026-06-16"},{"root":"downloads","name":"WhaleSetup.exe","ext":".exe","size":11678736,"mtime":"2026-08-19"},{"root":"downloads","name":"Zettlr-4.7.0-x64.exe","ext":".exe","size":152301624,"mtime":"2026-08-07"},{"root":"downloads","name":"cloosphere-intern-ui-test-20260804-1141 1 (1).html","ext":".html","size":265419,"mtime":"2026-08-04","nameDate":"2026-08-04"},{"root":"downloads","name":"cloosphere-intern-ui-test-20260804-1141.html","ext":".html","size":264812,"mtime":"2026-08-04","nameDate":"2026-08-04"},{"root":"downloads","name":"dd.png","ext":".png","size":63544,"mtime":"2026-08-20","cam":false},{"root":"downloads","name":"desktop.ini","ext":".ini","size":282,"mtime":"2026-02-13"},{"root":"downloads","name":"drive-download-20260818T015051Z-1-001","dir":true},{"root":"downloads","name":"menu-tree-doc_20260810.md","ext":".md","size":293,"mtime":"2026-08-10","nameDate":"2026-08-10"},{"root":"downloads","name":"ms-timer.exe","ext":".exe","size":89075270,"mtime":"2026-08-14"},{"root":"downloads","name":"orca-windows-setup.exe","ext":".exe","size":190280072,"mtime":"2026-07-31"},{"root":"downloads","name":"python-manager-26.3(1).msix","ext":".msix","size":47047851,"mtime":"2026-08-03","dup":1},{"root":"downloads","name":"python-manager-26.3.msix","ext":".msix","size":47047851,"mtime":"2026-08-03","dup":1},{"root":"downloads","name":"sitewalk_20260818.md","ext":".md","size":239,"mtime":"2026-08-18","nameDate":"2026-08-18"},{"root":"downloads","name":"돈가스 오제제 _ 정돈.png","ext":".png","size":62825,"mtime":"2026-08-18","cam":false},{"root":"downloads","name":"밤(1).png","ext":".png","size":25558,"mtime":"2026-08-18","cam":false,"dup":2},{"root":"downloads","name":"밤(2).png","ext":".png","size":25558,"mtime":"2026-08-18","cam":false,"dup":2},{"root":"downloads","name":"밤.png","ext":".png","size":25549,"mtime":"2026-08-10","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 1h00m38s].png","ext":".png","size":700243,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 1h00m40s].png","ext":".png","size":676643,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 1h00m41s].png","ext":".png","size":684401,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 1h05m32s].png","ext":".png","size":702821,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 1h06m53s].png","ext":".png","size":703784,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 1h06m54s].png","ext":".png","size":730535,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 34m01s].png","ext":".png","size":832912,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 34m08s].png","ext":".png","size":822270,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 34m09s].png","ext":".png","size":841396,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 38m36s].png","ext":".png","size":548834,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 38m42s].png","ext":".png","size":1061301,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 38m45s].png","ext":".png","size":831661,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 38m47s].png","ext":".png","size":242524,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 38m48s].png","ext":".png","size":237867,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 38m51s].png","ext":".png","size":814251,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 39m35s].png","ext":".png","size":1032191,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 39m44s].png","ext":".png","size":1038720,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 39m46s].png","ext":".png","size":1058868,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 39m50s].png","ext":".png","size":1039260,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 39m53s].png","ext":".png","size":908547,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 39m54s].png","ext":".png","size":914401,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 39m57s].png","ext":".png","size":923538,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 40m03s].png","ext":".png","size":28408,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 40m06s].png","ext":".png","size":42015,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 40m19s].png","ext":".png","size":346102,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 40m21s].png","ext":".png","size":349966,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 40m27s].png","ext":".png","size":311634,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 40m29s].png","ext":".png","size":1045382,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 40m30s].png","ext":".png","size":1046896,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 40m33s].png","ext":".png","size":1122950,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 40m36s].png","ext":".png","size":900177,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 40m39s].png","ext":".png","size":890450,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 40m50s].png","ext":".png","size":64341,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 40m52s].png","ext":".png","size":36837,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 40m58s].png","ext":".png","size":517402,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 55m08s].png","ext":".png","size":1064662,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 55m13s].png","ext":".png","size":887139,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 55m15s].png","ext":".png","size":893733,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 55m17s].png","ext":".png","size":881860,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 55m21s].png","ext":".png","size":1047939,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 55m23s].png","ext":".png","size":1037197,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 55m26s].png","ext":".png","size":1035024,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 55m29s].png","ext":".png","size":1056609,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 55m38s].png","ext":".png","size":949913,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 55m40s].png","ext":".png","size":830682,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 55m41s].png","ext":".png","size":853978,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 55m47s].png","ext":".png","size":861960,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 55m48s].png","ext":".png","size":1094016,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 57m55s].png","ext":".png","size":946672,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 57m56s].png","ext":".png","size":945867,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 57m58s].png","ext":".png","size":749741,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 58m29s].png","ext":".png","size":762542,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 58m36s].png","ext":".png","size":738525,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 58m37s](1).png","ext":".png","size":723866,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 58m37s].png","ext":".png","size":709124,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 58m50s].png","ext":".png","size":64902,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 58m53s].png","ext":".png","size":74268,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 58m57s].png","ext":".png","size":103283,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 59m03s].png","ext":".png","size":1109785,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 59m07s].png","ext":".png","size":954832,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 59m10s].png","ext":".png","size":695458,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 59m11s].png","ext":".png","size":703138,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 59m12s].png","ext":".png","size":731034,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 59m14s].png","ext":".png","size":959357,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 59m15s].png","ext":".png","size":963775,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 59m18s].png","ext":".png","size":920160,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 59m19s].png","ext":".png","size":912041,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 59m20s].png","ext":".png","size":923572,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 59m21s].png","ext":".png","size":708816,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 59m22s].png","ext":".png","size":674938,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 59m23s].png","ext":".png","size":934597,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 59m24s].png","ext":".png","size":943174,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 59m25s].png","ext":".png","size":956253,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 59m26s].png","ext":".png","size":958127,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 59m29s].png","ext":".png","size":1066661,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 59m30s].png","ext":".png","size":967637,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 59m33s].png","ext":".png","size":980228,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 59m36s].png","ext":".png","size":710717,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 59m39s].png","ext":".png","size":697949,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 59m40s].png","ext":".png","size":722328,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 59m42s].png","ext":".png","size":1094347,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 59m45s].png","ext":".png","size":698719,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 59m47s].png","ext":".png","size":1020666,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1248x702 - 59m49s].png","ext":".png","size":1052497,"mtime":"2026-08-11","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1383x778 - 20m45s].png","ext":".png","size":1273410,"mtime":"2026-08-10","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1383x778 - 24m00s].png","ext":".png","size":800467,"mtime":"2026-08-10","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1383x778 - 24m02s].png","ext":".png","size":799699,"mtime":"2026-08-10","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1383x778 - 24m04s].png","ext":".png","size":800741,"mtime":"2026-08-10","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1383x778 - 24m05s].png","ext":".png","size":817227,"mtime":"2026-08-10","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1383x778 - 24m06s].png","ext":".png","size":812123,"mtime":"2026-08-10","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1383x778 - 24m07s].png","ext":".png","size":1174447,"mtime":"2026-08-10","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1383x778 - 27m52s].png","ext":".png","size":820049,"mtime":"2026-08-10","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1383x778 - 27m54s].png","ext":".png","size":1626205,"mtime":"2026-08-10","cam":false},{"root":"downloads","name":"사피엔스 스튜디오 - 질투는 쉽고 동경은 어려워 (그럼에도 불구하고) ⎮ 적수다 EP. 21 [동경] 이적, 도대체, 오지은, 김홍익 [MJ60b296UWM - 1383x778 - 27m55s].png","ext":".png","size":1605462,"mtime":"2026-08-10","cam":false},{"root":"downloads","name":"서초 커피(1).png","ext":".png","size":962760,"mtime":"2026-08-20","cam":false},{"root":"downloads","name":"서초 커피.png","ext":".png","size":60128,"mtime":"2026-08-18","cam":false},{"root":"downloads","name":"커피스니퍼 블랙.png","ext":".png","size":60590,"mtime":"2026-08-18","cam":false},{"root":"picpick","name":"2026-06-02 17 47 38 (2).png","ext":".png","size":198448,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 38.png","ext":".png","size":75116,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 39 (10).png","ext":".png","size":12292,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 39 (2).png","ext":".png","size":241223,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 39 (3).png","ext":".png","size":277065,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 39 (4).png","ext":".png","size":107029,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 39 (5).png","ext":".png","size":121579,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 39 (6).png","ext":".png","size":13332,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 39 (7).png","ext":".png","size":306764,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 39 (8).png","ext":".png","size":234367,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 39 (9).png","ext":".png","size":207041,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 39.png","ext":".png","size":102617,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 40 (10).png","ext":".png","size":7818,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 40 (11).png","ext":".png","size":39464,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 40 (12).png","ext":".png","size":143039,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 40 (2).png","ext":".png","size":176039,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 40 (3).png","ext":".png","size":91100,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 40 (4).png","ext":".png","size":147154,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 40 (5).png","ext":".png","size":161315,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 40 (6).png","ext":".png","size":24056,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 40 (7).png","ext":".png","size":41289,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 40 (8).png","ext":".png","size":26101,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 40 (9).png","ext":".png","size":21241,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 40.png","ext":".png","size":348952,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 41 (10).png","ext":".png","size":77330,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 41 (2).png","ext":".png","size":88498,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 41 (3).png","ext":".png","size":75952,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 41 (4).png","ext":".png","size":456825,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 41 (5).png","ext":".png","size":14968,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 41 (6).png","ext":".png","size":53160,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 41 (7).png","ext":".png","size":91142,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 41 (8).png","ext":".png","size":252159,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 41 (9).png","ext":".png","size":250901,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 41.png","ext":".png","size":45427,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 42 (2).png","ext":".png","size":101843,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 42 (3).png","ext":".png","size":124792,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 42 (4).png","ext":".png","size":126950,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 42 (5).png","ext":".png","size":50130,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 42 (6).png","ext":".png","size":19155,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 42 (7).png","ext":".png","size":131433,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 42 (8).png","ext":".png","size":137048,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 42 (9).png","ext":".png","size":148784,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 42.png","ext":".png","size":264983,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 43 (10).png","ext":".png","size":213068,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 43 (11).png","ext":".png","size":173599,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 43 (2).png","ext":".png","size":98662,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 43 (3).png","ext":".png","size":96295,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 43 (4).png","ext":".png","size":113809,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 43 (5).png","ext":".png","size":139977,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 43 (6).png","ext":".png","size":132666,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 43 (7).png","ext":".png","size":156483,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 43 (8).png","ext":".png","size":168148,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 43 (9).png","ext":".png","size":189042,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 43.png","ext":".png","size":144663,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 44 (2).png","ext":".png","size":96730,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 44 (3).png","ext":".png","size":201674,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 44 (4).png","ext":".png","size":184035,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 44.png","ext":".png","size":174772,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 45 (2).png","ext":".png","size":110460,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 45 (3).png","ext":".png","size":139666,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 45 (4).png","ext":".png","size":274552,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 45.png","ext":".png","size":108405,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 46 (2).png","ext":".png","size":123289,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 46 (3).png","ext":".png","size":94139,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 46 (4).png","ext":".png","size":151504,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 46 (5).png","ext":".png","size":59380,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 46.png","ext":".png","size":150283,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-02 17 47 47.png","ext":".png","size":196798,"mtime":"2026-06-02","cam":false,"nameDate":"2026-06-02"},{"root":"picpick","name":"2026-06-05 09 59 20.png","ext":".png","size":209247,"mtime":"2026-06-05","cam":false,"nameDate":"2026-06-05","dup":3},{"root":"picpick","name":"2026-06-05 09 59 21 (2).png","ext":".png","size":41030,"mtime":"2026-06-05","cam":false,"nameDate":"2026-06-05","dup":4},{"root":"picpick","name":"2026-06-05 09 59 21 (3).png","ext":".png","size":348064,"mtime":"2026-06-05","cam":false,"nameDate":"2026-06-05","dup":5},{"root":"picpick","name":"2026-06-05 09 59 21 (4).png","ext":".png","size":87628,"mtime":"2026-06-05","cam":false,"nameDate":"2026-06-05","dup":6},{"root":"picpick","name":"2026-06-05 09 59 21 (5).png","ext":".png","size":326238,"mtime":"2026-06-05","cam":false,"nameDate":"2026-06-05","dup":7},{"root":"picpick","name":"2026-06-05 09 59 21 (6).png","ext":".png","size":166757,"mtime":"2026-06-05","cam":false,"nameDate":"2026-06-05","dup":8},{"root":"picpick","name":"2026-06-05 09 59 21 (7).png","ext":".png","size":217831,"mtime":"2026-06-05","cam":false,"nameDate":"2026-06-05","dup":9},{"root":"picpick","name":"2026-06-05 09 59 21 (8).png","ext":".png","size":243033,"mtime":"2026-06-05","cam":false,"nameDate":"2026-06-05","dup":10},{"root":"picpick","name":"2026-06-05 09 59 21 (9).png","ext":".png","size":50813,"mtime":"2026-06-05","cam":false,"nameDate":"2026-06-05","dup":11},{"root":"picpick","name":"2026-06-05 09 59 21.png","ext":".png","size":194590,"mtime":"2026-06-05","cam":false,"nameDate":"2026-06-05","dup":12},{"root":"picpick","name":"2026-06-05 09 59 22 (2).png","ext":".png","size":221790,"mtime":"2026-06-05","cam":false,"nameDate":"2026-06-05","dup":13},{"root":"picpick","name":"2026-06-05 09 59 22 (3).png","ext":".png","size":12696,"mtime":"2026-06-05","cam":false,"nameDate":"2026-06-05","dup":14},{"root":"picpick","name":"2026-06-05 09 59 22 (4).png","ext":".png","size":139439,"mtime":"2026-06-05","cam":false,"nameDate":"2026-06-05","dup":15},{"root":"picpick","name":"2026-06-05 09 59 22 (5).png","ext":".png","size":179555,"mtime":"2026-06-05","cam":false,"nameDate":"2026-06-05","dup":16},{"root":"picpick","name":"2026-06-05 09 59 22 (6).png","ext":".png","size":192886,"mtime":"2026-06-05","cam":false,"nameDate":"2026-06-05","dup":17},{"root":"picpick","name":"2026-06-05 09 59 22 (7).png","ext":".png","size":52135,"mtime":"2026-06-05","cam":false,"nameDate":"2026-06-05","dup":18},{"root":"picpick","name":"2026-06-05 09 59 22.png","ext":".png","size":50788,"mtime":"2026-06-05","cam":false,"nameDate":"2026-06-05","dup":19},{"root":"picpick","name":"2026-06-05 09 59 23 (2).png","ext":".png","size":7891,"mtime":"2026-06-05","cam":false,"nameDate":"2026-06-05","dup":20},{"root":"picpick","name":"2026-06-05 09 59 23 (3).png","ext":".png","size":94696,"mtime":"2026-06-05","cam":false,"nameDate":"2026-06-05","dup":21},{"root":"picpick","name":"2026-06-05 09 59 23 (4).png","ext":".png","size":121443,"mtime":"2026-06-05","cam":false,"nameDate":"2026-06-05","dup":22},{"root":"picpick","name":"2026-06-05 09 59 23.png","ext":".png","size":84124,"mtime":"2026-06-05","cam":false,"nameDate":"2026-06-05","dup":23},{"root":"picpick","name":"2026-06-06 00 33 58.png","ext":".png","size":209247,"mtime":"2026-06-06","cam":false,"nameDate":"2026-06-06","dup":3},{"root":"picpick","name":"2026-06-06 00 33 59 (2).png","ext":".png","size":41030,"mtime":"2026-06-06","cam":false,"nameDate":"2026-06-06","dup":4},{"root":"picpick","name":"2026-06-06 00 33 59 (3).png","ext":".png","size":348064,"mtime":"2026-06-06","cam":false,"nameDate":"2026-06-06","dup":5},{"root":"picpick","name":"2026-06-06 00 33 59 (4).png","ext":".png","size":87628,"mtime":"2026-06-06","cam":false,"nameDate":"2026-06-06","dup":6},{"root":"picpick","name":"2026-06-06 00 33 59 (5).png","ext":".png","size":326238,"mtime":"2026-06-06","cam":false,"nameDate":"2026-06-06","dup":7},{"root":"picpick","name":"2026-06-06 00 33 59 (6).png","ext":".png","size":166757,"mtime":"2026-06-06","cam":false,"nameDate":"2026-06-06","dup":8},{"root":"picpick","name":"2026-06-06 00 33 59.png","ext":".png","size":194590,"mtime":"2026-06-06","cam":false,"nameDate":"2026-06-06","dup":12},{"root":"picpick","name":"2026-06-06 00 34 00 (2).png","ext":".png","size":243033,"mtime":"2026-06-06","cam":false,"nameDate":"2026-06-06","dup":10},{"root":"picpick","name":"2026-06-06 00 34 00 (3).png","ext":".png","size":50813,"mtime":"2026-06-06","cam":false,"nameDate":"2026-06-06","dup":11},{"root":"picpick","name":"2026-06-06 00 34 00 (4).png","ext":".png","size":50788,"mtime":"2026-06-06","cam":false,"nameDate":"2026-06-06","dup":19},{"root":"picpick","name":"2026-06-06 00 34 00 (5).png","ext":".png","size":221790,"mtime":"2026-06-06","cam":false,"nameDate":"2026-06-06","dup":13},{"root":"picpick","name":"2026-06-06 00 34 00 (6).png","ext":".png","size":12696,"mtime":"2026-06-06","cam":false,"nameDate":"2026-06-06","dup":14},{"root":"picpick","name":"2026-06-06 00 34 00 (7).png","ext":".png","size":139439,"mtime":"2026-06-06","cam":false,"nameDate":"2026-06-06","dup":15},{"root":"picpick","name":"2026-06-06 00 34 00.png","ext":".png","size":217831,"mtime":"2026-06-06","cam":false,"nameDate":"2026-06-06","dup":9},{"root":"picpick","name":"2026-06-06 00 34 01 (2).png","ext":".png","size":192886,"mtime":"2026-06-06","cam":false,"nameDate":"2026-06-06","dup":17},{"root":"picpick","name":"2026-06-06 00 34 01 (3).png","ext":".png","size":52135,"mtime":"2026-06-06","cam":false,"nameDate":"2026-06-06","dup":18},{"root":"picpick","name":"2026-06-06 00 34 01 (4).png","ext":".png","size":84124,"mtime":"2026-06-06","cam":false,"nameDate":"2026-06-06","dup":23},{"root":"picpick","name":"2026-06-06 00 34 01 (5).png","ext":".png","size":7891,"mtime":"2026-06-06","cam":false,"nameDate":"2026-06-06","dup":20},{"root":"picpick","name":"2026-06-06 00 34 01 (6).png","ext":".png","size":94696,"mtime":"2026-06-06","cam":false,"nameDate":"2026-06-06","dup":21},{"root":"picpick","name":"2026-06-06 00 34 01 (7).png","ext":".png","size":121443,"mtime":"2026-06-06","cam":false,"nameDate":"2026-06-06","dup":22},{"root":"picpick","name":"2026-06-06 00 34 01 (8).png","ext":".png","size":81623,"mtime":"2026-06-06","cam":false,"nameDate":"2026-06-06"},{"root":"picpick","name":"2026-06-06 00 34 01.png","ext":".png","size":179555,"mtime":"2026-06-06","cam":false,"nameDate":"2026-06-06","dup":16},{"root":"picpick","name":"2026-06-06 00 34 02 (2).png","ext":".png","size":72855,"mtime":"2026-06-06","cam":false,"nameDate":"2026-06-06"},{"root":"picpick","name":"2026-06-06 00 34 02 (3).png","ext":".png","size":84199,"mtime":"2026-06-06","cam":false,"nameDate":"2026-06-06"},{"root":"picpick","name":"2026-06-06 00 34 02 (4).png","ext":".png","size":80219,"mtime":"2026-06-06","cam":false,"nameDate":"2026-06-06"},{"root":"picpick","name":"2026-06-06 00 34 02 (5).png","ext":".png","size":4760,"mtime":"2026-06-06","cam":false,"nameDate":"2026-06-06"},{"root":"picpick","name":"2026-06-06 00 34 02.png","ext":".png","size":68629,"mtime":"2026-06-06","cam":false,"nameDate":"2026-06-06"},{"root":"picpick","name":"2026-06-09 08 51 24.png","ext":".png","size":38140,"mtime":"2026-06-09","cam":false,"nameDate":"2026-06-09"},{"root":"picpick","name":"2026-06-09 08 51 54.png","ext":".png","size":30888,"mtime":"2026-06-09","cam":false,"nameDate":"2026-06-09"},{"root":"picpick","name":"2026-06-09 08 52 24.png","ext":".png","size":32488,"mtime":"2026-06-09","cam":false,"nameDate":"2026-06-09"},{"root":"picpick","name":"2026-06-09 08 52 54.png","ext":".png","size":20642,"mtime":"2026-06-09","cam":false,"nameDate":"2026-06-09"},{"root":"picpick","name":"2026-06-09 08 53 24.png","ext":".png","size":23528,"mtime":"2026-06-09","cam":false,"nameDate":"2026-06-09"},{"root":"picpick","name":"2026-06-09 08 53 54.png","ext":".png","size":73437,"mtime":"2026-06-09","cam":false,"nameDate":"2026-06-09"},{"root":"picpick","name":"2026-06-09 08 54 25.png","ext":".png","size":7220,"mtime":"2026-06-09","cam":false,"nameDate":"2026-06-09"},{"root":"picpick","name":"2026-06-09 08 54 55.png","ext":".png","size":7287,"mtime":"2026-06-09","cam":false,"nameDate":"2026-06-09"},{"root":"picpick","name":"2026-06-09 08 55 25.png","ext":".png","size":87047,"mtime":"2026-06-09","cam":false,"nameDate":"2026-06-09"},{"root":"picpick","name":"2026-06-09 08 55 55.png","ext":".png","size":25644,"mtime":"2026-06-09","cam":false,"nameDate":"2026-06-09"},{"root":"picpick","name":"2026-06-09 08 56 25.png","ext":".png","size":33395,"mtime":"2026-06-09","cam":false,"nameDate":"2026-06-09"},{"root":"picpick","name":"2026-06-09 08 56 55.png","ext":".png","size":39233,"mtime":"2026-06-09","cam":false,"nameDate":"2026-06-09"},{"root":"picpick","name":"2026-06-09 08 57 25.png","ext":".png","size":9326,"mtime":"2026-06-09","cam":false,"nameDate":"2026-06-09"},{"root":"picpick","name":"2026-06-09 08 57 55.png","ext":".png","size":34673,"mtime":"2026-06-09","cam":false,"nameDate":"2026-06-09"},{"root":"picpick","name":"2026-06-09 17 33 01.png","ext":".png","size":22014,"mtime":"2026-06-09","cam":false,"nameDate":"2026-06-09"},{"root":"picpick","name":"2026-06-18 17 00 16 (2).png","ext":".png","size":23695,"mtime":"2026-06-18","cam":false,"nameDate":"2026-06-18"},{"root":"picpick","name":"2026-06-18 17 00 16 (3).png","ext":".png","size":63330,"mtime":"2026-06-18","cam":false,"nameDate":"2026-06-18"},{"root":"picpick","name":"2026-06-18 17 00 16 (4).png","ext":".png","size":61451,"mtime":"2026-06-18","cam":false,"nameDate":"2026-06-18"},{"root":"picpick","name":"2026-06-18 17 00 16 (5).png","ext":".png","size":214293,"mtime":"2026-06-18","cam":false,"nameDate":"2026-06-18"},{"root":"picpick","name":"2026-06-18 17 00 16 (6).png","ext":".png","size":30130,"mtime":"2026-06-18","cam":false,"nameDate":"2026-06-18"},{"root":"picpick","name":"2026-06-18 17 00 16 (7).png","ext":".png","size":54562,"mtime":"2026-06-18","cam":false,"nameDate":"2026-06-18"},{"root":"picpick","name":"2026-06-18 17 00 16.png","ext":".png","size":157404,"mtime":"2026-06-18","cam":false,"nameDate":"2026-06-18"},{"root":"picpick","name":"2026-06-18 17 00 17 (10).png","ext":".png","size":11895,"mtime":"2026-06-18","cam":false,"nameDate":"2026-06-18"},{"root":"picpick","name":"2026-06-18 17 00 17 (2).png","ext":".png","size":29450,"mtime":"2026-06-18","cam":false,"nameDate":"2026-06-18"},{"root":"picpick","name":"2026-06-18 17 00 17 (3).png","ext":".png","size":7762,"mtime":"2026-06-18","cam":false,"nameDate":"2026-06-18"},{"root":"picpick","name":"2026-06-18 17 00 17 (4).png","ext":".png","size":42524,"mtime":"2026-06-18","cam":false,"nameDate":"2026-06-18"},{"root":"picpick","name":"2026-06-18 17 00 17 (5).png","ext":".png","size":316353,"mtime":"2026-06-18","cam":false,"nameDate":"2026-06-18"},{"root":"picpick","name":"2026-06-18 17 00 17 (6).png","ext":".png","size":329995,"mtime":"2026-06-18","cam":false,"nameDate":"2026-06-18"},{"root":"picpick","name":"2026-06-18 17 00 17 (7).png","ext":".png","size":118207,"mtime":"2026-06-18","cam":false,"nameDate":"2026-06-18"},{"root":"picpick","name":"2026-06-18 17 00 17 (8).png","ext":".png","size":282512,"mtime":"2026-06-18","cam":false,"nameDate":"2026-06-18"},{"root":"picpick","name":"2026-06-18 17 00 17 (9).png","ext":".png","size":90005,"mtime":"2026-06-18","cam":false,"nameDate":"2026-06-18"},{"root":"picpick","name":"2026-06-18 17 00 17.png","ext":".png","size":38239,"mtime":"2026-06-18","cam":false,"nameDate":"2026-06-18"},{"root":"picpick","name":"2026-06-18 17 00 18 (2).png","ext":".png","size":16099,"mtime":"2026-06-18","cam":false,"nameDate":"2026-06-18"},{"root":"picpick","name":"2026-06-18 17 00 18.png","ext":".png","size":568327,"mtime":"2026-06-18","cam":false,"nameDate":"2026-06-18"},{"root":"picpick","name":"6월","dir":true},{"root":"picpick","name":"6월9일","dir":true},{"root":"pictures","name":"20260820_085659.jpg","ext":".jpg","size":1033859,"mtime":"2026-08-20","cam":true,"exifDate":"2026-08-20","nameDate":"2026-08-20"},{"root":"pictures","name":"Screenshot_20260820_081614_Pinterest.jpg","ext":".jpg","size":494335,"mtime":"2026-08-20","cam":false,"exifDate":"2026-08-20","nameDate":"2026-08-20"},{"root":"pictures","name":"desktop.ini","ext":".ini","size":504,"mtime":"2026-02-13"}]};
+
+const ROOTS = [
+  { id:'downloads', label:'다운로드',      alias:'@downloads' },
+  { id:'picpick',   label:'PicPick 캡처',  alias:'@documents/PicPick' },
+  { id:'pictures',  label:'사진',          alias:'@pictures' },
+];
+
+const PROFILE = [
+  { to:'01_Docs',     ext:['.pdf','.docx','.xlsx','.pptx','.hwp','.txt','.md','.html'] },
+  { to:'02_Media',    ext:['.jpg','.jpeg','.png','.gif','.mp4','.mov','.heic','.webp','.avi','.mkv'] },
+  { to:'03_Design',   ext:['.psd','.ai','.fig','.sketch','.xd'] },
+  { to:'04_Apps',     ext:['.exe','.msi','.msix','.appimage','.dmg'] },
+  { to:'05_Archives', ext:['.zip','.7z','.tar','.rar','.gz'] },
+  { to:'06_Code',     ext:['.py','.js','.ts','.ipynb','.json','.sql','.sh'] },
+  { to:'99_Unsorted', def:true },
+];
+
+const IMG  = new Set(['.jpg','.jpeg','.png','.gif','.heic','.webp','.bmp']);
+const COPY = /\(\d+\)|_\d+$|-\s?복사본|-\s?Copy|_copy/i;
+/* 옮기면 폴더 설정이 깨지는 시스템 파일 — 어떤 규칙보다 먼저 걸러낸다 */
+const SYSFILE = /^(desktop\.ini|thumbs\.db|\.ds_store|ehthumbs\.db)$|^~\$/i;
+
+const BLOCK = {
+  dedup:  { name:'중복 제거',        hint:'크기 → 앞 8KB → 전체 해시' },
+  route:  { name:'종류별 분류',      hint:'프로파일 desktop' },
+  photos: { name:'캡처 · 사진 분리', hint:'EXIF 카메라 정보 유무' },
+  bydate: { name:'연도별 분류',      hint:'EXIF → 파일명 → 수정시각' },
+};
+const DEFAULT_ORDER = ['dedup','route','photos','bydate'];
+
+const state = {
+  root:'downloads',
+  order:[...DEFAULT_ORDER],
+  on:{dedup:true,route:true,photos:true,bydate:true},
+  excluded:new Set(),
+  tab:'plan',
+  res:null,
+};
+
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const $   = s => document.querySelector(s);
+
+function cmpKeep(a,b){
+  const ca = COPY.test(a.name)?1:0, cb = COPY.test(b.name)?1:0;
+  if (ca!==cb) return ca-cb;
+  const da = a.nameDate||a.mtime||'', db = b.nameDate||b.mtime||'';
+  if (da!==db) return da<db?-1:1;
+  return a.name<b.name?-1:1;
+}
+function dateOf(f){
+  if (f.exifDate) return {src:'EXIF 촬영일', v:f.exifDate};
+  if (f.nameDate) return {src:'파일명 날짜', v:f.nameDate};
+  if (f.mtime)    return {src:'수정시각',    v:f.mtime};
+  return null;
+}
+
+/* 순서대로 훑으며 각 블록의 대상 폴더를 정한다.
+   앞 블록이 만든 폴더가 뒤 블록의 대상이 되므로, 순서를 바꾸면 대상도 바뀐다. */
+function walk(apply){
+  const all   = D.files.filter(f => f.root===state.root && !f.dir)
+                       .map(f => ({...f, at:'', why:[]}));
+  const sys   = all.filter(f => SYSFILE.test(f.name));
+  let   live  = all.filter(f => !SYSFILE.test(f.name));
+  const trashed = [];
+  const tgt = {}, cnt = {};
+  let media = null, photosOut = null;
+
+  for (const id of state.order){
+    let target;
+    if (id==='dedup' || id==='route') target = '';
+    else if (id==='photos')           target = media ?? '';
+    else                              target = photosOut ?? media ?? '';
+    tgt[id] = target;
+
+    if (!state.on[id] || !apply){ cnt[id] = null; continue; }
+    let n = 0;
+
+    if (id==='dedup'){
+      const g = {}, gone = new Set();
+      live.forEach(f => { if (f.dup) (g[f.dup] = g[f.dup] || []).push(f); });
+      Object.values(g).forEach(arr => {
+        arr.sort(cmpKeep);
+        arr.slice(1).forEach(f => {
+          trashed.push({ f, why:'내용이 같음 · 남긴 파일 '+arr[0].name });
+          gone.add(f); n++;
+        });
+      });
+      live = live.filter(f => !gone.has(f));
+    }
+    else if (id==='route'){
+      live.forEach(f => {
+        if (f.at !== target) return;
+        const r = PROFILE.find(r => r.def || r.ext.includes(f.ext));
+        f.at = (target ? target+'/' : '') + r.to;
+        f.why.push(r.def ? '어느 규칙에도 안 걸림 → 99_Unsorted'
+                         : '확장자 '+(f.ext||'없음')+' → '+r.to);
+        n++;
+      });
+      media = (target ? target+'/' : '') + '02_Media';
+    }
+    else if (id==='photos'){
+      live.forEach(f => {
+        if (f.at !== target || !IMG.has(f.ext) || f.cam === undefined) return;
+        f.at = (target ? target+'/' : '') + (f.cam ? '사진' : '캡처');
+        f.why.push(f.cam ? 'EXIF 카메라 정보 있음 → 사진' : 'EXIF 카메라 정보 없음 → 캡처');
+        n++;
+      });
+      photosOut = (target ? target+'/' : '') + '사진';
+    }
+    else if (id==='bydate'){
+      live.forEach(f => {
+        if (f.at !== target) return;
+        const d = dateOf(f);
+        if (!d) return;
+        f.at = (target ? target+'/' : '') + d.v.slice(0,4);
+        f.why.push(d.src+' '+d.v);
+        n++;
+      });
+    }
+    cnt[id] = n;
+  }
+  return { all, sys, live, trashed, tgt, cnt };
+}
+
+function run(keepTable){
+  const { all, sys, live, trashed, tgt, cnt } = walk(true);
+  const ex = state.excluded;
+
+  const movedAll = live.filter(f => f.at !== '');
+  const moved    = movedAll.filter(f => !ex.has(f.name));
+  const trash    = trashed.filter(x => !ex.has(x.f.name));
+
+  const skipped = [
+    ...sys.map(f => ({ f, why:'시스템 파일 · 옮기면 폴더 설정이 깨진다', locked:true })),
+    ...movedAll.filter(f => ex.has(f.name)).map(f => ({ f, why:'직접 제외함' })),
+    ...trashed.filter(x => ex.has(x.f.name)).map(x => ({ f:x.f, why:'직접 제외함' })),
+    ...live.filter(f => f.at === '').map(f => ({ f, why:'켜둔 작업의 대상이 아님' })),
+  ];
+
+  /* 만들 폴더는 실제로 파일이 들어가는 곳만 (제외한 건 반영 안 함) */
+  const mk = new Set();
+  moved.forEach(f => {
+    const p = f.at.split('/');
+    for (let i=1;i<=p.length;i++) mk.add(p.slice(0,i).join('/'));
+  });
+
+  state.res = { moved, trashed:trash, skipped, mk:[...mk].sort(),
+                total:all.length, exCount:ex.size, tgt, cnt };
+  renderSteps(); renderChips();
+  if (!keepTable) renderOut();
+}
+
+function renderRoots(){
+  $('#roots').innerHTML = ROOTS.map(r => {
+    const n = D.files.filter(f => f.root===r.id && !f.dir).length;
+    return `<button type="button" aria-pressed="${r.id===state.root}" data-root="${r.id}">
+      <span>${esc(r.label)}</span><span class="n">${n}</span></button>`;
+  }).join('');
+}
+
+function renderSteps(){
+  const w = state.res || walk(true);
+  const tgt = w.tgt, cnt = w.cnt || {};
+  $('#steps').innerHTML = state.order.map((id,i) => {
+    const b = BLOCK[id], on = state.on[id];
+    const t = tgt[id] === '' ? (id==='dedup' ? '폴더 전체 · 하위 포함' : '폴더 전체') : tgt[id];
+    const n = cnt[id];
+    const badge = !on ? '' : (n === 0
+      ? ' <span class="zero">해당 없음</span>'
+      : (n > 0 ? ` <span class="hit">${n}건</span>` : ''));
+    return `<div class="step${on?'':' off'}">
+      <span class="step-idx">${i+1}</span>
+      <label>
+        <input type="checkbox" data-block="${id}"${on?' checked':''}>
+        <span class="step-txt">
+          <span class="step-name">${esc(b.name)}</span>
+          <span class="step-meta">대상 <b>${esc(t)}</b>${badge}</span>
+          <span class="step-meta" style="color:var(--fg-faint)">${esc(b.hint)}</span>
+        </span>
+      </label>
+      <span class="step-move">
+        <button type="button" data-mv="up" data-id="${id}" aria-label="${esc(b.name)} 위로"${i===0?' disabled':''}>▲</button>
+        <button type="button" data-mv="down" data-id="${id}" aria-label="${esc(b.name)} 아래로"${i===state.order.length-1?' disabled':''}>▼</button>
+      </span>
+    </div>`;
+  }).join('');
+}
+
+function renderChips(){
+  const r = state.res;
+  if (!r){ $('#chips').innerHTML = '<span class="chip c-skip">미리보기를 누르세요</span>'; return; }
+  $('#chips').innerHTML =
+    `<span class="chip c-move"><b>이동 ${r.moved.length}</b></span>` +
+    `<span class="chip c-trash"><b>격리 ${r.trashed.length}</b></span>` +
+    `<span class="chip c-new"><b>폴더 생성 ${r.mk.length}</b></span>` +
+    `<span class="chip c-skip"><b>손대지 않음 ${r.skipped.length}</b></span>` +
+    (r.exCount ? `<span class="chip c-trash"><b>직접 제외 ${r.exCount}</b></span>` : '');
+}
+
+function renderOut(){
+  const r = state.res, out = $('#out');
+  if (!r){ out.innerHTML = '<p class="empty">아직 아무것도 하지 않았습니다.<br>왼쪽에서 미리보기를 누르면 결과가 나옵니다.</p>'; return; }
+
+  if (state.tab === 'plan'){
+    const { live, trashed, sys } = walk(true);
+    const ex = state.excluded;
+    const rows = [
+      ...r.mk.map(d => `<tr><td></td><td><span class="k c-new">폴더 생성</span></td>
+        <td class="f">${esc(d)}/</td><td class="why">분류 결과를 담을 폴더</td></tr>`),
+      ...trashed.map(x => {
+        const off = ex.has(x.f.name);
+        return `<tr class="${off?'off':''}"><td><input type="checkbox" class="excl" data-ex="${esc(x.f.name)}"${off?'':' checked'} aria-label="이 항목 실행"></td>
+        <td><span class="k c-trash">격리</span></td>
+        <td class="f">${esc(x.f.name)} <span class="arrow">→</span><span class="dim">.organize/trash/</span></td>
+        <td class="why">${esc(x.why)}</td></tr>`;
+      }),
+      ...live.filter(f=>f.at!=='').map(f => {
+        const off = ex.has(f.name);
+        return `<tr class="${off?'off':''}"><td><input type="checkbox" class="excl" data-ex="${esc(f.name)}"${off?'':' checked'} aria-label="이 항목 실행"></td>
+        <td><span class="k c-move">이동</span></td>
+        <td class="f">${esc(f.name)} <span class="arrow">→</span>${esc(f.at)}/</td>
+        <td class="why">${esc(f.why.join(' · '))}</td></tr>`;
+      }),
+    ];
+    out.innerHTML = rows.length
+      ? `<table><thead><tr>
+          <th style="width:34px"><button type="button" class="mini" id="exall">전체</button></th>
+          <th style="width:80px">동작</th><th>파일</th><th style="width:32%">근거</th>
+        </tr></thead><tbody>${rows.join('')}</tbody></table>`
+      : '<p class="empty">할 일이 없습니다. 켜둔 작업이 이 폴더에서는 걸리는 게 없습니다.</p>';
+    return;
+  }
+
+  if (state.tab === 'skip'){
+    out.innerHTML = r.skipped.length
+      ? `<table><thead><tr><th>파일</th><th style="width:44%">이유</th></tr></thead><tbody>` +
+        r.skipped.map(x => `<tr><td class="f">${esc(x.f.name)}</td>
+          <td class="why">${esc(x.why)}</td></tr>`).join('') + '</tbody></table>'
+      : '<p class="empty">모든 파일이 처리됐습니다.</p>';
+    return;
+  }
+
+  const root = { c:{}, n:0 };
+  r.moved.forEach(f => {
+    let node = root;
+    f.at.split('/').forEach(p => { node.c[p] = node.c[p] || {c:{},n:0}; node = node.c[p]; });
+    node.n++;
+  });
+  const lines = [`<div><span class="d">${esc(ROOTS.find(x=>x.id===state.root).alias)}/</span></div>`];
+  (function w(node, depth){
+    Object.keys(node.c).sort().forEach(k => {
+      const ch = node.c[k];
+      const total = (function s(n){ return n.n + Object.values(n.c).reduce((a,b)=>a+s(b),0); })(ch);
+      lines.push(`<div><span class="ind">${'│  '.repeat(depth)}└─ </span><span class="d">${esc(k)}/</span> <span class="cnt">${total}</span></div>`);
+      w(ch, depth+1);
+    });
+  })(root, 0);
+  if (r.skipped.length) lines.push(`<div><span class="ind">└─ </span><span class="cnt">(제자리) ${r.skipped.length}</span></div>`);
+  if (r.trashed.length) lines.push(`<div style="margin-top:10px"><span class="ind">└─ </span><span class="d" style="color:var(--trash)">.organize/trash/</span> <span class="cnt">${r.trashed.length}</span></div>`);
+  out.innerHTML = `<div class="tree">${lines.join('')}</div>`;
+}
+
+function render(){ renderSteps(); renderChips(); renderOut(); }
+
+document.addEventListener('click', e => {
+  const mv = e.target.closest('[data-mv]');
+  if (mv){
+    const i = state.order.indexOf(mv.dataset.id);
+    const j = mv.dataset.mv === 'up' ? i-1 : i+1;
+    if (j < 0 || j >= state.order.length) return;
+    [state.order[i], state.order[j]] = [state.order[j], state.order[i]];
+    if (state.res) run(); else renderSteps();
+    return;
+  }
+  const rb = e.target.closest('[data-root]');
+  if (rb){
+    state.root = rb.dataset.root; state.res = null; state.excluded.clear();
+    $('#rootpath').textContent = ROOTS.find(x=>x.id===state.root).alias;
+    renderRoots(); render(); return;
+  }
+  const tb = e.target.closest('[data-tab]');
+  if (tb){
+    state.tab = tb.dataset.tab;
+    document.querySelectorAll('[data-tab]').forEach(b => b.setAttribute('aria-selected', b===tb));
+    renderOut(); return;
+  }
+  if (e.target.id === 'exall'){
+    if (state.excluded.size) state.excluded.clear();
+    else {
+      const { live, trashed } = walk(true);
+      live.filter(f=>f.at!=='').forEach(f => state.excluded.add(f.name));
+      trashed.forEach(x => state.excluded.add(x.f.name));
+    }
+    run(); return;
+  }
+  if (e.target.id === 'run')   { run(); return; }
+  if (e.target.id === 'reset') {
+    state.res = null; state.excluded.clear();
+    state.order = [...DEFAULT_ORDER];
+    Object.keys(state.on).forEach(k => state.on[k] = true);
+    render(); return;
+  }
+});
+
+document.addEventListener('change', e => {
+  const cb = e.target.closest('[data-block]');
+  if (cb){
+    state.on[cb.dataset.block] = cb.checked;
+    if (state.res) run(); else renderSteps();
+    return;
+  }
+  const ex = e.target.closest('[data-ex]');
+  if (ex){
+    const n = ex.dataset.ex;
+    if (ex.checked) state.excluded.delete(n); else state.excluded.add(n);
+    ex.closest('tr').classList.toggle('off', !ex.checked);
+    run(true);   // 요약만 갱신 — 표를 다시 그리면 스크롤과 포커스가 날아간다
+  }
+});
+
+renderRoots(); render();
+
+</script>
+</body></html>
