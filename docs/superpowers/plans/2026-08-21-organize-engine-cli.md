@@ -1506,6 +1506,15 @@ def write(p: Path, data: bytes, mtime: float | None = None) -> Path:
     return p
 
 
+def test_camera_and_screenshot_names_are_not_copies():
+    """실제 폴더에서 나온 이름들. 일련번호·날짜를 복사본으로 오해하면 안 된다."""
+    assert not has_copy_marker("IMG_1234.jpg")
+    assert not has_copy_marker("DSC_5678.JPG")
+    assert not has_copy_marker("PXL_20260615_143022.jpg")
+    assert not has_copy_marker("20260820_085659.jpg")
+    assert not has_copy_marker("sitewalk_20260818.md")
+
+
 def test_copy_markers():
     assert has_copy_marker("가이드 (1).pdf")
     assert has_copy_marker("가이드 (12).pdf")
@@ -1609,7 +1618,13 @@ from organize.core.scanner import FileEntry
 
 _HEAD_BYTES = 8192
 _CHUNK = 65536
-_COPY_MARKER = re.compile(r"\(\d+\)|_\d+(?=\.[^.]+$)|-\s*복사본|-\s*Copy|_copy", re.IGNORECASE)
+# `_1`, `_2` 같은 복사본 번호만 잡는다. 자릿수를 제한하지 않으면
+# `IMG_1234.jpg`, `20260820_085659.jpg`, `sitewalk_20260818.md` 처럼
+# 카메라·스크린샷이 붙이는 일련번호와 날짜까지 복사본으로 오판정한다.
+# 실제 폴더 276개로 측정: 제한 없으면 3건 오판정, `{1,2}` 로 좁히면 0건이고
+# 의도한 복사본 표식은 그대로 잡힌다.
+_COPY_MARKER = re.compile(r"\(\d+\)|_\d{1,2}(?=\.[^.]+$)|-\s*복사본|-\s*Copy|_copy",
+                          re.IGNORECASE)
 
 
 def has_copy_marker(name: str) -> bool:
@@ -1697,7 +1712,7 @@ def find_duplicate_groups(entries: list[FileEntry]) -> list[list[FileEntry]]:
 - [ ] **Step 4: 테스트가 통과하는지 확인한다**
 
 Run: `python -m pytest tests/test_hashing.py -v`
-Expected: PASS 10개
+Expected: PASS 11개
 
 - [ ] **Step 5: 커밋**
 
