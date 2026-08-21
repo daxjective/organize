@@ -81,3 +81,45 @@ def test_exif_returns_none_without_pillow(monkeypatch, tmp_path):
     p = tmp_path / "사진.jpg"
     p.write_bytes(b"x")
     assert dates.date_from_exif(p) is None
+
+
+def _jpeg_with_exif(path, *, original=None, ifd0=None):
+    from PIL import ExifTags, Image
+    img = Image.new("RGB", (4, 4), (255, 0, 0))
+    exif = img.getexif()
+    if ifd0:
+        exif[306] = ifd0
+    if original:
+        exif.get_ifd(ExifTags.IFD.Exif)[36867] = original
+    img.save(path, exif=exif)
+    return path
+
+
+@pytest.mark.skipif(not dates.HAS_PILLOW, reason="Pillow 없이는 EXIF 를 만들 수 없다")
+def test_capture_date_is_read_from_the_exif_subifd(tmp_path):
+    p = _jpeg_with_exif(tmp_path / "사진.jpg",
+                        original="2021:07:07 12:00:00",
+                        ifd0="2020:05:05 00:00:00")
+    assert dates.date_from_exif(p) == date(2021, 7, 7)
+
+
+@pytest.mark.skipif(not dates.HAS_PILLOW, reason="Pillow 없이는 EXIF 를 만들 수 없다")
+def test_capture_date_found_even_without_ifd0_datetime(tmp_path):
+    p = _jpeg_with_exif(tmp_path / "사진.jpg", original="2021:07:07 12:00:00")
+    assert dates.date_from_exif(p) == date(2021, 7, 7)
+
+
+@pytest.mark.skipif(not dates.HAS_PILLOW, reason="Pillow 없이는 EXIF 를 만들 수 없다")
+def test_ifd0_datetime_is_the_last_resort(tmp_path):
+    p = _jpeg_with_exif(tmp_path / "사진.jpg", ifd0="2020:05:05 00:00:00")
+    assert dates.date_from_exif(p) == date(2020, 5, 5)
+
+
+def test_non_image_file_returns_none(tmp_path):
+    p = tmp_path / "문서.jpg"
+    p.write_bytes(b"this is not an image")
+    assert dates.date_from_exif(p) is None
+
+
+def test_mixed_separators_are_rejected():
+    assert date_from_name("2023-12_15.png", TODAY) is None

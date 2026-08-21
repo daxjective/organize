@@ -22,6 +22,10 @@ except ImportError:                     # Pillow 는 선택 의존성이다
 
 _MIN_DATE = date(1990, 1, 1)
 
+_EXIF_DATETIME_ORIGINAL = 36867     # 촬영 시각 — Exif SubIFD 에 있다
+_EXIF_DATETIME_DIGITIZED = 36868    # 디지털화 시각 — Exif SubIFD 에 있다
+_EXIF_DATETIME = 306                # 파일 변경 시각 — IFD0 에 있다
+
 # YYYYMMDD / YYYY-MM-DD / YYYY_MM_DD / YYYY.MM.DD  (앞뒤가 숫자가 아닐 것)
 _NUMERIC = re.compile(
     r"(?<!\d)(19\d{2}|20\d{2})([-_.])?(0[1-9]|1[0-2])([-_.])?(0[1-9]|[12]\d|3[01])(?!\d)"
@@ -61,13 +65,16 @@ def date_from_exif(path: Path) -> date | None:
     if not HAS_PILLOW:
         return None
     try:
-        exif = Image.open(path).getexif()
-    except Exception:                   # 이미지가 아니거나 깨졌으면 조용히 넘어간다
+        with Image.open(path) as img:           # 곧 이 파일을 옮기므로 확실히 닫는다
+            exif = img.getexif()
+            if not exif:
+                return None
+            sub = exif.get_ifd(ExifTags.IFD.Exif)
+            raw = (sub.get(_EXIF_DATETIME_ORIGINAL)
+                   or sub.get(_EXIF_DATETIME_DIGITIZED)
+                   or exif.get(_EXIF_DATETIME))
+    except Exception:
         return None
-    if not exif:
-        return None
-    tag = {v: k for k, v in ExifTags.TAGS.items()}
-    raw = exif.get(tag.get("DateTimeOriginal")) or exif.get(tag.get("DateTime"))
     if not raw:
         return None
     try:
@@ -91,7 +98,7 @@ def resolve_date(entry: FileEntry, today: date) -> DateHit | None:
     if found:
         return DateHit("파일명 날짜", found)
 
-    if entry.mtime:
+    if entry.mtime is not None:
         return DateHit("수정시각", datetime.fromtimestamp(entry.mtime).date())
 
     return None
