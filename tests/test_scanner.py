@@ -1,0 +1,101 @@
+import time
+from pathlib import Path
+
+from organize.core import scanner
+from organize.core.scanner import FileEntry, is_in_progress, is_system_file, scan
+
+
+def touch(p: Path, content: bytes = b"x", age_seconds: float = 3600) -> Path:
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(content)
+    old = time.time() - age_seconds
+    import os
+    os.utime(p, (old, old))
+    return p
+
+
+def test_system_files_are_recognised():
+    assert is_system_file("desktop.ini")
+    assert is_system_file("Desktop.INI")          # 대소문자 무관
+    assert is_system_file("Thumbs.db")
+    assert is_system_file(".DS_Store")
+    assert is_system_file("~$보고서.docx")         # Office 임시 파일
+    assert not is_system_file("보고서.docx")
+
+
+def test_in_progress_by_extension():
+    now = time.time()
+    assert is_in_progress("영화.mp4.crdownload", now - 9999, now)
+    assert is_in_progress("자료.part", now - 9999, now)
+    assert not is_in_progress("자료.pdf", now - 9999, now)
+
+
+def test_in_progress_by_recent_modification():
+    now = time.time()
+    assert is_in_progress("자료.pdf", now - 10, now)      # 10초 전 = 작업 중일 수 있음
+    assert not is_in_progress("자료.pdf", now - 120, now)  # 2분 전 = 안정
+
+
+def test_scan_returns_sorted_entries(tmp_path):
+    touch(tmp_path / "b.txt")
+    touch(tmp_path / "a.txt")
+    result = scan(tmp_path)
+    assert [e.name for e in result.entries] == ["a.txt", "b.txt"]
+
+
+def test_scan_excludes_system_files_with_reason(tmp_path):
+    touch(tmp_path / "보고서.pdf")
+    touch(tmp_path / "desktop.ini")
+    result = scan(tmp_path)
+    assert [e.name for e in result.entries] == ["보고서.pdf"]
+    assert len(result.skipped) == 1
+    assert "시스템 파일" in result.skipped[0][1]
+
+
+def test_scan_excludes_in_progress_downloads(tmp_path):
+    touch(tmp_path / "영화.mp4.crdownload")
+    result = scan(tmp_path)
+    assert result.entries == []
+    assert "받는 중" in result.skipped[0][1]
+
+
+def test_scan_excludes_cloud_only_files(tmp_path, monkeypatch):
+    touch(tmp_path / "온라인.jpg")
+    touch(tmp_path / "로컬.jpg")
+    monkeypatch.setattr(scanner, "is_cloud_only", lambda p: p.name == "온라인.jpg")
+    result = scan(tmp_path)
+    assert [e.name for e in result.entries] == ["로컬.jpg"]
+    assert "OneDrive" in result.skipped[0][1]
+
+
+def test_scan_is_not_recursive_by_default(tmp_path):
+    touch(tmp_path / "위.txt")
+    touch(tmp_path / "하위" / "아래.txt")
+    assert [e.name for e in scan(tmp_path).entries] == ["위.txt"]
+
+
+def test_scan_recursive_reaches_subfolders(tmp_path):
+    touch(tmp_path / "위.txt")
+    touch(tmp_path / "하위" / "아래.txt")
+    names = sorted(e.name for e in scan(tmp_path, recursive=True).entries)
+    assert names == ["아래.txt", "위.txt"]
+
+
+def test_scan_never_enters_organize_folder(tmp_path):
+    touch(tmp_path / ".organize" / "trash" / "지운것.png")
+    touch(tmp_path / "정상.png")
+    assert [e.name for e in scan(tmp_path, recursive=True).entries] == ["정상.png"]
+
+
+def test_scan_skips_named_exclude_dirs(tmp_path):
+    touch(tmp_path / "01_Docs" / "이미정리됨.pdf")
+    touch(tmp_path / "새파일.pdf")
+    result = scan(tmp_path, recursive=True, exclude_dirs=frozenset({"01_Docs"}))
+    assert [e.name for e in result.entries] == ["새파일.pdf"]
+
+
+def test_file_entry_ext_is_lowercase_with_dot(tmp_path):
+    p = touch(tmp_path / "사진.PNG")
+    e = FileEntry(path=p, size=1, mtime=0.0)
+    assert e.ext == ".png"
+    assert e.name == "사진.PNG"
