@@ -75,3 +75,19 @@ def test_undefined_alias_says_what_to_do():
         resolve_alias("@archive", cfg)
     assert "archive" in e.value.message
     assert e.value.hint and "organize paths" in e.value.hint
+
+
+def test_self_referencing_alias_raises_error():
+    cfg = UserConfig(paths={"archive": ["@archive"]}, folder_names={}, pins=[])
+    with pytest.raises(AliasNotDefined) as e:
+        resolve_alias("@archive", cfg)
+    assert "archive" in e.value.message
+    assert e.value.hint and "config.local.json" in e.value.hint
+
+
+def test_mutually_referencing_aliases_raise_error():
+    cfg = UserConfig(paths={"a": ["@b"], "b": ["@a"]}, folder_names={}, pins=[])
+    with pytest.raises(AliasNotDefined) as e:
+        resolve_alias("@a", cfg)
+    assert "a" in e.value.message
+    assert e.value.hint and "config.local.json" in e.value.hint
