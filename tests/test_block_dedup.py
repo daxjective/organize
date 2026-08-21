@@ -117,3 +117,31 @@ def test_virtual_files_are_skipped_with_a_clear_reason(tmp_path):
     plan = build(c, BlockConfig())
     assert plan.actions == []
     assert "압축을 푼 뒤" in plan.skipped[0][1]
+
+
+def test_when_is_checked_only_on_files_that_formed_a_duplicate_group(tmp_path,
+                                                                    monkeypatch):
+    """`when` 판정을 무리 지은 뒤로 미룬다 — 하위 폴더 전체를 훑지 않는다.
+
+    `when` 에 `has_exif_camera` 같은 조건이 끼면 `matches` 가 파일을 연다.
+    무리 짓기 전에 걸러 버리면 사진 폴더의 파일을 전부 열게 된다. 무리 짓기는
+    내용만 보므로 나중에 걸러도 결과가 같고, 여는 파일 수만 줄어든다.
+    """
+    import organize.blocks.dedup as dedup_module
+
+    write(tmp_path / "메모.txt", b"SAME")
+    write(tmp_path / "사진.png", b"SAME")
+    write(tmp_path / "사진 (1).png", b"SAME")
+    for i in range(20):                      # 중복이 아닌 하위 폴더 사진들
+        write(tmp_path / "사진첩" / f"기타{i}.png", f"다르다{i}".encode())
+
+    seen = []
+    real = dedup_module.matches
+    monkeypatch.setattr(dedup_module, "matches",
+                        lambda e, w, t: (seen.append(e.path.name), real(e, w, t))[1])
+
+    plan = build(ctx_for(tmp_path), BlockConfig(when={"ext": [".png"]}))
+
+    assert quarantined(plan) == ["사진 (1).png"]
+    # 무리를 이룬 세 파일에만 물었다. 하위 폴더 사진 20개는 건드리지 않는다.
+    assert sorted(seen) == ["메모.txt", "사진 (1).png", "사진.png"]
