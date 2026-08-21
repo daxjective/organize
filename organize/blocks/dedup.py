@@ -13,10 +13,13 @@
 (상위 폴더에 있는 쪽). 그런데 이 블록은 하위 폴더 파일을 절대 옮길 수 없으므로,
 얕은 쪽이 직속 파일이고 깊은 쪽이 하위 폴더 파일이면 얕은 쪽(직속 파일)이
 "남길 파일"로 뽑히는데 정작 치울 수 있는 건 하위 폴더 쪽뿐인 모순이 생긴다.
-그래서 이 블록만의 규칙을 따로 둔다 — 한 무리 안에 하위 폴더 파일이 하나라도
-있으면 그 파일은 이미 사용자가 정리해 둔 것으로 보고 무조건 남기고, 직속
-파일은 전부 치운다. 하위 폴더 파일이 하나도 없을 때(무리 전체가 직속 파일)만
-`find_duplicate_groups` 가 고른 순위를 그대로 쓴다.
+그래서 이 블록만의 규칙을 따로 둔다 — 한 무리를 "치울 수 있는 후보"(candidates)와
+"건드릴 수 없어 참고만 하는 쪽"(protected)으로 가른다. 하위 폴더 파일도,
+`when` 에 안 맞는 직속 파일도 둘 다 이 스텝이 옮길 수 없다는 점에서 같은 처지다
+("읽는 범위 ≠ 치우는 범위"). protected 가 하나라도 있으면 그게 이미 존재하는
+원본이라 보고 무조건 남기고, candidates 는 전부 치운다. protected 가 하나도
+없을 때(무리 전체가 치울 수 있는 후보)만 `find_duplicate_groups` 가 고른 순위를
+그대로 쓴다.
 """
 
 from organize.blocks import BlockConfig
@@ -52,21 +55,31 @@ def build(ctx: Context, cfg: BlockConfig) -> Plan:
     removable = {e.path for e in ctx.files_at(cfg.target)}
 
     for group in find_duplicate_groups(readable):
-        candidates = [e for e in group if e.path in removable]
+        # 무리를 둘로 가른다.
+        #   candidates 이 step 이 실제로 치울 수 있는 파일 (직속 + when 통과)
+        #   protected  옮길 수 없는 파일 — 하위 폴더 파일, when 에 안 맞는 파일.
+        #              둘 다 "참고용" 이다. 중복 판정에는 참여하되 치우지는 않는다.
+        candidates, protected = [], []
+        for e in group:
+            if e.path not in removable:
+                protected.append(e)            # 하위 폴더 — 폴더는 건드리지 않는다
+            elif cfg.when and not matches(e, cfg.when, ctx.today):
+                plan.skipped.append((e.path, "이 작업의 대상이 아님"))
+                protected.append(e)            # 이 step 의 대상이 아니다
+            else:
+                candidates.append(e)
         if not candidates:
-            continue                                   # 하위 폴더 파일뿐 — 건드릴 게 없음
+            continue                           # 치울 수 있는 게 없다
 
-        protected = [e for e in group if e.path not in removable]
-        # 하위 폴더 파일이 하나라도 있으면 그쪽을 무조건 남긴다(위 docstring 참고).
-        # 없으면(전부 직속 파일) find_duplicate_groups 가 고른 group[0] 을 남긴다.
-        keeper = pick_original(protected) if protected else group[0]
+        # 남길 파일 고르기. protected 가 하나라도 있으면 그게 이미 존재하는
+        # 원본이므로 무조건 남기고 candidates 는 전부 치운다(위 docstring 참고).
+        # protected 가 없으면(전부 candidates) find_duplicate_groups 가 고른
+        # candidates[0](순위 1위)을 그대로 쓴다.
+        keeper = pick_original(protected) if protected else candidates[0]
 
         for other in candidates:
             if other.path == keeper.path:
-                continue                               # 남길 파일 자신
-            if cfg.when and not matches(other, cfg.when, ctx.today):
-                plan.skipped.append((other.path, "이 작업의 대상이 아님"))
-                continue
+                continue                       # 남길 파일 자신
             plan.actions.append(Action(
                 kind="quarantine",
                 src=ctx.current_path(other),

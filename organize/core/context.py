@@ -15,6 +15,7 @@ from pathlib import Path
 
 from organize.core.action import Plan
 from organize.core.scanner import FileEntry
+from organize.errors import OrganizeError
 
 
 class Context:
@@ -44,6 +45,12 @@ class Context:
 
     @property
     def trash_dir(self) -> Path:
+        if not self.run_id:
+            # 빈 문자열이면 pathlib 이 조각을 접어서 .organize/trash 자체가 된다.
+            # 그러면 실행마다 같은 폴더에 쌓여 undo 가 어느 실행 것인지 모른다.
+            raise OrganizeError(
+                "실행 번호 없이 격리 폴더를 정할 수 없습니다.",
+                hint="파일을 치우는 작업은 organize run 으로 실행해 주세요.")
         return self.root / ".organize" / "trash" / self.run_id
 
     def rel_of(self, entry: FileEntry) -> str:

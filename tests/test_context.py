@@ -1,9 +1,12 @@
 from datetime import date
 from pathlib import Path
 
+import pytest
+
 from organize.core.action import Action, Plan
 from organize.core.context import Context
 from organize.core.scanner import FileEntry
+from organize.errors import OrganizeError
 
 TODAY = date(2026, 8, 21)
 ROOT = Path("/작업")
@@ -137,3 +140,24 @@ def test_extracted_virtual_file_can_then_be_routed():
     c.apply(Plan(actions=[Action("move", ROOT / "문서.pdf",
                                  ROOT / "01_Docs" / "문서.pdf", "route", "route")]))
     assert c.rel_of(virtual) == "01_Docs"
+
+
+def test_context_without_run_id_can_still_be_built():
+    """run_id 는 trash_dir 을 쓸 때만 필요하다. Context 생성 자체는 막지 않는다."""
+    c = ctx(e("a.png"))
+    assert c.run_id == ""
+    assert [x.name for x in c.files_at("")] == ["a.png"]
+
+
+def test_trash_dir_without_run_id_is_a_friendly_error():
+    """빈 run_id 로 trash_dir 을 만들면 pathlib 이 조각을 접어 '.organize/trash' 자체가
+    되어버린다 — 실행마다 같은 폴더에 쌓여 undo 가 어느 실행 것인지 알 수 없다."""
+    c = ctx(e("a.png"))
+    with pytest.raises(OrganizeError) as ex:
+        c.trash_dir
+    assert "실행 번호" in ex.value.message
+
+
+def test_trash_dir_with_run_id_is_the_run_folder():
+    c = Context(root=ROOT, entries=[], today=TODAY, run_id="20260821-143210")
+    assert c.trash_dir == ROOT / ".organize" / "trash" / "20260821-143210"

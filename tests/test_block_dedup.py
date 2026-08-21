@@ -1,3 +1,4 @@
+import os
 from datetime import date
 from pathlib import Path
 
@@ -77,6 +78,26 @@ def test_when_filter_limits_the_files(tmp_path):
     write(tmp_path / "b (1).png", b"EQUAL")
     plan = build(ctx_for(tmp_path), BlockConfig(when={"ext": [".pdf"]}))
     assert quarantined(plan) == ["a (1).pdf"]
+
+
+def test_when_excluded_duplicate_always_wins_the_keeper_role(tmp_path):
+    """when 범위 밖 파일과 내용이 같으면, 범위 안 후보는 이름·나이와 무관하게 치워진다.
+
+    범위 밖 파일은 이 스텝이 건드릴 수 없다 — 하위 폴더 파일과 같은 처지다
+    ("읽기 범위엔 있지만 치울 수는 없다"). 그러니 그 파일이 이미 있는 이상
+    범위 안 파일은 내용이 이미 다른 곳에 있는 여분이라 남길 이유가 없다.
+    이걸 확인하려고 범위 안 파일을 일부러 더 오래된 것으로 만들었다 — 이름이나
+    나이가 우연히 유리해도(옛 코드처럼 그룹 전체를 한 번에 랭킹하면) 결과가
+    달라지면 안 된다는 뜻이다.
+    """
+    a = write(tmp_path / "in_scope.png", b"SAME")
+    b = write(tmp_path / "out_of_scope.txt", b"SAME")
+    os.utime(a, (1000.0, 1000.0))   # 범위 안 파일이 훨씬 오래됨 — 옛 랭킹이면 이게 이긴다
+    os.utime(b, (2000.0, 2000.0))
+    plan = build(ctx_for(tmp_path), BlockConfig(when={"ext": [".png"]}))
+    assert quarantined(plan) == ["in_scope.png"]
+    a = next(x for x in plan.actions if x.kind == "quarantine")
+    assert "out_of_scope.txt" in a.reason
 
 
 def test_virtual_files_are_skipped_with_a_clear_reason(tmp_path):
