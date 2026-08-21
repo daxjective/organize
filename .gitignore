@@ -1,0 +1,12 @@
+# 이 PC 전용 설정 (별칭 경로, 폴더 이름) — PC 마다 다르므로 공유하지 않는다
+config.local.json
+
+# 실행 로그와 격리 폴더는 대상 폴더 안에 생기지만, 혹시 저장소 안에서 테스트할 경우 대비
+.organize/
+
+__pycache__/
+*.pyc
+.pytest_cache/
+build/
+dist/
+*.spec
