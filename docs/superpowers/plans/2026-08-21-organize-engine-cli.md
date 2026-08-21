@@ -1274,6 +1274,51 @@ def test_resolve_falls_back_to_mtime(monkeypatch, tmp_path):
     assert hit.source == "수정시각"
 
 
+def _jpeg_with_exif(path, *, original=None, ifd0=None):
+    """진짜 EXIF 를 가진 JPEG 를 만든다. 왕복 동작을 실측으로 확인했다."""
+    from PIL import ExifTags, Image
+    img = Image.new("RGB", (4, 4), (255, 0, 0))
+    exif = img.getexif()
+    if ifd0:
+        exif[306] = ifd0
+    if original:
+        exif.get_ifd(ExifTags.IFD.Exif)[36867] = original
+    img.save(path, exif=exif)
+    return path
+
+
+@pytest.mark.skipif(not dates.HAS_PILLOW, reason="Pillow 없이는 EXIF 를 만들 수 없다")
+def test_capture_date_is_read_from_the_exif_subifd(tmp_path):
+    """촬영일은 SubIFD 에만 있다. IFD0 의 DateTime 을 대신 읽으면 안 된다."""
+    p = _jpeg_with_exif(tmp_path / "사진.jpg",
+                        original="2021:07:07 12:00:00",
+                        ifd0="2020:05:05 00:00:00")
+    assert dates.date_from_exif(p) == date(2021, 7, 7)
+
+
+@pytest.mark.skipif(not dates.HAS_PILLOW, reason="Pillow 없이는 EXIF 를 만들 수 없다")
+def test_capture_date_found_even_without_ifd0_datetime(tmp_path):
+    """카메라가 SubIFD 만 채우는 경우가 흔하다."""
+    p = _jpeg_with_exif(tmp_path / "사진.jpg", original="2021:07:07 12:00:00")
+    assert dates.date_from_exif(p) == date(2021, 7, 7)
+
+
+@pytest.mark.skipif(not dates.HAS_PILLOW, reason="Pillow 없이는 EXIF 를 만들 수 없다")
+def test_ifd0_datetime_is_the_last_resort(tmp_path):
+    p = _jpeg_with_exif(tmp_path / "사진.jpg", ifd0="2020:05:05 00:00:00")
+    assert dates.date_from_exif(p) == date(2020, 5, 5)
+
+
+def test_non_image_file_returns_none(tmp_path):
+    p = tmp_path / "문서.jpg"
+    p.write_bytes(b"this is not an image")
+    assert dates.date_from_exif(p) is None
+
+
+def test_mixed_separators_are_rejected():
+    assert date_from_name("2023-12_15.png", TODAY) is None
+
+
 def test_exif_returns_none_without_pillow(monkeypatch, tmp_path):
     monkeypatch.setattr(dates, "HAS_PILLOW", False)
     p = tmp_path / "사진.jpg"
@@ -1350,17 +1395,33 @@ def date_from_name(name: str, today: date) -> date | None:
     return None
 
 
+# EXIF 태그 번호. 이름 역매핑을 매번 만들지 않으려고 상수로 둔다.
+_EXIF_DATETIME_ORIGINAL = 36867     # 촬영 시각 — Exif SubIFD 에 있다
+_EXIF_DATETIME_DIGITIZED = 36868    # 디지털화 시각 — Exif SubIFD 에 있다
+_EXIF_DATETIME = 306                # 파일 변경 시각 — IFD0 에 있다
+
+
 def date_from_exif(path: Path) -> date | None:
+    """촬영일을 읽는다. 없으면 None.
+
+    촬영일(DateTimeOriginal)은 IFD0 가 아니라 **Exif SubIFD** 에 들어 있다.
+    `getexif()` 만 보면 그 값에 절대 닿지 못하고, IFD0 의 DateTime(파일이 마지막으로
+    바뀐 시각)을 촬영일이라고 잘못 보고하게 된다. 실제 갤럭시 사진으로 확인했다 —
+    DateTimeOriginal 은 SubIFD 에만 있었다.
+    """
     if not HAS_PILLOW:
         return None
     try:
-        exif = Image.open(path).getexif()
+        with Image.open(path) as img:           # 곧 이 파일을 옮기므로 확실히 닫는다
+            exif = img.getexif()
+            if not exif:
+                return None
+            sub = exif.get_ifd(ExifTags.IFD.Exif)
+            raw = (sub.get(_EXIF_DATETIME_ORIGINAL)
+                   or sub.get(_EXIF_DATETIME_DIGITIZED)
+                   or exif.get(_EXIF_DATETIME))
     except Exception:                   # 이미지가 아니거나 깨졌으면 조용히 넘어간다
         return None
-    if not exif:
-        return None
-    tag = {v: k for k, v in ExifTags.TAGS.items()}
-    raw = exif.get(tag.get("DateTimeOriginal")) or exif.get(tag.get("DateTime"))
     if not raw:
         return None
     try:
@@ -1384,7 +1445,7 @@ def resolve_date(entry: FileEntry, today: date) -> DateHit | None:
     if found:
         return DateHit("파일명 날짜", found)
 
-    if entry.mtime:
+    if entry.mtime is not None:      # 0.0 도 유효한 시각(1970-01-01)이다
         return DateHit("수정시각", datetime.fromtimestamp(entry.mtime).date())
 
     return None
@@ -1393,7 +1454,7 @@ def resolve_date(entry: FileEntry, today: date) -> DateHit | None:
 - [ ] **Step 4: 테스트가 통과하는지 확인한다**
 
 Run: `python -m pytest tests/test_dates.py -v`
-Expected: PASS 21개 (parametrize 포함)
+Expected: PASS 27개 (parametrize 포함)
 
 - [ ] **Step 5: 커밋**
 
@@ -1814,13 +1875,14 @@ def has_exif_camera(path: Path) -> bool | None:
     if not HAS_PILLOW:
         return None
     try:
-        exif = Image.open(path).getexif()
+        with Image.open(path) as img:
+            exif = img.getexif()
     except Exception:
         return None
-    if exif is None:
+    if not exif:
         return None
-    tag = {v: k for k, v in ExifTags.TAGS.items()}
-    return bool(exif.get(tag.get("Make")) or exif.get(tag.get("Model")))
+    # Make(271) / Model(272) 는 IFD0 에 있다 — 촬영일과 달리 SubIFD 를 볼 필요가 없다.
+    return bool(exif.get(271) or exif.get(272))
 ```
 
 `organize/profiles.py`:
