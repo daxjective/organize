@@ -1,10 +1,13 @@
 from datetime import date, datetime
 from pathlib import Path
 
+import pytest
+
 from organize.blocks import BlockConfig
 from organize.blocks.by_date import build
 from organize.core.context import Context
 from organize.core.scanner import FileEntry
+from organize.errors import OrganizeError
 
 TODAY = date(2026, 8, 21)
 ROOT = Path("/작업")
@@ -79,3 +82,51 @@ def test_mkdir_precedes_moves():
     plan = build(ctx(e("2023-12-15.md")), BlockConfig())
     kinds = [a.kind for a in plan.actions]
     assert kinds.index("mkdir") < kinds.index("move")
+
+
+def test_virtual_file_with_no_date_in_name_falls_back_to_mtime():
+    """이름에 날짜가 없어야 mtime 폴백 경로를 실제로 지난다."""
+    stamp = datetime(2024, 3, 9).timestamp()
+    v = FileEntry(path=ROOT / "문서.pdf", size=0, mtime=stamp, virtual=True)
+    plan = build(ctx(v), BlockConfig())
+    assert moves(plan) == {"문서.pdf": "2024"}
+
+
+def test_layout_with_absolute_path_is_rejected():
+    """layout='/etc/{year}' 처럼 절대경로를 쓰면 root 밖을 가리키게 된다."""
+    with pytest.raises(OrganizeError) as ex:
+        build(ctx(e("2023-12-15.md")), BlockConfig(options={"layout": "/etc/{year}"}))
+    assert "정리 대상 폴더 밖" in ex.value.message
+    assert "by_date" in ex.value.message
+
+
+def test_layout_with_dotdot_escape_is_rejected():
+    """'../..' 로 상위 폴더를 타고 올라가는 것도 같은 이유로 막혀야 한다."""
+    with pytest.raises(OrganizeError) as ex:
+        build(ctx(e("2023-12-15.md")), BlockConfig(options={"layout": "../../etc/{year}"}))
+    assert "정리 대상 폴더 밖" in ex.value.message
+
+
+def test_normal_relative_layout_still_works():
+    """탈출 방지 검증이 정상적인 상대경로 layout 까지 막으면 안 된다."""
+    plan = build(ctx(e("2023-12-15.md")), BlockConfig(options={"layout": "보관/{year}"}))
+    assert moves(plan) == {"2023-12-15.md": "보관/2023"}
+
+
+def test_layout_with_unknown_placeholder_is_a_friendly_error():
+    with pytest.raises(OrganizeError) as ex:
+        build(ctx(e("2023-12-15.md")), BlockConfig(options={"layout": "{years}"}))
+    assert "날짜 폴더 모양" in ex.value.message
+    assert "{years}" in ex.value.message
+
+
+def test_layout_with_unclosed_brace_is_a_friendly_error():
+    with pytest.raises(OrganizeError) as ex:
+        build(ctx(e("2023-12-15.md")), BlockConfig(options={"layout": "{"}))
+    assert "날짜 폴더 모양" in ex.value.message
+
+
+def test_layout_with_positional_placeholder_is_a_friendly_error():
+    with pytest.raises(OrganizeError) as ex:
+        build(ctx(e("2023-12-15.md")), BlockConfig(options={"layout": "{0}"}))
+    assert "날짜 폴더 모양" in ex.value.message

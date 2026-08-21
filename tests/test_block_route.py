@@ -116,3 +116,39 @@ def test_dest_leaves_a_file_that_is_already_at_the_destination():
     c = ctx(e("보관/01_Docs/보고서.pdf"))
     plan = build(c, cfg(target="보관/01_Docs", dest="보관"))
     assert [a for a in plan.actions if a.kind == "move"] == []
+
+
+def test_dest_with_absolute_path_is_rejected():
+    """dest='/etc' 처럼 절대경로를 쓰면 root 밖을 가리키게 된다."""
+    c = ctx(e("보고서.pdf"))
+    with pytest.raises(OrganizeError) as ex:
+        build(c, cfg(dest="/etc"))
+    assert "정리 대상 폴더 밖" in ex.value.message
+    assert "route" in ex.value.message
+
+
+def test_dest_with_dotdot_escape_is_rejected():
+    """'../..' 로 상위 폴더를 타고 올라가는 것도 같은 이유로 막혀야 한다."""
+    c = ctx(e("보고서.pdf"))
+    with pytest.raises(OrganizeError) as ex:
+        build(c, cfg(dest="../../etc"))
+    assert "정리 대상 폴더 밖" in ex.value.message
+
+
+def test_normal_relative_dest_still_works():
+    """탈출 방지 검증이 정상적인 상대경로 dest 까지 막으면 안 된다."""
+    c = ctx(e("보고서.pdf"))
+    plan = build(c, cfg(dest="보관/2023"))
+    move = next(a for a in plan.actions if a.kind == "move")
+    assert move.dst == ROOT / "보관" / "2023" / "01_Docs" / "보고서.pdf"
+
+
+def test_profile_to_with_absolute_path_is_rejected():
+    """프로파일의 to='/etc' 도 같은 구멍이다 — dest 뿐 아니라 to 도 사용자가 손으로 쓴다."""
+    escape_profile = Profile(name="탈출", rules=[
+        Rule(to="/etc", conditions={}, is_default=True),
+    ])
+    c = ctx(e("보고서.pdf"))
+    with pytest.raises(OrganizeError) as ex:
+        build(c, BlockConfig(options={"profile": escape_profile}))
+    assert "정리 대상 폴더 밖" in ex.value.message

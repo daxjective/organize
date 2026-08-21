@@ -3,7 +3,7 @@
 바탕화면 정리와 vault 번호 체계가 같은 블록이다. 프로파일만 바뀐다.
 """
 
-from organize.blocks import BlockConfig, already_there
+from organize.blocks import BlockConfig, already_there, dest_folder
 from organize.core.action import Action, Plan
 from organize.core.context import Context
 from organize.profiles import matches, route_target
@@ -32,18 +32,20 @@ def build(ctx: Context, cfg: BlockConfig) -> Plan:
             plan.skipped.append((entry.path, f"이미 {category} 에 있음"))
             continue
 
+        folder = dest_folder(ctx, rel, block=BLOCK)      # root 밖이면 여기서 막힌다
         if rel not in folders:
             folders.append(rel)
         moves.append(Action(
             kind="move",
             src=ctx.current_path(entry),
-            dst=ctx.root / rel / ctx.current_path(entry).name,
+            dst=folder / ctx.current_path(entry).name,
             reason=f"확장자 {entry.ext or '없음'} → {category}",
             block=BLOCK,
         ))
 
     for rel in folders:                       # 폴더를 먼저 만들고 옮긴다
-        plan.actions.append(Action(kind="mkdir", src=None, dst=ctx.root / rel,
+        plan.actions.append(Action(kind="mkdir", src=None,
+                                   dst=dest_folder(ctx, rel, block=BLOCK),
                                    reason="분류 결과를 담을 폴더", block=BLOCK))
     plan.actions.extend(moves)
     return plan

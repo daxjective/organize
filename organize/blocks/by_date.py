@@ -4,14 +4,17 @@
 판정할 수 없으면 옮기지 않고 그 자리에 둔다. 앞 단계가 이미 분류해 둔
 결과를 미분류로 되돌리지 않기 위해서다.
 
-자기 폴더 보호는 따로 코드가 필요 없다. `files_at(target)` 은 target 직속
-파일만 돌려주므로, 이미 `2026/` 안에 있는 파일은 애초에 대상이 아니다.
+재실행해도 `2026/2026` 처럼 중첩되지 않아야 한다. `files_at(target)` 이 직속
+파일만 돌려주므로 target 이 루트일 때는 저절로 되지만, `target="2026"` 처럼
+그 폴더 자체를 지정하면 대상이 **된다**. 그래서 `already_there()` 가 필요하다 —
+장식이 아니다.
 """
 
-from organize.blocks import BlockConfig, already_there
+from organize.blocks import BlockConfig, already_there, dest_folder
 from organize.core.action import Action, Plan
 from organize.core.context import Context
 from organize.core.dates import resolve_date
+from organize.errors import OrganizeError
 from organize.profiles import matches
 
 BLOCK = "by_date"
@@ -34,26 +37,38 @@ def build(ctx: Context, cfg: BlockConfig) -> Plan:
             plan.skipped.append((entry.path, "날짜를 알 수 없어 그대로 둠"))
             continue
 
-        sub = layout.format(year=f"{hit.value.year:04d}",
-                            month=f"{hit.value.month:02d}",
-                            day=f"{hit.value.day:02d}")
+        try:
+            sub = layout.format(
+                year=f"{hit.value.year:04d}",
+                month=f"{hit.value.month:02d}",
+                day=f"{hit.value.day:02d}",
+            )
+        except (KeyError, IndexError, ValueError) as e:
+            # layout 은 사용자가 손으로 쓴다. '{years}' 오타 하나에
+            # KeyError: 'years' 를 그대로 보여주면 안 된다.
+            raise OrganizeError(
+                f"날짜 폴더 모양('{layout}')을 이해하지 못했습니다.",
+                hint="{year}, {month}, {day} 만 쓸 수 있습니다. "
+                     "예: '{year}' 또는 '{year}/{month}'") from e
         rel = f"{cfg.out}/{sub}" if cfg.out else sub
         if already_there(ctx, entry, rel, sub, cfg):
             plan.skipped.append((entry.path, "이미 해당 폴더에 있음"))
             continue
 
+        folder = dest_folder(ctx, rel, block=BLOCK)      # root 밖이면 여기서 막힌다
         if rel not in folders:
             folders.append(rel)
         moves.append(Action(
             kind="move",
             src=ctx.current_path(entry),
-            dst=ctx.root / rel / ctx.current_path(entry).name,
+            dst=folder / ctx.current_path(entry).name,
             reason=f"{hit.source} {hit.value.isoformat()}",
             block=BLOCK,
         ))
 
     for rel in folders:
-        plan.actions.append(Action(kind="mkdir", src=None, dst=ctx.root / rel,
+        plan.actions.append(Action(kind="mkdir", src=None,
+                                   dst=dest_folder(ctx, rel, block=BLOCK),
                                    reason="날짜별로 담을 폴더", block=BLOCK))
     plan.actions.extend(moves)
     return plan

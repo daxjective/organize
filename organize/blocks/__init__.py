@@ -7,7 +7,9 @@
 블록은 파일을 만지지 않고 Plan 만 만든다. 블록끼리 직접 호출하지 않는다.
 """
 
+import os
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Callable
 
 from organize.core.action import Plan
@@ -28,6 +30,28 @@ class BlockConfig:
 
 
 BlockFn = Callable[[Context, BlockConfig], Plan]
+
+
+def dest_folder(ctx: Context, rel: str, *, block: str) -> Path:
+    """root 기준 상대 폴더를 실제 경로로 바꾼다. **root 밖으로 나가면 거부한다.**
+
+    `rel` 은 전부 사용자가 손으로 쓴 값에서 온다 — 레시피의 `dest`/`target`,
+    프로파일의 `to`, by_date 의 `layout`, unzip 의 `out`. 입구가 넷이므로 각
+    입구마다 막지 않고 **Action 을 만드는 이 한 곳**에서 막는다. 마지막 관문이다.
+
+    막지 않으면 `/etc` 나 `../..` 가 그대로 통해서 사용자 파일이 root 밖으로
+    나간다. 미리보기 화면에도 그렇게 보이므로 눈치채기 전에 실행된다.
+
+    심볼릭 링크는 따지지 않는다 — `normpath` 는 순수 문자열 정규화다.
+    링크를 통한 탈출은 실행기가 옮기기 직전에 막는다(Task 16).
+    """
+    folder = Path(os.path.normpath(ctx.root / rel))
+    if not folder.is_relative_to(ctx.root):
+        raise OrganizeError(
+            f"'{block}' 작업의 목적지가 정리 대상 폴더 밖을 가리킵니다: {rel}",
+            hint=f"목적지는 {ctx.root} 안쪽이어야 합니다. "
+                 "'/' 로 시작하는 절대경로나 '..' 는 쓸 수 없습니다.")
+    return folder
 
 
 def already_there(ctx: Context, entry, rel: str, sub: str, cfg: BlockConfig) -> bool:
