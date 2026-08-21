@@ -90,4 +90,12 @@ def test_mutually_referencing_aliases_raise_error():
     with pytest.raises(AliasNotDefined) as e:
         resolve_alias("@a", cfg)
     assert "a" in e.value.message
+    assert "@a" in e.value.message
+    assert "@b" in e.value.message
     assert e.value.hint and "config.local.json" in e.value.hint
+
+
+def test_seen_parameter_is_keyword_only():
+    cfg = UserConfig(paths={}, folder_names={}, pins=[])
+    with pytest.raises(TypeError):
+        resolve_alias("@a", cfg, ("x",))

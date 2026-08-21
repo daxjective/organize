@@ -62,9 +62,8 @@ def load_config(repo_root: Path) -> UserConfig:
     return UserConfig(paths=paths, folder_names=folder_names, pins=pins)
 
 
-def _first_existing(candidates: list[str], cfg: "UserConfig", _seen: set[str] | None = None) -> Path:
-    if _seen is None:
-        _seen = set()
+def _first_existing(candidates: list[str], cfg: "UserConfig",
+                    _seen: tuple[str, ...] = ()) -> Path:
     resolved = [resolve_alias(c, cfg, _seen=_seen) for c in candidates]
     for p in resolved:
         if p.exists():
@@ -72,11 +71,9 @@ def _first_existing(candidates: list[str], cfg: "UserConfig", _seen: set[str] | 
     return resolved[-1]
 
 
-def resolve_alias(spec: str, cfg: UserConfig, _seen: set[str] | None = None) -> Path:
+def resolve_alias(spec: str, cfg: UserConfig, *,
+                  _seen: tuple[str, ...] = ()) -> Path:
     """'@downloads', '@documents/메모', '~/foo', 'F:/day' 를 모두 받는다."""
-    if _seen is None:
-        _seen = set()
-
     if not spec.startswith("@"):
         return Path(spec).expanduser()
 
@@ -85,16 +82,16 @@ def resolve_alias(spec: str, cfg: UserConfig, _seen: set[str] | None = None) -> 
     base = builtin_path(head)
     if base is None:
         if head in _seen:
+            chain = " → ".join(f"@{n}" for n in (*_seen, head))
             raise AliasNotDefined(
-                f"'@{head}' 위치가 자기 자신을 가리키고 있습니다.",
-                hint=f"config.local.json 에서 '@{head}' 가 가리키는 경로를 다른 곳으로 바꿔 주세요.",
+                f"'@{head}' 위치가 돌고 돌아 자기 자신을 가리킵니다: {chain}",
+                hint=f"config.local.json 에서 '@{head}' 가 가리키는 경로를 실제 폴더로 바꿔 주세요.",
             )
         if head not in cfg.paths:
             raise AliasNotDefined(
                 f"'@{head}' 위치가 정해져 있지 않습니다.",
                 hint=f"다음 명령으로 지정할 수 있습니다:\n    organize paths --set {head}=<경로>",
             )
-        _seen_new = _seen | {head}
-        base = _first_existing(cfg.paths[head], cfg, _seen=_seen_new)
+        base = _first_existing(cfg.paths[head], cfg, _seen=(*_seen, head))
 
     return base / tail if tail else base
