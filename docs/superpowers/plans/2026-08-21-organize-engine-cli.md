@@ -3130,6 +3130,12 @@ Expected: FAIL — `Context.__init__() got an unexpected keyword argument 'run_i
 
     @property
     def trash_dir(self) -> Path:
+        if not self.run_id:
+            # 빈 문자열이면 pathlib 이 조각을 접어서 .organize/trash 자체가 된다.
+            # 그러면 실행마다 같은 폴더에 쌓여 undo 가 어느 실행 것인지 모른다.
+            raise OrganizeError(
+                "실행 번호 없이 격리 폴더를 정할 수 없습니다.",
+                hint="파일을 치우는 작업은 organize run 으로 실행해 주세요.")
         return self.root / ".organize" / "trash" / self.run_id
 ```
 
@@ -3179,9 +3185,21 @@ def build(ctx: Context, cfg: BlockConfig) -> Plan:
     removable = {e.path for e in ctx.files_at(cfg.target)}
 
     for group in find_duplicate_groups(readable):
-        candidates = [e for e in group if e.path in removable]
+        # 무리를 둘로 가른다.
+        #   candidates 이 step 이 실제로 치울 수 있는 파일 (직속 + when 통과)
+        #   protected  옮길 수 없는 파일 — 하위 폴더 파일, when 에 안 맞는 파일.
+        #              둘 다 "참고용" 이다. 중복 판정에는 참여하되 치우지는 않는다.
+        candidates, protected = [], []
+        for e in group:
+            if e.path not in removable:
+                protected.append(e)            # 하위 폴더 — 폴더는 건드리지 않는다
+            elif cfg.when and not matches(e, cfg.when, ctx.today):
+                plan.skipped.append((e.path, "이 작업의 대상이 아님"))
+                protected.append(e)            # 이 step 의 대상이 아니다
+            else:
+                candidates.append(e)
         if not candidates:
-            continue                           # 하위 폴더 파일뿐 — 건드릴 게 없다
+            continue                           # 치울 수 있는 게 없다
 
         # 남길 파일 고르기. find_duplicate_groups 의 순위는 "경로가 얕은 쪽" 을
         # 우선하는데, 이 블록에서는 그게 거꾸로 작동한다. 얕은 쪽이 직속 파일이고
@@ -3193,15 +3211,11 @@ def build(ctx: Context, cfg: BlockConfig) -> Plan:
         # 취향이 아니라 제품 원칙에서 강제되는 규칙이다. 그리고 그게 사용자가
         # 원하는 것이기도 하다 — 하위 폴더 파일은 이미 정리해 둔 것이고, 직속
         # 파일이 나중에 흘러들어온 사본이다.
-        protected = [e for e in group if e.path not in removable]
-        keeper = pick_original(protected) if protected else group[0]
+        keeper = pick_original(protected) if protected else candidates[0]
 
         for other in candidates:
             if other.path == keeper.path:
                 continue                       # 남길 파일 자신
-            if cfg.when and not matches(other, cfg.when, ctx.today):
-                plan.skipped.append((other.path, "이 작업의 대상이 아님"))
-                continue
             plan.actions.append(Action(
                 kind="quarantine",
                 src=ctx.current_path(other),
@@ -3859,6 +3873,16 @@ git commit -m "러너 추가 — 블록 체인을 하나의 Plan 으로"
 
 한 파일이 여러 번 옮겨진다(route → by_date). 중간에 이름 충돌로 `_(1)` 이 붙으면
 **다음 동작의 원본 경로가 어긋난다.** 실행기가 그 대응표를 들고 있어야 한다.
+
+**반드시 테스트할 것 — 격리 폴더 이름 충돌.** target 이 다른 dedup step 두 개가
+같은 이름의 파일을 치우면 `dst` 가 같아진다. `unique_path` 가 덮어쓰기를 막고
+실행 로그에 `final` 을 남기므로 undo 가 둘 다 되돌릴 수 있어야 한다. 미리보기에
+보인 이름과 실제 이름이 다를 수 있다는 점도 확인한다 — 이건 설계상 받아들인
+동작이지만 **파일이 사라지지 않는다는 것**은 반드시 지켜져야 한다.
+
+**심볼릭 링크를 통한 root 탈출도 여기서 막는다.** 블록의 `dest_folder()` 는
+`normpath` 로 문자열만 정규화하므로 `정리대상/보관` 이 `/etc` 를 가리키는 링크면
+통과한다. 실행 직전에 실제 경로를 확인해야 한다.
 
 **Files:**
 - Create: `organize/core/executor.py`
