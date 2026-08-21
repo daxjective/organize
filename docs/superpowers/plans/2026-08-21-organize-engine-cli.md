@@ -985,6 +985,18 @@ def test_cloud_attribute_bits(tmp_path):
     assert not _is_cloud_attrs(-1)          # 부호 있는 해석으로 들어와도 마찬가지
 
 
+def test_symlink_to_a_directory_is_not_a_file(tmp_path):
+    """폴더를 가리키는 링크는 폴더로 취급해야 한다. 파일로 새면 그 폴더의
+    크기·수정시각을 가진 항목이 정리 대상이 된다."""
+    import os
+    (tmp_path / "실제폴더").mkdir()
+    touch(tmp_path / "실제폴더" / "안쪽.txt")
+    touch(tmp_path / "정상.txt")
+    os.symlink(tmp_path / "실제폴더", tmp_path / "폴더링크")
+    result = scan(tmp_path)
+    assert [e.name for e in result.entries] == ["정상.txt"]
+
+
 def test_unreadable_entry_is_reported_not_dropped(tmp_path):
     """읽을 수 없는 항목도 반드시 entries 나 skipped 중 하나에는 들어가야 한다."""
     import os
@@ -1130,7 +1142,12 @@ def scan(
             with os.scandir(root) as it:
                 for e in it:
                     try:
-                        if e.is_dir(follow_symlinks=False):
+                        # 기본값(follow_symlinks=True)을 쓴다. False 로 두면 폴더를
+                        # 가리키는 심볼릭 링크가 파일로 새어나가고, 그 폴더의 크기와
+                        # 수정시각을 가진 FileEntry 가 만들어진다.
+                        # 깨진 링크는 기본값에서도 예외 없이 False 를 돌려주므로
+                        # 아래 stat 에서 사유가 남는다.
+                        if e.is_dir():
                             continue
                     except OSError:
                         pass          # 판정 못 하면 파일로 보고 아래에서 사유를 남긴다
@@ -1162,7 +1179,7 @@ def scan(
 - [ ] **Step 4: 테스트가 통과하는지 확인한다**
 
 Run: `python -m pytest tests/test_scanner.py -v`
-Expected: PASS 14개
+Expected: PASS 15개
 
 - [ ] **Step 5: 커밋**
 
