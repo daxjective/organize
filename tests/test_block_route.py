@@ -97,3 +97,22 @@ def test_file_already_in_its_category_is_left_alone():
     c = ctx(e("01_Docs/보고서.pdf"))
     plan = build(c, BlockConfig(target="01_Docs", options={"profile": PROFILE}))
     assert [a for a in plan.actions if a.kind == "move"] == []
+
+
+def test_dest_still_moves_a_file_that_is_already_in_that_category():
+    """dest 를 콕 집어 말했으면, 같은 이름 폴더에 있더라도 그리로 옮긴다.
+
+    '이미 제자리' 판정이 dest 를 안 보면 이 파일은 영영 안 움직인다.
+    """
+    c = ctx(e("01_Docs/보고서.pdf"))
+    plan = build(c, cfg(target="01_Docs", dest="보관"))
+    move = next(a for a in plan.actions if a.kind == "move")
+    assert move.src == ROOT / "01_Docs" / "보고서.pdf"
+    assert move.dst == ROOT / "보관" / "01_Docs" / "보고서.pdf"
+
+
+def test_dest_leaves_a_file_that_is_already_at_the_destination():
+    """반대로 이미 목적지에 도착해 있으면 건드리지 않는다."""
+    c = ctx(e("보관/01_Docs/보고서.pdf"))
+    plan = build(c, cfg(target="보관/01_Docs", dest="보관"))
+    assert [a for a in plan.actions if a.kind == "move"] == []

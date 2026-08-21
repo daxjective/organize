@@ -3,7 +3,7 @@
 바탕화면 정리와 vault 번호 체계가 같은 블록이다. 프로파일만 바뀐다.
 """
 
-from organize.blocks import BlockConfig
+from organize.blocks import BlockConfig, already_there
 from organize.core.action import Action, Plan
 from organize.core.context import Context
 from organize.profiles import matches, route_target
@@ -27,12 +27,8 @@ def build(ctx: Context, cfg: BlockConfig) -> Plan:
             plan.skipped.append((entry.path, "맞는 규칙이 없음"))
             continue
 
-        if category == ctx.rel_of(entry):
-            plan.skipped.append((entry.path, f"이미 {category} 에 있음"))
-            continue
-
         rel = f"{cfg.out}/{category}" if cfg.out else category
-        if rel == ctx.rel_of(entry):
+        if already_there(ctx, entry, rel, category, cfg):
             plan.skipped.append((entry.path, f"이미 {category} 에 있음"))
             continue
 
@@ -41,7 +37,7 @@ def build(ctx: Context, cfg: BlockConfig) -> Plan:
         moves.append(Action(
             kind="move",
             src=ctx.current_path(entry),
-            dst=ctx.root / rel / entry.name,
+            dst=ctx.root / rel / ctx.current_path(entry).name,
             reason=f"확장자 {entry.ext or '없음'} → {category}",
             block=BLOCK,
         ))
