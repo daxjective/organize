@@ -17,8 +17,12 @@ def ctx(*entries):
     return Context(root=ROOT, entries=list(entries), today=TODAY)
 
 
-def move(entry, dst_rel, block="route"):
-    return Action(kind="move", src=entry.path, dst=ROOT / dst_rel, reason="테스트", block=block)
+def move(entry, dst_rel, block="route", src=None):
+    # 실제 블록은 언제나 ctx.current_path(entry) 를 넘긴다. 이미 한 번 옮겨진 파일에
+    # 원래 경로를 넘기면 Context 가 못 찾아 이동이 무시된다 — 그게 정상 동작이다.
+    # 두 번째 이동을 시험하는 테스트는 반드시 src= 를 명시해야 한다.
+    return Action(kind="move", src=src or entry.path, dst=ROOT / dst_rel,
+                  reason="테스트", block=block)
 
 
 def test_files_at_root_are_direct_children_only():
@@ -46,8 +50,10 @@ def test_two_moves_in_a_row_chain():
     a = e("a.png")
     c = ctx(a)
     c.apply(Plan(actions=[move(a, "02_Media/a.png")]))
-    c.apply(Plan(actions=[move(a, "02_Media/캡처/a.png", block="route2")]))
+    c.apply(Plan(actions=[move(a, "02_Media/캡처/a.png", block="route2",
+                              src=c.current_path(a))]))
     assert c.rel_of(a) == "02_Media/캡처"
+    assert c.current_path(a) == ROOT / "02_Media" / "캡처" / "a.png"
 
 
 def test_quarantined_file_disappears_from_the_view():
