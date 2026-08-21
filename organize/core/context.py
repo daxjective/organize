@@ -18,9 +18,11 @@ from organize.core.scanner import FileEntry
 
 
 class Context:
-    def __init__(self, root: Path, entries: list[FileEntry], today: date) -> None:
+    def __init__(self, root: Path, entries: list[FileEntry], today: date,
+                 run_id: str = "") -> None:
         self.root = root
         self.today = today
+        self.run_id = run_id
         self._entries: list[FileEntry] = list(entries)
         self._rel: dict[Path, str] = {}
         self._name: dict[Path, str] = {}
@@ -39,6 +41,10 @@ class Context:
         except ValueError:
             return ""
         return "" if str(rel) == "." else rel.as_posix()
+
+    @property
+    def trash_dir(self) -> Path:
+        return self.root / ".organize" / "trash" / self.run_id
 
     def rel_of(self, entry: FileEntry) -> str:
         return self._rel.get(entry.path, self._relative_folder(entry.path))
