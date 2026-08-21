@@ -869,6 +869,7 @@ git commit -m "Action / Plan 자료구조 추가"
   - `organize.core.scanner.ScanResult` — `entries: list[FileEntry]`, `skipped: list[tuple[Path, str]]`
   - `organize.core.scanner.is_system_file(name: str) -> bool`
   - `organize.core.scanner.is_in_progress(name: str, mtime: float, now: float) -> bool`
+  - `organize.core.scanner._is_cloud_attrs(attrs: int) -> bool` — 속성 비트만 보고 판정하는 순수 함수. Windows 없이 테스트할 수 있도록 분리한다
   - `organize.core.scanner.is_cloud_only(path: Path) -> bool`
   - `organize.core.scanner.scan(root: Path, *, recursive: bool = False, now: float | None = None, exclude_dirs: frozenset[str] = frozenset()) -> ScanResult`
 
@@ -973,6 +974,28 @@ def test_scan_skips_named_exclude_dirs(tmp_path):
     assert [e.name for e in result.entries] == ["새파일.pdf"]
 
 
+def test_cloud_attribute_bits(tmp_path):
+    """속성 비트 판정은 Windows 없이도 검증할 수 있어야 한다."""
+    from organize.core.scanner import _is_cloud_attrs
+    assert _is_cloud_attrs(0x00400000)      # RECALL_ON_DATA_ACCESS
+    assert _is_cloud_attrs(0x00040000)      # RECALL_ON_OPEN
+    assert _is_cloud_attrs(0x00001000)      # OFFLINE
+    assert not _is_cloud_attrs(0x20)        # ARCHIVE 뿐이면 로컬 파일이다
+    assert not _is_cloud_attrs(0xFFFFFFFF)  # 읽기 실패는 클라우드가 아니다
+    assert not _is_cloud_attrs(-1)          # 부호 있는 해석으로 들어와도 마찬가지
+
+
+def test_unreadable_entry_is_reported_not_dropped(tmp_path):
+    """읽을 수 없는 항목도 반드시 entries 나 skipped 중 하나에는 들어가야 한다."""
+    import os
+    touch(tmp_path / "정상.txt")
+    os.symlink(tmp_path / "없는대상.txt", tmp_path / "깨진링크.txt")
+    result = scan(tmp_path)
+    assert [e.name for e in result.entries] == ["정상.txt"]
+    assert [p.name for p, _ in result.skipped] == ["깨진링크.txt"]
+    assert "읽을 수 없다" in result.skipped[0][1]
+
+
 def test_file_entry_ext_is_lowercase_with_dot(tmp_path):
     p = touch(tmp_path / "사진.PNG")
     e = FileEntry(path=p, size=1, mtime=0.0)
@@ -1042,24 +1065,40 @@ def is_in_progress(name: str, mtime: float, now: float) -> bool:
     return (now - mtime) < _SETTLE_SECONDS
 
 
+_INVALID_FILE_ATTRIBUTES = 0xFFFFFFFF
+_CLOUD_MASK = (0x00001000      # FILE_ATTRIBUTE_OFFLINE
+               | 0x00040000    # FILE_ATTRIBUTE_RECALL_ON_OPEN
+               | 0x00400000)   # FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS
+
+
+def _is_cloud_attrs(attrs: int) -> bool:
+    """속성 비트만 보고 판정한다. Windows 없이도 테스트할 수 있게 분리했다.
+
+    음수도 실패로 본다. ctypes 의 기본 반환형이 부호 있는 c_int 라서,
+    restype 을 지정하지 않으면 실패값 0xFFFFFFFF 가 -1 로 들어온다.
+    그러면 `attrs == 0xFFFFFFFF` 가 영원히 False 이고 `-1 & mask` 는 항상 참이라
+    **읽지 못한 모든 파일이 클라우드 전용으로 오분류된다.**
+    아래 GetFileAttributesW 호출은 restype 을 명시하지만, 여기서도 한 번 더 막는다.
+    """
+    if attrs < 0 or attrs == _INVALID_FILE_ATTRIBUTES:
+        return False
+    return bool(attrs & _CLOUD_MASK)
+
+
 def is_cloud_only(path: Path) -> bool:
     """디스크에 실제 내용이 없는 파일인지. Windows 밖에서는 항상 False."""
     if sys.platform != "win32":
         return False
     import ctypes
 
-    FILE_ATTRIBUTE_OFFLINE = 0x00001000
-    FILE_ATTRIBUTE_RECALL_ON_OPEN = 0x00040000
-    FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS = 0x00400000
-    INVALID = 0xFFFFFFFF
+    get_attrs = ctypes.windll.kernel32.GetFileAttributesW
+    get_attrs.restype = ctypes.c_uint32          # 기본값(c_int)이면 실패값이 -1 로 온다
+    get_attrs.argtypes = [ctypes.c_wchar_p]
 
-    attrs = ctypes.windll.kernel32.GetFileAttributesW(str(path))
-    if attrs == INVALID:
+    try:
+        return _is_cloud_attrs(get_attrs(str(path)))
+    except OSError:
         return False
-    mask = (FILE_ATTRIBUTE_OFFLINE
-            | FILE_ATTRIBUTE_RECALL_ON_OPEN
-            | FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS)
-    return bool(attrs & mask)
 
 
 def scan(
@@ -1083,7 +1122,21 @@ def scan(
             for fn in filenames:
                 paths.append(Path(dirpath) / fn)
     else:
-        paths = [p for p in root.iterdir() if p.is_file()]
+        # Path.is_file() 은 OSError 를 삼켜 False 를 돌려준다. 그러면 깨진 심볼릭 링크나
+        # 권한 없는 항목이 entries 에도 skipped 에도 안 들어가 조용히 사라진다.
+        # 미리보기가 진실이려면 모든 항목이 둘 중 하나에는 있어야 한다.
+        # scandir 은 디렉터리 판정에 이미 읽어둔 정보를 쓰므로 추가 stat 도 하지 않는다.
+        try:
+            with os.scandir(root) as it:
+                for e in it:
+                    try:
+                        if e.is_dir(follow_symlinks=False):
+                            continue
+                    except OSError:
+                        pass          # 판정 못 하면 파일로 보고 아래에서 사유를 남긴다
+                    paths.append(Path(e.path))
+        except OSError:
+            return result
 
     for path in sorted(paths):                      # 항상 같은 순서 = 결정적
         name = path.name
@@ -1109,7 +1162,7 @@ def scan(
 - [ ] **Step 4: 테스트가 통과하는지 확인한다**
 
 Run: `python -m pytest tests/test_scanner.py -v`
-Expected: PASS 12개
+Expected: PASS 14개
 
 - [ ] **Step 5: 커밋**
 
