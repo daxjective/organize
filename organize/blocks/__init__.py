@@ -67,10 +67,11 @@ REGISTRY: dict[str, BlockFn] = {}
 def get_block(name: str) -> BlockFn:
     if not REGISTRY:
         # 지연 초기화: 이 함수 안에서 비로소 by_date/dedup/route/unzip 을 import
-        # 한다. 모듈 최상단에서 바로 import 하면, 그 블록들이 다시
-        # `organize.blocks` 를 참조하는 순환 import 상황에서 부분 초기화된
-        # 모듈을 보게 될 위험이 있다 — 여기서 늦춰 두면 그 시점 걱정을 안 해도
-        # 된다. 다시 대입(REGISTRY = ...)하지 않고 REGISTRY.update(...) 로
+        # 한다. 블록들은 다시 `organize.blocks` 에서 BlockConfig/already_there 를
+        # 가져가므로 순환이다. 최상단에서 import 해도 **지금은** 돈다 — 단 그
+        # import 문이 BlockConfig 정의보다 아래에 있을 때만이다. 즉 이 파일의
+        # 줄 순서에 정확성이 걸리게 된다. 여기서 늦추면 그 함정이 아예 없어진다.
+        # 다시 대입(REGISTRY = ...)하지 않고 REGISTRY.update(...) 로
         # 제자리에서 채우는 이유는: `from organize.blocks import REGISTRY` 로
         # 먼저 참조를 잡아둔 코드가 있다면, 재대입은 그 참조를 영원히 빈
         # 딕셔너리로 남기기 때문이다. update 는 같은 객체를 채우므로 먼저 잡은
