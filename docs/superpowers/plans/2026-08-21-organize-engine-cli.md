@@ -732,7 +732,7 @@ git commit -m "사용자 설정 2단 병합과 대체 경로 체인 추가"
 - Consumes: 없음
 - Produces:
   - `organize.core.action.ActionKind = Literal["mkdir", "move", "quarantine", "extract"]`
-  - `organize.core.action.Action` — `kind`, `src: Path | None`, `dst: Path | None`, `reason: str`, `block: str`, `member: str | None = None`. frozen dataclass. `member` 는 `extract` 에서만 쓰며 압축 안의 원래 항목 이름을 담는다 (실행기가 무엇을 꺼낼지 알아야 한다)
+  - `organize.core.action.Action` — `kind`, `src: Path | None`, `dst: Path | None`, `reason: str`, `block: str`, `member: str | None = None`. frozen dataclass. `member` 는 `extract` 에서만 쓰며 압축 안의 원래 항목 이름을 담는다 (실행기가 무엇을 꺼낼지 알아야 한다). `size`/`mtime` 도 `extract` 전용으로, 압축 안에 적힌 값을 담는다 — `Context` 가 이 값으로 가상 엔트리를 만든다
   - `organize.core.action.Plan` — `actions: list[Action]`, `skipped: list[tuple[Path, str]]`, `counts() -> dict[str, int]`, `extend(other: Plan) -> None`
 
 - [ ] **Step 1: 실패하는 테스트를 쓴다**
@@ -825,6 +825,11 @@ class Action:
     reason: str            # 사람이 읽는 근거. UI 에 그대로 표시된다
     block: str             # 이 Action 을 만든 블록 이름
     member: str | None = None   # extract 전용 — 압축 안에서 꺼낼 항목 이름
+    # extract 전용 — 압축 안에 적힌 크기와 시각. Context 가 이 값으로 가상
+    # 엔트리를 만든다. 없으면 mtime 0 이 되어 by_date 가 전부 1970 폴더로
+    # 보낸다 — 실제로 그렇게 됐다.
+    size: int = 0
+    mtime: float = 0.0
 
 
 @dataclass
@@ -2434,7 +2439,9 @@ class Context:
                 self._by_current[a.dst] = origin
 
             elif a.kind == "extract" and a.dst is not None:
-                new = FileEntry(path=a.dst, size=0, mtime=0.0, virtual=True)
+                # 압축 안에 적힌 크기·시각을 그대로 쓴다. 0 을 넣으면 by_date 가
+                # 이 파일을 1970 폴더로 보낸다 — 사슬 전체가 무의미해진다.
+                new = FileEntry(path=a.dst, size=a.size, mtime=a.mtime, virtual=True)
                 self._entries.append(new)
                 self._rel[new.path] = self._relative_folder(a.dst)
                 self._name[new.path] = a.dst.name
@@ -3401,9 +3408,12 @@ Expected: FAIL — stub 이 빈 `Plan()` 을 돌려주므로 대부분 실패
 import zipfile
 from pathlib import Path, PurePosixPath
 
+from datetime import datetime
+
 from organize.blocks import BlockConfig, dest_folder
 from organize.core.action import Action, Plan
 from organize.core.context import Context
+from organize.profiles import matches
 
 BLOCK = "unzip"
 _UTF8_FLAG = 0x800
@@ -3419,12 +3429,31 @@ def recover_name(raw: str, flag_bits: int) -> str:
         return raw
 
 
-def _unique(dst_dir: Path, name: str, taken: set[str]) -> str:
-    if name not in taken:
+def _member_mtime(info: zipfile.ZipInfo) -> float:
+    """압축 안에 적힌 시각. 읽을 수 없으면 0 을 준다.
+
+    zip 의 시각은 1980 년부터만 표현할 수 있고 값이 깨진 파일도 있다.
+    그럴 때 예외를 내지 않고 0 을 주면 by_date 가 파일명으로 폴백한다.
+    """
+    try:
+        return datetime(*info.date_time).timestamp()
+    except (ValueError, OverflowError, OSError):
+        return 0.0
+
+
+def _unique(name: str, taken: set[str]) -> str:
+    """이미 있는 이름이면 `_(1)` 을 붙인다.
+
+    **대소문자를 구분하지 않고 본다.** 이 도구의 주 사용 환경은 윈도우이고,
+    윈도우 파일 시스템은 `A.txt` 와 `a.txt` 를 같은 파일로 본다. 구분해서
+    처리하면 압축 안에 둘 다 있을 때 하나가 다른 하나를 덮어써 사라진다.
+    리눅스에서는 `_(1)` 이 하나 더 붙을 뿐 잃는 것이 없다.
+    """
+    if name.casefold() not in taken:
         return name
     stem, suffix = Path(name).stem, Path(name).suffix
     n = 1
-    while f"{stem}_({n}){suffix}" in taken:
+    while f"{stem}_({n}){suffix}".casefold() in taken:
         n += 1
     return f"{stem}_({n}){suffix}"
 
@@ -3432,10 +3461,15 @@ def _unique(dst_dir: Path, name: str, taken: set[str]) -> str:
 def build(ctx: Context, cfg: BlockConfig) -> Plan:
     plan = Plan()
     out_dir = dest_folder(ctx, cfg.out, block=BLOCK) if cfg.out else ctx.root
-    taken = {e.path.name for e in ctx.files_at(cfg.out)}
+    taken = {e.path.name.casefold() for e in ctx.files_at(cfg.out)}
 
     for entry in ctx.files_at(cfg.target):
         if entry.ext != ".zip" or entry.virtual:
+            continue
+        # 다른 블록과 똑같이 `when` 을 받는다. 여기만 조용히 무시하면
+        # 레시피에 `when` 을 써 놓고 왜 안 걸리는지 알 길이 없다.
+        if cfg.when and not matches(entry, cfg.when, ctx.today):
+            plan.skipped.append((entry.path, "이 작업의 대상이 아님"))
             continue
         src = ctx.current_path(entry)
         try:
@@ -3454,12 +3488,14 @@ def build(ctx: Context, cfg: BlockConfig) -> Plan:
             if not leaf or leaf in (".", "..") or ".." in PurePosixPath(name).parts:
                 plan.skipped.append((entry.path, f"압축 안의 경로가 대상 폴더를 벗어남: {name}"))
                 continue
-            final = _unique(out_dir, leaf, taken)
-            taken.add(final)
+            final = _unique(leaf, taken)
+            taken.add(final.casefold())
             plan.actions.append(Action(
                 kind="extract", src=src, dst=out_dir / final,
                 reason=f"{entry.name} 에서 꺼냄", block=BLOCK,
                 member=info.filename,          # 실행기가 이 이름으로 꺼낸다
+                size=info.file_size,           # 뒤 블록이 볼 가상 엔트리의 크기
+                mtime=_member_mtime(info),     # 없으면 by_date 가 1970 으로 보낸다
             ))
             extracted += 1
 
