@@ -2618,7 +2618,9 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'organize.blocks'`
 블록은 파일을 만지지 않고 Plan 만 만든다. 블록끼리 직접 호출하지 않는다.
 """
 
+import os
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Callable
 
 from organize.core.action import Plan
@@ -2639,6 +2641,28 @@ class BlockConfig:
 
 
 BlockFn = Callable[[Context, BlockConfig], Plan]
+
+
+def dest_folder(ctx: Context, rel: str, *, block: str) -> Path:
+    """root 기준 상대 폴더를 실제 경로로 바꾼다. **root 밖으로 나가면 거부한다.**
+
+    `rel` 은 전부 사용자가 손으로 쓴 값에서 온다 — 레시피의 `dest`/`target`,
+    프로파일의 `to`, by_date 의 `layout`, unzip 의 `out`. 입구가 넷이므로 각
+    입구마다 막지 않고 **Action 을 만드는 이 한 곳**에서 막는다. 마지막 관문이다.
+
+    막지 않으면 `/etc` 나 `../..` 가 그대로 통해서 사용자 파일이 root 밖으로
+    나간다. 미리보기 화면에도 그렇게 보이므로 눈치채기 전에 실행된다.
+
+    심볼릭 링크는 따지지 않는다 — `normpath` 는 순수 문자열 정규화다.
+    링크를 통한 탈출은 실행기가 옮기기 직전에 막는다(Task 16).
+    """
+    folder = Path(os.path.normpath(ctx.root / rel))
+    if not folder.is_relative_to(ctx.root):
+        raise OrganizeError(
+            f"'{block}' 작업의 목적지가 정리 대상 폴더 밖을 가리킵니다: {rel}",
+            hint=f"목적지는 {ctx.root} 안쪽이어야 합니다. "
+                 "'/' 로 시작하는 절대경로나 '..' 는 쓸 수 없습니다.")
+    return folder
 
 
 def already_there(ctx: Context, entry, rel: str, sub: str, cfg: BlockConfig) -> bool:
@@ -2696,7 +2720,7 @@ def get_block(name: str) -> BlockFn:
 바탕화면 정리와 vault 번호 체계가 같은 블록이다. 프로파일만 바뀐다.
 """
 
-from organize.blocks import BlockConfig, already_there
+from organize.blocks import BlockConfig, already_there, dest_folder
 from organize.core.action import Action, Plan
 from organize.core.context import Context
 from organize.profiles import matches, route_target
@@ -2725,18 +2749,20 @@ def build(ctx: Context, cfg: BlockConfig) -> Plan:
             plan.skipped.append((entry.path, f"이미 {category} 에 있음"))
             continue
 
+        folder = dest_folder(ctx, rel, block=BLOCK)      # root 밖이면 여기서 막힌다
         if rel not in folders:
             folders.append(rel)
         moves.append(Action(
             kind="move",
             src=ctx.current_path(entry),
-            dst=ctx.root / rel / ctx.current_path(entry).name,
+            dst=folder / ctx.current_path(entry).name,
             reason=f"확장자 {entry.ext or '없음'} → {category}",
             block=BLOCK,
         ))
 
     for rel in folders:                       # 폴더를 먼저 만들고 옮긴다
-        plan.actions.append(Action(kind="mkdir", src=None, dst=ctx.root / rel,
+        plan.actions.append(Action(kind="mkdir", src=None,
+                                   dst=dest_folder(ctx, rel, block=BLOCK),
                                    reason="분류 결과를 담을 폴더", block=BLOCK))
     plan.actions.extend(moves)
     return plan
@@ -2892,14 +2918,17 @@ Expected: FAIL — stub 이 빈 `Plan()` 을 돌려주므로 `moves(plan) == {}`
 판정할 수 없으면 옮기지 않고 그 자리에 둔다. 앞 단계가 이미 분류해 둔
 결과를 미분류로 되돌리지 않기 위해서다.
 
-자기 폴더 보호는 따로 코드가 필요 없다. `files_at(target)` 은 target 직속
-파일만 돌려주므로, 이미 `2026/` 안에 있는 파일은 애초에 대상이 아니다.
+재실행해도 `2026/2026` 처럼 중첩되지 않아야 한다. `files_at(target)` 이 직속
+파일만 돌려주므로 target 이 루트일 때는 저절로 되지만, `target="2026"` 처럼
+그 폴더 자체를 지정하면 대상이 **된다**. 그래서 `already_there()` 가 필요하다 —
+장식이 아니다.
 """
 
-from organize.blocks import BlockConfig
+from organize.blocks import BlockConfig, already_there, dest_folder
 from organize.core.action import Action, Plan
 from organize.core.context import Context
 from organize.core.dates import resolve_date
+from organize.errors import OrganizeError
 from organize.profiles import matches
 
 BLOCK = "by_date"
@@ -2922,26 +2951,36 @@ def build(ctx: Context, cfg: BlockConfig) -> Plan:
             plan.skipped.append((entry.path, "날짜를 알 수 없어 그대로 둠"))
             continue
 
-        sub = layout.format(year=f"{hit.value.year:04d}",
-                            month=f"{hit.value.month:02d}",
-                            day=f"{hit.value.day:02d}")
+        try:
+            sub = layout.format(year=f"{hit.value.year:04d}",
+                                month=f"{hit.value.month:02d}",
+                                day=f"{hit.value.day:02d}")
+        except (KeyError, IndexError, ValueError) as e:
+            # layout 은 사용자가 손으로 쓴다. '{years}' 오타 하나에
+            # KeyError: 'years' 를 그대로 보여주면 안 된다.
+            raise OrganizeError(
+                f"날짜 폴더 모양('{layout}')을 이해하지 못했습니다.",
+                hint="{year}, {month}, {day} 만 쓸 수 있습니다. "
+                     "예: '{year}' 또는 '{year}/{month}'") from e
         rel = f"{cfg.out}/{sub}" if cfg.out else sub
         if already_there(ctx, entry, rel, sub, cfg):
             plan.skipped.append((entry.path, "이미 해당 폴더에 있음"))
             continue
 
+        folder = dest_folder(ctx, rel, block=BLOCK)      # root 밖이면 여기서 막힌다
         if rel not in folders:
             folders.append(rel)
         moves.append(Action(
             kind="move",
             src=ctx.current_path(entry),
-            dst=ctx.root / rel / ctx.current_path(entry).name,
+            dst=folder / ctx.current_path(entry).name,
             reason=f"{hit.source} {hit.value.isoformat()}",
             block=BLOCK,
         ))
 
     for rel in folders:
-        plan.actions.append(Action(kind="mkdir", src=None, dst=ctx.root / rel,
+        plan.actions.append(Action(kind="mkdir", src=None,
+                                   dst=dest_folder(ctx, rel, block=BLOCK),
                                    reason="날짜별로 담을 폴더", block=BLOCK))
     plan.actions.extend(moves)
     return plan
@@ -3307,7 +3346,7 @@ Expected: FAIL — stub 이 빈 `Plan()` 을 돌려주므로 대부분 실패
 import zipfile
 from pathlib import Path, PurePosixPath
 
-from organize.blocks import BlockConfig
+from organize.blocks import BlockConfig, dest_folder
 from organize.core.action import Action, Plan
 from organize.core.context import Context
 
@@ -3337,7 +3376,7 @@ def _unique(dst_dir: Path, name: str, taken: set[str]) -> str:
 
 def build(ctx: Context, cfg: BlockConfig) -> Plan:
     plan = Plan()
-    out_dir = ctx.root / cfg.out if cfg.out else ctx.root
+    out_dir = dest_folder(ctx, cfg.out, block=BLOCK) if cfg.out else ctx.root
     taken = {e.path.name for e in ctx.files_at(cfg.out)}
 
     for entry in ctx.files_at(cfg.target):
