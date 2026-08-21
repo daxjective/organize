@@ -3,7 +3,8 @@ from datetime import date
 from pathlib import Path
 
 from organize.blocks import BlockConfig
-from organize.blocks.unzip import build, recover_name
+from organize.blocks.by_date import build as build_by_date
+from organize.blocks.unzip import _member_mtime, build, recover_name
 from organize.core.context import Context
 from organize.core.scanner import scan
 
@@ -20,6 +21,16 @@ def make_zip(path: Path, names: list[str]) -> Path:
     with zipfile.ZipFile(path, "w") as z:
         for n in names:
             z.writestr(n, b"DATA")
+    return path
+
+
+def make_zip_with_time(path: Path, name: str, date_time: tuple, data: bytes = b"DATA") -> Path:
+    """압축 안 항목의 수정시각(date_time)을 직접 지정해 zip 을 만든다."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(path, "w") as z:
+        info = zipfile.ZipInfo(name)
+        info.date_time = date_time
+        z.writestr(info, data)
     return path
 
 
@@ -98,3 +109,86 @@ def test_broken_zip_is_skipped_not_crashed(tmp_path):
     plan = build(ctx_for(tmp_path), BlockConfig())
     assert plan.actions == []
     assert "열 수 없습니다" in plan.skipped[0][1]
+
+
+# --- [1 · Critical] unzip -> by_date 사슬이 실제 zip 안 날짜를 써야 한다 ---
+# 고치기 전에는 Context.apply() 의 extract 분기가 가상 엔트리를 size=0,
+# mtime=0.0 으로 하드코딩해 EXIF·파일명에 날짜가 없는 파일이 전부 1970 폴더로
+# 갔다. unzip -> route -> by_date 사슬이 이 블록의 존재 이유이므로 실제로
+# 끝까지 태워서 확인한다.
+
+def test_unzip_to_by_date_chain_uses_the_real_zip_member_date(tmp_path):
+    make_zip_with_time(tmp_path / "자료.zip", "메모.txt", (2024, 3, 15, 10, 30, 0))
+    ctx = ctx_for(tmp_path)
+    plan = build(ctx, BlockConfig())
+    ctx.apply(plan)
+
+    date_plan = build_by_date(ctx, BlockConfig())
+    move = next(a for a in date_plan.actions
+                if a.kind == "move" and a.src.name == "메모.txt")
+    assert move.dst.parent.name == "2024"
+    assert "1970" not in move.dst.parts
+
+
+def test_member_mtime_returns_zero_instead_of_raising_on_broken_date(tmp_path):
+    """zip 시각은 1980 년부터만 표현되고 깨진 파일도 있다. 예외 없이 0 을 준다."""
+    make_zip_with_time(tmp_path / "자료.zip", "메모.txt", (1990, 0, 0, 0, 0, 0))
+    with zipfile.ZipFile(tmp_path / "자료.zip") as z:
+        info = z.infolist()[0]
+    assert _member_mtime(info) == 0.0
+
+
+def test_unzip_to_by_date_chain_falls_back_to_filename_when_zip_time_is_broken(tmp_path):
+    """zip 안 시각이 깨져도 크래시하지 않고, by_date 는 파일명 날짜를 쓴다."""
+    make_zip_with_time(tmp_path / "자료.zip", "2024-03-15_메모.txt", (1990, 0, 0, 0, 0, 0))
+    ctx = ctx_for(tmp_path)
+    plan = build(ctx, BlockConfig())
+    extract = next(a for a in plan.actions if a.kind == "extract")
+    assert extract.mtime == 0.0        # 못 읽으면 0 을 준다 — 크래시하지 않는다
+
+    ctx.apply(plan)
+    date_plan = build_by_date(ctx, BlockConfig())
+    move = next(a for a in date_plan.actions if a.kind == "move")
+    assert move.dst.parent.name == "2024"
+    assert "파일명" in move.reason
+
+
+# --- [2 · Important] unzip 만 cfg.when 을 조용히 무시하던 것 ---
+
+def test_when_filter_skips_non_matching_zip(tmp_path):
+    make_zip(tmp_path / "자료.zip", ["문서.pdf"])
+    plan = build(ctx_for(tmp_path), BlockConfig(when={"ext": [".rar"]}))
+    assert plan.actions == []
+    assert [p.name for p, _ in plan.skipped] == ["자료.zip"]
+    assert plan.skipped[0][1] == "이 작업의 대상이 아님"
+
+
+def test_when_filter_still_extracts_a_matching_zip(tmp_path):
+    make_zip(tmp_path / "자료.zip", ["문서.pdf"])
+    plan = build(ctx_for(tmp_path), BlockConfig(when={"ext": [".zip"]}))
+    assert extracts(plan) == ["문서.pdf"]
+
+
+# --- [3 · Important] 대소문자만 다른 이름이 서로를 덮어쓰던 것 ---
+
+def test_case_only_difference_does_not_overwrite_on_windows(tmp_path):
+    """압축 안에 A.txt 와 a.txt 가 같이 있으면 윈도우에서 하나가 사라졌었다."""
+    make_zip(tmp_path / "자료.zip", ["A.txt", "a.txt"])
+    result = extracts(build(ctx_for(tmp_path), BlockConfig()))
+    assert len(result) == 2
+    assert len({n.casefold() for n in result}) == 2
+    assert any("_(1)" in n for n in result)
+
+
+# --- [4 · Minor M2] 빈 이름 멤버의 skip 메시지가 콜론 뒤에 아무것도 없던 것 ---
+
+def test_empty_member_name_gets_a_readable_skip_message(tmp_path):
+    make_zip(tmp_path / "자료.zip", ["정상.txt"])
+    with zipfile.ZipFile(tmp_path / "자료.zip", "a") as z:
+        z.writestr("", b"DATA")   # 이름이 아예 빈 항목
+    plan = build(ctx_for(tmp_path), BlockConfig())
+    assert extracts(plan) == ["정상.txt"]
+    reasons = [why for _, why in plan.skipped]
+    assert len(reasons) == 1
+    assert not reasons[0].endswith(": ")
+    assert "비어" in reasons[0]

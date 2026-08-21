@@ -85,7 +85,9 @@ class Context:
                 self._by_current[a.dst] = origin
 
             elif a.kind == "extract" and a.dst is not None:
-                new = FileEntry(path=a.dst, size=0, mtime=0.0, virtual=True)
+                # 압축 안에 적힌 크기·시각을 그대로 쓴다. 0 을 넣으면 by_date 가
+                # 이 파일을 1970 폴더로 보낸다 — 사슬 전체가 무의미해진다.
+                new = FileEntry(path=a.dst, size=a.size, mtime=a.mtime, virtual=True)
                 self._entries.append(new)
                 self._rel[new.path] = self._relative_folder(a.dst)
                 self._name[new.path] = a.dst.name
