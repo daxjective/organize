@@ -1,0 +1,12 @@
+name = "캡처와 사진 나누기"
+
+# EXIF 에 카메라 정보가 있으면 사진, 없으면 화면 캡처다.
+# 파일명에 'screenshot' 이 없어도 정확히 갈린다.
+
+[[rules]]
+to = "사진"
+has_exif_camera = true
+
+[[rules]]
+to = "캡처"
+has_exif_camera = false

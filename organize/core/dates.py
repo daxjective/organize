@@ -102,3 +102,21 @@ def resolve_date(entry: FileEntry, today: date) -> DateHit | None:
         return DateHit("수정시각", datetime.fromtimestamp(entry.mtime).date())
 
     return None
+
+
+def has_exif_camera(path: Path) -> bool | None:
+    """카메라·휴대폰으로 찍은 사진인지. None 은 판정 불가.
+
+    카메라 사진에는 EXIF Make/Model 이 반드시 있고 화면 캡처에는 절대 없다.
+    파일명에 'screenshot' 이 없어도 정확히 갈린다.
+    """
+    if not HAS_PILLOW:
+        return None
+    try:
+        exif = Image.open(path).getexif()
+    except Exception:
+        return None
+    if exif is None:
+        return None
+    tag = {v: k for k, v in ExifTags.TAGS.items()}
+    return bool(exif.get(tag.get("Make")) or exif.get(tag.get("Model")))

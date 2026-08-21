@@ -1,0 +1,37 @@
+name = "바탕화면·다운로드 정리"
+
+[[rules]]
+to  = "01_Docs"
+ext = [".pdf", ".docx", ".xlsx", ".pptx", ".hwp", ".hwpx", ".txt", ".md", ".html"]
+
+[[rules]]
+to  = "02_Media"
+ext = [".jpg", ".jpeg", ".png", ".gif", ".mp4", ".mov", ".heic", ".webp", ".avi", ".mkv"]
+
+[[rules]]
+to  = "03_Design"
+ext = [".psd", ".ai", ".fig", ".sketch", ".xd"]
+
+[[rules]]
+to  = "04_Apps"
+ext = [".exe", ".msi", ".msix", ".appimage", ".dmg"]
+
+[[rules]]
+to  = "05_Archives"
+ext = [".zip", ".7z", ".tar", ".rar", ".gz"]
+
+[[rules]]
+to  = "06_Code"
+ext = [".py", ".js", ".ts", ".ipynb", ".json", ".sql", ".sh"]
+
+[[rules]]
+to      = "99_Unsorted"
+default = true
+
+[synonyms]
+"01_Docs"     = ["문서", "자료", "Documents", "Docs"]
+"02_Media"    = ["사진", "이미지", "그림", "영상", "Pictures", "Images", "Media", "Videos"]
+"03_Design"   = ["디자인", "Design"]
+"04_Apps"     = ["설치", "프로그램", "Apps", "Installers"]
+"05_Archives" = ["압축", "Archive", "Zip"]
+"06_Code"     = ["코드", "소스", "Code", "Source"]
