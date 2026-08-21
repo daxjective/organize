@@ -192,3 +192,21 @@ def test_empty_member_name_gets_a_readable_skip_message(tmp_path):
     assert len(reasons) == 1
     assert not reasons[0].endswith(": ")
     assert "비어" in reasons[0]
+
+
+def test_which_file_gets_the_suffix_does_not_depend_on_zip_order(tmp_path):
+    """압축한 순서가 달라도 결과가 같아야 한다.
+
+    `A.txt` 와 `a.txt` 는 윈도우에서 같은 이름이라 한쪽이 `_(1)` 을 받는다.
+    정렬하지 않으면 **어느 쪽이 받는지가 압축한 순서에 좌우된다** — 같은
+    내용물인데 압축을 다시 뜨면 결과가 바뀐다. 계획서의 "결정적이어야 한다"에
+    어긋난다.
+    """
+    a = make_zip(tmp_path / "먼저" / "묶음.zip", ["A.txt", "a.txt"])
+    b = make_zip(tmp_path / "나중" / "묶음.zip", ["a.txt", "A.txt"])
+
+    def names(zip_root):
+        plan = build(ctx_for(zip_root), BlockConfig())
+        return [x.dst.name for x in plan.actions if x.kind == "extract"]
+
+    assert names(a.parent) == names(b.parent) == ["A.txt", "a_(1).txt"]

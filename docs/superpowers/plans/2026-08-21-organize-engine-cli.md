@@ -1478,7 +1478,11 @@ def resolve_date(entry: FileEntry, today: date) -> DateHit | None:
     if found:
         return DateHit("파일명 날짜", found)
 
-    if entry.mtime is not None:      # 0.0 도 유효한 시각(1970-01-01)이다
+    # mtime 이 0 이면 "모른다" 는 뜻이지 1970년 1월 1일이 아니다. 압축 안에
+    # 적힌 시각을 못 읽었을 때 unzip 이 0 을 넣는다. 그대로 믿으면 그 파일들이
+    # 전부 1970 폴더로 간다 — 실제로 그렇게 됐다. 진짜 mtime 이 0 인 파일은
+    # 날짜를 모르는 것으로 두는 편이 낫다(그 자리에 그대로 남는다).
+    if entry.mtime and entry.mtime > 0:
         return DateHit("수정시각", datetime.fromtimestamp(entry.mtime).date())
 
     return None
@@ -3474,7 +3478,9 @@ def build(ctx: Context, cfg: BlockConfig) -> Plan:
         src = ctx.current_path(entry)
         try:
             with zipfile.ZipFile(src) as z:
-                infos = z.infolist()
+                # 항목 이름으로 정렬한다. 안 하면 압축한 순서에 따라 어느
+                # 파일이 `_(1)` 을 받는지가 달라진다.
+                infos = sorted(z.infolist(), key=lambda i: i.filename)
         except (zipfile.BadZipFile, OSError):
             plan.skipped.append((entry.path, "압축 파일을 열 수 없습니다"))
             continue

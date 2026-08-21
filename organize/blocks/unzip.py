@@ -82,7 +82,10 @@ def build(ctx: Context, cfg: BlockConfig) -> Plan:
         src = ctx.current_path(entry)
         try:
             with zipfile.ZipFile(src) as z:
-                infos = z.infolist()
+                # 항목 이름으로 정렬한다. 안 하면 압축한 순서에 따라 어느
+                # 파일이 `_(1)` 을 받는지가 달라진다 — 같은 내용물인데 압축을
+                # 다시 뜨면 결과가 바뀐다.
+                infos = sorted(z.infolist(), key=lambda i: i.filename)
         except (zipfile.BadZipFile, OSError):
             plan.skipped.append((entry.path, "압축 파일을 열 수 없습니다"))
             continue

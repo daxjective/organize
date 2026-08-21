@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 import pytest
@@ -174,3 +174,21 @@ def test_has_exif_camera_closes_the_file_handle(tmp_path):
         gc.collect()
     leaks = [w for w in caught if issubclass(w.category, ResourceWarning)]
     assert not leaks, [str(w.message) for w in leaks]
+
+
+def test_mtime_zero_means_unknown_not_1970():
+    """mtime 0 은 "모른다" 지 1970년 1월 1일이 아니다.
+
+    unzip 이 압축 안의 시각을 못 읽으면 0 을 넣는다. 그걸 진짜 날짜로 믿으면
+    그 파일들이 전부 1970 폴더로 간다 — 실제로 그렇게 됐다. 날짜를 모르면
+    by_date 는 파일을 그 자리에 그대로 둔다.
+    """
+    e = FileEntry(path=Path("/x/회의록.txt"), size=0, mtime=0.0, virtual=True)
+    assert resolve_date(e, date(2026, 8, 21)) is None
+
+
+def test_mtime_is_still_used_when_it_is_a_real_time():
+    e = FileEntry(path=Path("/x/회의록.txt"), size=0,
+                  mtime=datetime(2023, 12, 15, 9, 0).timestamp())
+    hit = resolve_date(e, date(2026, 8, 21))
+    assert (hit.source, hit.value) == ("수정시각", date(2023, 12, 15))
