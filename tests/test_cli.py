@@ -109,3 +109,23 @@ def test_verbose_lists_every_action(project, capsys):
     old_file(work / "보고서.pdf")
     cli.main(["preview", "t", "--verbose"])
     assert "보고서.pdf" in capsys.readouterr().out
+
+
+def test_preview_suggestion_keeps_the_root_you_asked_for(project, tmp_path, capsys):
+    """`--root` 로 다른 폴더를 봤으면 제안하는 명령에도 그대로 있어야 한다.
+
+    안 그러면 미리보기는 이 폴더를 보여주고, 사용자가 복사한 명령은 레시피에
+    적힌 **원래 폴더**(예: 진짜 다운로드 폴더)를 `--apply` 로 정리해 버린다.
+    미리보기의 존재 이유가 무너지는 자리다.
+    """
+    other = tmp_path / "다른폴더"
+    old_file(other / "메모.md")
+
+    cli.main(["preview", "t", "--root", str(other)])
+    out = capsys.readouterr().out
+
+    suggested = [ln for ln in out.splitlines()
+                 if "organize run" in ln or "organize preview" in ln]
+    assert suggested, "제안한 명령이 아예 없다"
+    for line in suggested:
+        assert f"--root {other}" in line, f"제안한 명령에 대상 폴더가 없다: {line.strip()}"

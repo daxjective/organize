@@ -85,15 +85,19 @@ def _preview_or_run(args, *, apply: bool) -> int:
             print(f"    실패  {Path(row['src']).name} — {row['why']}")
 
     print()
+    # --root 로 대상을 바꿔서 봤으면 제안하는 명령에도 그대로 넣는다.
+    # 안 넣으면 미리보기는 이 폴더를 보여주고, 복사한 명령은 레시피에 적힌
+    # 원래 폴더(예: 진짜 다운로드 폴더)를 --apply 로 정리해 버린다.
+    root_opt = f" --root {args.root}" if getattr(args, "root", None) else ""
     if apply:
         print("  되돌리려면:")
         print(f"      organize undo --root {roots[0]}")
     else:
         print("  실제로 실행하려면:")
-        print(f"      organize run {args.recipe} --apply")
+        print(f"      organize run {args.recipe}{root_opt} --apply")
         if not args.verbose:
             print("\n  무엇이 어디로 가는지 전부 보려면:")
-            print(f"      organize preview {args.recipe} --verbose")
+            print(f"      organize preview {args.recipe}{root_opt} --verbose")
     return 0
 
 
