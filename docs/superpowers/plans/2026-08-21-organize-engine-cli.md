@@ -3496,27 +3496,9 @@ def _member_mtime(info: zipfile.ZipInfo) -> float:
         return 0.0
 
 
-def _unique(name: str, taken: set[str]) -> str:
-    """이미 있는 이름이면 `_(1)` 을 붙인다.
-
-    **대소문자를 구분하지 않고 본다.** 이 도구의 주 사용 환경은 윈도우이고,
-    윈도우 파일 시스템은 `A.txt` 와 `a.txt` 를 같은 파일로 본다. 구분해서
-    처리하면 압축 안에 둘 다 있을 때 하나가 다른 하나를 덮어써 사라진다.
-    리눅스에서는 `_(1)` 이 하나 더 붙을 뿐 잃는 것이 없다.
-    """
-    if name.casefold() not in taken:
-        return name
-    stem, suffix = Path(name).stem, Path(name).suffix
-    n = 1
-    while f"{stem}_({n}){suffix}".casefold() in taken:
-        n += 1
-    return f"{stem}_({n}){suffix}"
-
-
 def build(ctx: Context, cfg: BlockConfig) -> Plan:
     plan = Plan()
     out_dir = dest_folder(ctx, cfg.out, block=BLOCK) if cfg.out else ctx.root
-    taken = {e.path.name.casefold() for e in ctx.files_at(cfg.out)}
 
     for entry in ctx.files_at(cfg.target):
         if entry.ext != ".zip" or entry.virtual:
@@ -3545,8 +3527,10 @@ def build(ctx: Context, cfg: BlockConfig) -> Plan:
             if not leaf or leaf in (".", "..") or ".." in PurePosixPath(name).parts:
                 plan.skipped.append((entry.path, f"압축 안의 경로가 대상 폴더를 벗어남: {name}"))
                 continue
-            final = _unique(leaf, taken)
-            taken.add(final.casefold())
+            # Context 의 이름표를 쓴다. 자기만의 표를 들면 route/by_date 가
+            # 같은 폴더에 쓸 때 서로를 못 봐서 미리보기에 같은 목적지가 두 번
+            # 나온다 — 실측했다.
+            final = ctx.claim_name(cfg.out, leaf)
             plan.actions.append(Action(
                 kind="extract", src=src, dst=out_dir / final,
                 reason=f"{entry.name} 에서 꺼냄", block=BLOCK,

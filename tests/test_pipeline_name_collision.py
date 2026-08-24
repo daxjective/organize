@@ -98,3 +98,37 @@ def test_execution_moves_both_files_with_no_failures(tmp_path):
     for f in finals:
         assert f.parent.parent == root / "02_Media"    # 연도 폴더 밑에 있다
         assert f.exists()
+
+
+def test_unzip_and_route_share_one_name_ledger(tmp_path):
+    """세 블록이 같은 폴더에 쓸 때 미리보기에 같은 목적지가 두 번 나오면 안 된다.
+
+    `unzip` 이 자기만의 이름표를 들고 있던 시절, `route → unzip → route` 처럼
+    체인이 길어지면 route 가 unzip 이 꺼낼 파일을 못 보고 같은 이름을 골랐다.
+    실행기가 `claim_path` 로 수습해서 파일이 사라지지는 않았지만, 미리보기가
+    거짓말을 했다 — 이 도구의 핵심 약속이 깨진다.
+    """
+    import zipfile
+
+    (tmp_path / "가").mkdir()
+    (tmp_path / "나").mkdir()
+    (tmp_path / "가" / "문서.pdf").write_bytes(b"FIRST")
+    (tmp_path / "나" / "문서.pdf").write_bytes(b"SECOND")
+    with zipfile.ZipFile(tmp_path / "묶음.zip", "w") as z:
+        z.writestr(zipfile.ZipInfo("문서.pdf", date_time=(2024, 1, 1, 0, 0, 0)),
+                   b"ZIPPED")
+
+    built = build_plan(
+        tmp_path,
+        [{"block": "route", "target": "가", "dest": "", "profile": "desktop"},
+         {"block": "unzip", "dest": "01_Docs"},
+         {"block": "route", "target": "나", "dest": "", "profile": "desktop"}],
+        today=TODAY, run_id="r1", profiles_dir=_profiles_dir(tmp_path), now=1e12)
+
+    targets = [a.dst for a in built.plan.actions if a.kind in ("move", "extract")]
+    assert len(targets) == len(set(targets)), "미리보기에 같은 목적지가 두 번 나온다"
+
+    result = execute(built)
+    assert result.failed == []
+    landed = sorted(p.read_bytes() for p in (tmp_path / "01_Docs").iterdir())
+    assert landed == [b"FIRST", b"SECOND", b"ZIPPED"]
