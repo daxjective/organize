@@ -248,3 +248,33 @@ def test_valid_dedup_recipe_still_works(tmp_path, profiles_dir):
     built = build_plan(root, [{"block": "dedup", "when": {"larger_than": "1"}}],
                        today=TODAY, run_id="r1", profiles_dir=profiles_dir)
     assert dict(built.per_block)["dedup"] >= 0  # 오류 없이 통과하는 것 자체가 목적
+
+
+def test_broken_regex_in_a_recipe_when_is_rejected_at_plan_time(tmp_path, profiles_dir):
+    """Critical #2 — 계획 시점에 막아야 한다. 실행 중에 터지면 이미 옮긴
+    폴더의 되돌리기 안내가 통째로 사라진다."""
+    root = tmp_path / "작업"
+    root.mkdir()
+    with pytest.raises(OrganizeError) as ex:
+        build_plan(root, [{"block": "route", "profile": "desktop",
+                           "when": {"name_regex": "[불완전"}}],
+                   today=date(2026, 8, 21), run_id="r1", profiles_dir=profiles_dir)
+    assert "name_regex" in ex.value.message
+    assert "1번째" in ex.value.message
+
+
+def test_string_condition_value_in_a_recipe_is_normalized_not_walked(tmp_path, profiles_dir):
+    """Important #1 — 레시피의 `when` 값도 타입을 봐야 한다."""
+    root = tmp_path / "작업"
+    root.mkdir()
+    (root / "보고서.pdf").write_bytes(b"A")
+    (root / "사진.png").write_bytes(b"B")
+    import os, time
+    past = time.time() - 3600
+    for p in root.iterdir():
+        os.utime(p, (past, past))
+    built = build_plan(root, [{"block": "route", "profile": "desktop",
+                               "when": {"ext": ".pdf"}}],
+                       today=date(2026, 8, 21), run_id="r1", profiles_dir=profiles_dir)
+    moved = [a for a in built.plan.actions if a.kind == "move"]
+    assert [a.src.name for a in moved] == ["보고서.pdf"]

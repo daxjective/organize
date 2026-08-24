@@ -486,3 +486,59 @@ def test_undo_bookkeeping_write_never_destroys_the_record(tmp_path, monkeypatch)
         undo(tmp_path)
     assert log.read_text(encoding="utf-8") == before, \
         "기록을 갈아끼우다 실패해도 이전 내용이 남아 있어야 한다"
+
+
+# --- 수정 라운드 2(최종 리뷰) — Important #2: 되돌린 뒤 빈 폴더가 남는데
+# "실패 0" 이라고 말했다. 조합 1092개 중 748개(68%)에서 났다. ---
+
+
+def test_undo_removes_the_intermediate_folders_the_run_created(tmp_path):
+    """`mkdir` Action 은 **잎 폴더 하나만** 담는데 실행기는
+    `mkdir(parents=True)` 로 중간 폴더까지 만들었다. 그 중간 폴더는 실행
+    기록에 없으니 undo 가 볼 수도 없었다 — `보관`, `02_Media/2023` 이 그렇게 남았다."""
+    src = tmp_path / "사진.jpg"
+    src.write_bytes(b"IMG")
+    run_plan(tmp_path, [
+        Action("mkdir", None, tmp_path / "보관" / "2023", "폴더", "by_date"),
+        Action("move", src, tmp_path / "보관" / "2023" / "사진.jpg", "이동", "by_date"),
+    ])
+    assert not src.exists()
+
+    result = undo(tmp_path)
+    assert not result.failed
+    assert src.read_bytes() == b"IMG"
+    assert not (tmp_path / "보관" / "2023").exists()
+    assert not (tmp_path / "보관").exists(), "중간 폴더도 우리가 만든 것이므로 치운다"
+
+
+def test_undo_keeps_a_folder_that_already_existed_before_the_run(tmp_path):
+    """비어 있다고 아무거나 지우면 안 된다 — **우리가 만든 것만** 지운다."""
+    (tmp_path / "보관").mkdir()                      # 사용자가 이미 만들어 둔 폴더
+    src = tmp_path / "사진.jpg"
+    src.write_bytes(b"IMG")
+    run_plan(tmp_path, [
+        Action("mkdir", None, tmp_path / "보관" / "2023", "폴더", "by_date"),
+        Action("move", src, tmp_path / "보관" / "2023" / "사진.jpg", "이동", "by_date"),
+    ])
+
+    undo(tmp_path)
+    assert not (tmp_path / "보관" / "2023").exists()
+    assert (tmp_path / "보관").is_dir(), "우리가 만든 폴더가 아니면 비어 있어도 남긴다"
+
+
+def test_undo_says_when_a_file_came_back_under_a_different_name(tmp_path):
+    """Minor #4 — 원래 자리를 쓸 수 없어 `a_(1).pdf` 로 돌려놓고도
+    "되돌림 5 · 실패 0" 이라고만 했다. 덮어쓰지 않는 것은 옳지만
+    이름이 바뀐 사실은 알려야 한다."""
+    src = tmp_path / "a.pdf"
+    src.write_bytes(b"DATA")
+    run_plan(tmp_path, [
+        Action("mkdir", None, tmp_path / "01_Docs", "폴더", "route"),
+        Action("move", src, tmp_path / "01_Docs" / "a.pdf", "이동", "route"),
+    ])
+    (tmp_path / "a.pdf").mkdir()                     # 원래 자리를 막는다
+
+    result = undo(tmp_path)
+    renamed = [r for r in result.done if r.get("renamed")]
+    assert renamed, "이름이 바뀐 사실이 결과에 남아야 한다"
+    assert renamed[0]["intended"] == str(tmp_path / "a.pdf")

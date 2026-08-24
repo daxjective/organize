@@ -13,14 +13,31 @@
 git clone <이 저장소>
 cd Automation
 
-python -m organize doctor          환경 점검. 부족한 것을 알려준다
-python -m organize preview 바탕화면  미리보기 (파일을 건드리지 않는다)
-python -m organize run 바탕화면 --apply   실제 실행
-python -m organize undo            방금 실행을 되돌린다
+python -m organize doctor                     환경 점검. 부족한 것을 알려준다
+python -m organize list                       쓸 수 있는 레시피를 보여준다
+python -m organize preview desktop            미리보기 (파일을 건드리지 않는다)
+python -m organize run desktop --apply        실제 실행
+python -m organize undo --root @desktop       방금 실행을 되돌린다
 ```
 
+`undo` 는 **어느 폴더를 되돌릴지** 알아야 한다. `--root <폴더>` 로 짚어 주거나,
+방금 실행한 레시피 이름을 `--recipe <레시피>` 로 준다. 실행이 끝나면 화면 맨 끝에
+그대로 복사해 쓸 수 있는 되돌리기 명령이 나온다.
+
+싣고 있는 레시피는 세 개다.
+
+| 레시피 | 대상 폴더 | 하는 일 |
+|---|---|---|
+| `desktop` | `@desktop` (바탕화면) | 중복 치우기 → 종류별 폴더로 분류 |
+| `downloads` | `@downloads` (다운로드) | 중복 치우기 → 종류별 폴더로 분류 |
+| `photos` | `@pictures` (사진) | 사진/캡처/영상으로 나눈 뒤 사진은 연도별로 |
+
+`photos` 의 사진·캡처 구분은 EXIF 촬영정보로 한다 — **`Pillow` 가 없으면 그 두 규칙은
+아무 파일도 분류하지 못한다.** `organize doctor` 가 그 사실을 알려준다.
+
 필요한 것은 **Python 3.11 이상**뿐이다. 외부 패키지는 없다.
-(`Pillow` 가 있으면 사진의 촬영일을 읽는다. 없어도 파일명·수정시각으로 동작한다.)
+(`Pillow` 는 선택이다 — 있으면 사진의 촬영일과 촬영기기를 읽는다. 없으면 날짜는
+파일명·수정시각으로 대체하지만, **사진/캡처 구분은 대체가 없다.**)
 
 `config.local.json`(이 PC 의 폴더 위치)은 저장소에 포함되지 않는다.
 없어도 동작하며, 백업 드라이브 같은 위치를 추가하고 싶을 때만 지정한다.

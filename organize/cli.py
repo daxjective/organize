@@ -25,7 +25,9 @@ _ALIAS_LABEL = {"home": "홈", "desktop": "바탕화면", "downloads": "다운�
 
 def _count_files(path: Path) -> str:
     if not path.is_dir():
-        return "없음!"
+        # "파일 없음!" 은 바로 옆 줄의 "파일 0" 과 같은 뜻으로 읽힌다.
+        # 실제로는 폴더 자체가 없다는 뜻이므로 그대로 말한다.
+        return "— 폴더 없음"
     try:
         return str(sum(1 for p in path.iterdir() if p.is_file()))
     except OSError:
@@ -114,6 +116,8 @@ def _run_recipe(recipe, args, *, apply: bool, label: str) -> int:
 
     applied_roots: list[Path] = []     # apply 가 기록까지 완전히 끝난 root — 되돌리기 제안 대상
     failed_roots: list[Path] = []      # 예외로 중단됐거나 기록을 못 남긴 root
+    failed_items = 0                   # root 는 살았지만 항목 단위로 실패한 것
+    planned_actions = 0                # 계획된 동작 총합 — 0건이면 권할 명령이 없다
 
     for root in roots:
         print(f"\n■ {root}")
@@ -136,6 +140,7 @@ def _run_recipe(recipe, args, *, apply: bool, label: str) -> int:
             built = build_plan(root, recipe.steps, today=date.today(), run_id=run_id,
                                profiles_dir=repo_root() / "profiles")
             _print_plan(built, args.verbose)
+            planned_actions += len(built.plan.actions)
 
             if not apply:
                 continue
@@ -172,6 +177,17 @@ def _run_recipe(recipe, args, *, apply: bool, label: str) -> int:
             print(f"  기록: {log}")
             for row in result.failed:
                 print(f"    실패  {Path(row['src']).name} — {row['why']}")
+                # executor 가 hint 를 일부러 보존하는데(errors.py 가 메시지와
+                # 힌트를 같이 들고 다니게 만든 이유) 화면에서 버리면 그 설계가
+                # 사용자에게 닿지 않는다. 실행 기록에는 답이 들어 있는데
+                # 사용자만 못 보는 상태였다.
+                if row.get("hint"):
+                    print(f"          → {row['hint']}")
+            for row in result.stale:
+                # 개수만 알리면 어떤 파일인지 끝내 알 수 없다(--verbose 도
+                # 계획만 보여줄 뿐 결과는 안 보여준다).
+                print(f"    건너뜀  {Path(row['src']).name} — {row['why']}")
+            failed_items += len(result.failed)
             applied_roots.append(root)
 
         except OrganizeError as e:
@@ -227,6 +243,14 @@ def _run_recipe(recipe, args, *, apply: bool, label: str) -> int:
                       + ", ".join(str(r) for r in failed_roots) + ")")
         else:
             print("  되돌릴 수 있는 실행이 없습니다.")
+    elif not planned_actions:
+        # 방금 안 된다고 말한 명령을, 또는 아무 일도 안 일어날 명령을 그대로
+        # 권하면 안 된다. 실측했다 — 없는 블록 이름으로 실패한 미리보기가
+        # `organize do 없는것 --apply` 를 그대로 제안했다.
+        if failed_roots:
+            print("  문제를 고친 뒤 다시 미리보기부터 해 주세요.")
+        else:
+            print("  정리할 것이 없습니다. 실행할 필요도 없습니다.")
     else:
         print("  실제로 실행하려면:")
         if is_do:
@@ -239,7 +263,9 @@ def _run_recipe(recipe, args, *, apply: bool, label: str) -> int:
                 print(f"      organize do {label}{root_opt} --verbose")
             else:
                 print(f"      organize preview {label}{root_opt} --verbose")
-    return 1 if failed_roots else 0
+    # 항목 하나가 실패해도 종료 코드에 드러나야 한다 — 자동화(배치 파일·작업
+    # 스케줄러)가 "다 됐다" 로 읽으면 안 된다.
+    return 1 if (failed_roots or failed_items) else 0
 
 
 def _cmd_undo(args) -> int:
@@ -279,8 +305,17 @@ def _cmd_undo(args) -> int:
             continue
 
         print(f"  되돌림 {len(result.done)} · 실패 {len(result.failed)}")
+        for row in result.done:
+            if row.get("renamed"):
+                # 원래 자리에 다른 것이 생겨서 비켜 놓았다. 덮어쓰지 않은 것은
+                # 옳지만, 이름이 바뀐 사실을 안 알리면 사용자는 제자리로 온 줄 안다.
+                print(f"    이름 바뀜  {Path(row['intended']).name}"
+                      f" → {Path(row['final']).name}"
+                      f"  (원래 자리에 다른 것이 있었습니다)")
         for row in result.failed:
             print(f"    실패  {row['why']}")
+            if row.get("hint"):
+                print(f"          → {row['hint']}")
         if result.failed:
             # 항목별로 되돌림 여부를 기록해 두므로, 원인을 고치고 다시 부르면
             # 못 되돌린 것만 이어서 처리한다.
@@ -397,8 +432,15 @@ def _cmd_doctor(args) -> int:
         import PIL  # noqa: F401
         print("  Pillow          있음              OK   EXIF 촬영일을 읽습니다")
     except ImportError:
+        # "대체합니다" 는 `by_date` 에만 참이다. `route --profile photos` 는
+        # **대체가 없다** — has_exif_camera 가 판정 불가(None)를 주면 그 규칙은
+        # 불일치로 처리되므로, 사진·캡처 규칙에 걸리는 파일이 하나도 없다.
+        # 실측했다: 영상만 옮겨지고 사진1.jpg·캡처.png 는 그대로 남았다.
+        # 사용자가 그 이유를 알 방법이 doctor 뿐이다.
         print("  Pillow          없음              선택  EXIF 촬영일을 못 읽습니다.")
-        print("                                        파일명과 수정시각으로 대체합니다.")
+        print("                                        by_date 는 파일명과 수정시각으로 대체합니다.")
+        print("                                        photos 프로파일의 '사진'·'캡처' 규칙은")
+        print("                                        아무 파일도 분류하지 못합니다(대체 없음).")
         print("                                        쓰려면: pip install Pillow")
 
     print("\n  폴더 위치")
@@ -558,7 +600,10 @@ def _quoted(value: str) -> str:
     윈도우 `cmd.exe` 가 작은따옴표를 따옴표로 보지 않기 때문이다. 큰따옴표는
     cmd.exe · PowerShell · 리눅스 셸에서 모두 통한다.
     """
-    return f'"{value}"' if any(c.isspace() for c in value) else value
+    # 공백뿐 아니라 셸이 펼치는 글자(*, ?, [ ])도 감싼다. 실측 — pdf 가 있는
+    # 폴더에서 `--only *.pdf` 를 그대로 붙여넣으면 리눅스 셸이
+    # `--only invoice.pdf report.pdf` 로 펼쳐서 argparse 오류가 났다.
+    return f'"{value}"' if any(c.isspace() or c in '*?[]' for c in value) else value
 
 
 def _do_label(args) -> str:
@@ -582,6 +627,27 @@ def _do_label(args) -> str:
     return " ".join(parts)
 
 
+def _normalize_ext(value: str) -> str:
+    """`--only` 값을 확장자 하나로 정규화한다. `*.pdf` · `.pdf` · `pdf` 를 모두 받는다.
+
+    예전에는 `Path(args.only).suffix.lower()` 하나로 뽑았다. 그런데
+    `Path(".pdf").suffix` 도 `Path("pdf").suffix` 도 **빈 문자열**이라
+    `when={"ext": [""]}` 가 되고, 확장자 없는 파일만 걸렸다 — 사용자가 가장
+    먼저 쳐 볼 두 형태가 둘 다 **소리 없이 0건**이었다. 실측했다.
+    """
+    text = value.strip().lstrip("*")
+    if "/" in text or "\\" in text:
+        raise OrganizeError(
+            f"--only 에는 확장자만 적어 주세요: {value}",
+            hint='예: --only pdf · --only .pdf · --only "*.pdf"')
+    ext = Path(text).suffix.lower() or ("." + text.lower().lstrip("."))
+    if ext == "." or not ext.strip("."):
+        raise OrganizeError(
+            f"--only 값에서 확장자를 찾지 못했습니다: {value}",
+            hint='예: --only pdf · --only .pdf · --only "*.pdf"')
+    return ext
+
+
 def _cmd_do(args) -> int:
     step: dict = {"block": args.block}
     if args.profile:
@@ -591,7 +657,7 @@ def _cmd_do(args) -> int:
     if args.dest:
         step["dest"] = args.dest
     if args.only:
-        step["when"] = {"ext": [Path(args.only).suffix.lower()]}
+        step["when"] = {"ext": [_normalize_ext(args.only)]}
 
     recipe = Recipe(name=f"즉석 {args.block}", roots=[args.root], steps=[step])
     fake = argparse.Namespace(recipe=None, root=args.root, verbose=args.verbose,
@@ -641,7 +707,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--profile")
     sp.add_argument("--layout")
     sp.add_argument("--dest")
-    sp.add_argument("--only", help='확장자만 고릅니다. 예: "*.md"')
+    sp.add_argument("--only",
+                    help='확장자 하나만 고릅니다. md · .md · "*.md" 모두 됩니다')
     sp.add_argument("--apply", action="store_true")
     sp.add_argument("--verbose", action="store_true")
     sp.set_defaults(func=_cmd_do)

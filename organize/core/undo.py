@@ -181,8 +181,15 @@ def undo(root: Path, run_id: str | None = None) -> ExecResult:
 
                 final = Path(item["final"])
                 if kind in ("move", "quarantine"):
-                    back = move_file(final, Path(item["src"]))
-                    result.done.append({"kind": "restore", "src": str(final), "final": str(back)})
+                    intended = Path(item["src"])
+                    back = move_file(final, intended)
+                    # 원래 자리를 쓸 수 없으면 move_file 이 `a_(1).pdf` 로 비켜
+                    # 놓는다(덮어쓰지 않는 것이 옳다). 그 사실을 안 알리면
+                    # "되돌림 5 · 실패 0" 만 보고 사용자는 제자리로 온 줄 안다.
+                    result.done.append({
+                        "kind": "restore", "src": str(final), "final": str(back),
+                        "intended": str(intended), "renamed": back != intended,
+                    })
                 elif kind == "extract":
                     # 압축을 푼 파일은 되돌릴 자리가 없다(원본은 zip 안이다).
                     # 그대로 두면 되돌린 뒤에도 폴더가 되돌리기 전보다 어수선해지므로

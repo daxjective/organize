@@ -1,0 +1,8 @@
+{
+  "name": "사진 정리",
+  "roots": ["@pictures"],
+  "steps": [
+    { "block": "route", "profile": "photos" },
+    { "block": "by_date", "target": "사진", "layout": "{year}" }
+  ]
+}

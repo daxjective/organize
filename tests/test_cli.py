@@ -527,3 +527,119 @@ def test_undo_by_run_id_on_a_corrupted_record_is_korean_not_a_traceback(project,
     assert code == 1
     assert "JSONDecodeError" not in out and "Traceback" not in out
     assert "손상" in out or "읽지" in out
+
+
+# ---------------------------------------------------------------------------
+# 수정 라운드 2(최종 리뷰) — Important #2/#3/#4/#7, Minor #3/#4.
+# ---------------------------------------------------------------------------
+
+
+def test_undo_after_a_nested_layout_leaves_no_empty_folders(project, tmp_path, capsys):
+    """Important #2 — `do by_date --layout '{year}/{month}'` 뒤 되돌리면
+    연도 폴더가 비어 있는 채 남았다. 그런데 "실패 0" 으로 끝났다."""
+    _, work = project
+    old_file(work / "사진_2023-05-04.jpg")
+    old_file(work / "사진_2024-11-11.jpg")
+
+    assert cli.main(["do", "by_date", "--root", str(work),
+                     "--layout", "{year}/{month}", "--apply"]) == 0
+    assert cli.main(["undo", "--root", str(work)]) == 0
+    capsys.readouterr()
+
+    left = sorted(p.name for p in work.iterdir() if p.name != ".organize")
+    assert left == ["사진_2023-05-04.jpg", "사진_2024-11-11.jpg"], \
+        f"되돌린 뒤 없던 폴더가 남았다: {left}"
+
+
+def test_a_failed_item_shows_its_hint_and_makes_the_exit_code_nonzero(
+        project, capsys, monkeypatch):
+    """Important #3 — executor 는 hint 를 일부러 보존하는데 CLI 가 그걸 버렸다.
+    그리고 파일 하나가 안 옮겨졌는데 **종료 코드가 0** 이었다."""
+    _, work = project
+    old_file(work / "보고서.pdf")
+
+    from organize.errors import OrganizeError
+
+    def boom(src, dst):
+        raise OrganizeError("파일을 만들 자리를 잡지 못했습니다: 보고서.pdf",
+                            hint="대상 폴더의 쓰기 권한을 확인해 주세요.")
+
+    import organize.core.executor as ex_mod
+    monkeypatch.setattr(ex_mod, "move_file", boom)
+
+    code = cli.main(["run", "t", "--apply"])
+    out = capsys.readouterr().out
+
+    assert "대상 폴더의 쓰기 권한을 확인해 주세요." in out, "hint 를 화면에서 버리면 안 된다"
+    assert code == 1, "항목이 실패했으면 종료 코드에 드러나야 한다"
+
+
+def test_a_failed_preview_does_not_suggest_apply(project, tmp_path, capsys):
+    """Important #4 — 방금 안 된다고 말한 명령을 그대로 권하면 안 된다."""
+    repo, work = project
+    write_recipe(repo, "없는블록", [work], [{"block": "없는것"}])
+    old_file(work / "보고서.pdf")
+
+    assert cli.main(["preview", "없는블록"]) == 1
+    out = capsys.readouterr().out
+    assert "--apply" not in out, "실패한 미리보기가 --apply 를 권하면 안 된다"
+
+
+def test_a_preview_with_nothing_to_do_does_not_suggest_apply(project, capsys):
+    """할 일이 0건인데 "실제로 실행하려면" 을 권하는 것도 같은 부류다."""
+    _, work = project
+    assert cli.main(["preview", "t"]) == 0
+    out = capsys.readouterr().out
+    assert "--apply" not in out
+
+
+@pytest.mark.parametrize("only", ["*.pdf", ".pdf", "pdf", "*.PDF"])
+def test_do_only_accepts_the_forms_a_person_would_type(project, capsys, only):
+    """Important #7 — `--only .pdf` 와 `--only pdf` 가 조용히 0건이었다.
+    Path(".pdf").suffix 도 Path("pdf").suffix 도 빈 문자열이기 때문이다."""
+    _, work = project
+    old_file(work / "보고서.pdf")
+    old_file(work / "사진.png")
+    cli.main(["do", "route", "--root", str(work), "--profile", "desktop", "--only", only])
+    assert "이동 1" in capsys.readouterr().out
+
+
+def test_do_only_rejects_something_that_is_not_an_extension(project, capsys):
+    _, work = project
+    assert cli.main(["do", "route", "--root", str(work),
+                     "--profile", "desktop", "--only", "폴더/이름.pdf"]) == 1
+    assert "확장자" in capsys.readouterr().out
+
+
+def test_stale_items_are_listed_not_just_counted(project, capsys, monkeypatch):
+    """Minor #3 — `실패` 는 한 줄씩 찍는데 `건너뜀 3` 은 어떤 파일인지
+    끝내 안 나왔다."""
+    _, work = project
+    old_file(work / "보고서.pdf")
+
+    from organize.core.executor import ExecResult
+    real_execute = cli.execute
+
+    def with_stale(built):
+        result = real_execute(built)
+        result.stale.append({"kind": "move", "src": str(work / "다른파일.pdf"),
+                             "why": "미리보기 이후에 파일이 바뀌었습니다"})
+        return result
+
+    monkeypatch.setattr(cli, "execute", with_stale)
+    cli.main(["run", "t", "--apply"])
+    out = capsys.readouterr().out
+    assert "다른파일.pdf" in out, "건너뛴 파일이 무엇인지 알려줘야 한다"
+
+
+def test_undo_tells_the_user_when_a_file_came_back_renamed(project, capsys):
+    """Minor #4 — 원래 자리를 못 써서 다른 이름으로 돌려놓고 "실패 0" 이라고만 했다."""
+    _, work = project
+    old_file(work / "보고서.pdf")
+    cli.main(["run", "t", "--apply"])
+    capsys.readouterr()
+    (work / "보고서.pdf").mkdir()          # 원래 자리를 막는다
+
+    cli.main(["undo", "--root", str(work)])
+    out = capsys.readouterr().out
+    assert "이름" in out and "보고서_(1).pdf" in out

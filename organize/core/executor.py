@@ -60,6 +60,32 @@ def _guard_within_root(dst: Path, real_root: str, *, block: str) -> None:
         )
 
 
+def _mkdir_recording(dst: Path) -> list[Path]:
+    """폴더를 만들고 **이번에 새로 만든 것만** 바깥쪽부터 차례로 돌려준다.
+
+    `mkdir(parents=True)` 는 중간 폴더까지 만드는데, Action 은 **잎 폴더
+    하나만** 담는다. 그래서 `보관/2023` 을 만들면 실행 기록에 `보관/2023` 만
+    남고 `보관` 은 아무 데도 안 적혔다. 되돌려도 그 중간 폴더가 빈 채로
+    남는데 도구는 "실패 0" 이라고 말한다 — 조합 1092개 중 748개(68%)에서
+    실측된 잔해다.
+
+    **이미 있던 폴더는 담지 않는다.** 사용자가 미리 만들어 둔 폴더를
+    되돌리기가 지워 버리면 그건 우리가 한 일을 되돌리는 게 아니다.
+
+    바깥쪽부터 담는 이유: 되돌리기는 실행 기록을 **역순으로** 재생하므로,
+    이 순서로 담아야 안쪽 폴더부터 지운다.
+    """
+    created: list[Path] = []
+    probe = dst
+    while not probe.exists():
+        created.append(probe)
+        if probe.parent == probe:
+            break
+        probe = probe.parent
+    dst.mkdir(parents=True, exist_ok=True)
+    return list(reversed(created))
+
+
 def execute(built: BuiltPlan) -> ExecResult:
     result = ExecResult()
     remap: dict[Path, Path] = {}          # 계획된 경로 -> 실제로 놓인 경로
@@ -71,8 +97,8 @@ def execute(built: BuiltPlan) -> ExecResult:
         try:
             if a.kind == "mkdir":
                 _guard_within_root(a.dst, real_root, block=a.block)
-                a.dst.mkdir(parents=True, exist_ok=True)
-                result.done.append({"kind": "mkdir", "final": str(a.dst)})
+                for folder in _mkdir_recording(a.dst):
+                    result.done.append({"kind": "mkdir", "final": str(folder)})
                 continue
 
             src = remap.get(a.src, a.src)

@@ -195,3 +195,55 @@ def test_default_rule_as_the_only_or_last_rule_is_fine(tmp_path):
     )
     p = load_profile(toml)
     assert route_target(entry("무엇.xyz"), p, TODAY) == "99_Unsorted"
+
+
+# --- 수정 라운드 2(최종 리뷰) — Important #1: 조건 **값의 타입**을 아무도 안 봤다. ---
+
+
+def test_name_contains_given_as_a_bare_string_is_not_walked_letter_by_letter(tmp_path):
+    """`name_contains = "report"`(대괄호 누락) 하나가 폴더를 통째로 옮겼다.
+    any(w in name for w in "report") 가 **글자 단위로** 순회해서 `.jpg` 의 'p'
+    하나에도 걸렸기 때문이다. 실측한 결함이다."""
+    assert matches(entry("report_final.pdf"), {"name_contains": "report"}, TODAY)
+    assert not matches(entry("가족사진.jpg"), {"name_contains": "report"}, TODAY)
+    assert not matches(entry("노래.mp3"), {"name_contains": "report"}, TODAY)
+
+
+def test_ext_given_as_a_bare_string_still_matches(tmp_path):
+    """반대 방향 — `ext = ".pdf"` 는 ['.','p','d','f'] 가 되어 **아무것도 안 걸렸다.**"""
+    assert matches(entry("보고서.pdf"), {"ext": ".pdf"}, TODAY)
+    assert not matches(entry("사진.png"), {"ext": ".pdf"}, TODAY)
+
+
+def test_empty_condition_list_is_rejected_instead_of_matching_nothing(tmp_path):
+    """`ext = []` 는 조용히 0건이 된다 — 조용한 무작동이다."""
+    with pytest.raises(OrganizeError) as ex:
+        matches(entry("보고서.pdf"), {"ext": []}, TODAY)
+    assert "비어" in ex.value.message
+
+
+@pytest.mark.parametrize("bad", [5, {"a": 1}, [1, 2], None])
+def test_condition_value_of_a_wrong_type_is_rejected_in_korean(bad):
+    with pytest.raises(OrganizeError) as ex:
+        matches(entry("보고서.pdf"), {"name_contains": bad}, TODAY)
+    assert "이해하지 못했습니다" in ex.value.message
+
+
+def test_profile_with_a_bare_string_condition_loads_and_behaves(tmp_path):
+    """레시피·프로파일 어느 쪽에 적어도 같게 동작해야 한다."""
+    toml = tmp_path / "t.toml"
+    toml.write_text('name = "t"\n[[rules]]\n to = "보고서"\n name_contains = "report"\n',
+                    encoding="utf-8")
+    p = load_profile(toml)
+    assert route_target(entry("report_final.pdf"), p, TODAY) == "보고서"
+    assert route_target(entry("가족사진.jpg"), p, TODAY) is None
+
+
+def test_profile_with_a_broken_regex_is_rejected_before_any_file_is_touched(tmp_path):
+    toml = tmp_path / "t.toml"
+    toml.write_text('name = "t"\n[[rules]]\n to = "x"\n name_regex = "[불완전"\n',
+                    encoding="utf-8")
+    with pytest.raises(OrganizeError) as ex:
+        load_profile(toml)
+    assert "name_regex" in ex.value.message
+    assert "re.error" not in ex.value.message

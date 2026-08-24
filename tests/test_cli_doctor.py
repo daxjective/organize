@@ -308,3 +308,32 @@ def test_doctor_reports_records_it_could_not_read(project, capsys):
     out = capsys.readouterr().out
     assert "20260101-000000.json" in out, "어느 파일인지 알려줘야 한다"
     assert "읽지" in out or "손상" in out
+
+
+def test_doctor_says_exactly_what_stops_working_without_pillow(project, capsys, monkeypatch):
+    """Important #6 — Pillow 가 없으면 `photos` 프로파일의 사진/캡처 규칙이
+    **하나도 안 걸린다.** 그런데 doctor 는 "파일명과 수정시각으로 대체합니다"
+    라고만 했다 — 그 대체는 `by_date` 에만 참이고 `route --profile photos` 에는
+    대체가 없다. 사용자는 사진 정리가 아무것도 안 하는 이유를 알 길이 없다."""
+    import sys
+    monkeypatch.setitem(sys.modules, "PIL", None)      # import PIL 이 ImportError 를 낸다
+
+    assert cli.main(["doctor"]) == 0
+    out = capsys.readouterr().out
+    assert "Pillow          없음" in out
+    assert "photos" in out
+    assert "캡처" in out
+
+
+def test_doctor_says_folder_missing_not_file_missing(project, tmp_path, capsys, monkeypatch):
+    """Minor #6 — 폴더가 아예 없을 때와 파일이 0개일 때를 나란히 찍는데
+    "파일 없음!" 이 후자("파일 0")로 읽힌다. "폴더 없음" 이 맞다."""
+    _, work = project
+    gone = tmp_path / "없는폴더"
+    monkeypatch.setattr(userconfig, "builtin_path",
+                        lambda name: work if name == "downloads"
+                        else (gone if name == "desktop" else None))
+    cli.main(["doctor"])
+    out = capsys.readouterr().out
+    assert "폴더 없음" in out
+    assert "파일 없음!" not in out
