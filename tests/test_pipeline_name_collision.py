@@ -132,3 +132,36 @@ def test_unzip_and_route_share_one_name_ledger(tmp_path):
     assert result.failed == []
     landed = sorted(p.read_bytes() for p in (tmp_path / "01_Docs").iterdir())
     assert landed == [b"FIRST", b"SECOND", b"ZIPPED"]
+
+
+def test_two_dedup_steps_do_not_send_the_same_name_to_one_trash_folder(tmp_path):
+    """격리 폴더 이름도 이름표를 거쳐야 한다.
+
+    target 이 다른 dedup 단계가 둘이면 같은 이름의 사본을 같은 격리 폴더로
+    보낸다. 이름표를 안 거치면 Plan 에 같은 목적지가 두 번 나온다 —
+    실행기가 수습해도 미리보기는 이미 거짓말을 한 뒤다.
+    """
+    same = b"SAME-CONTENT-FOR-DEDUP"
+    for rel in ["가/보고서.pdf", "가/보고서 (1).pdf",
+                "나/보고서.pdf", "나/보고서 (1).pdf"]:
+        target = tmp_path / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(same)
+
+    built = build_plan(tmp_path,
+                       [{"block": "dedup", "target": "가"},
+                        {"block": "dedup", "target": "나"}],
+                       today=TODAY, run_id="r1",
+                       profiles_dir=_profiles_dir(tmp_path), now=1e12)
+
+    targets = [a.dst for a in built.plan.actions if a.kind == "quarantine"]
+    assert len(targets) == 2
+    assert len(set(targets)) == 2, "같은 격리 경로가 두 번 나온다"
+
+    result = execute(built)
+    assert result.failed == []
+    assert (tmp_path / "가" / "보고서.pdf").exists()      # 원본은 남는다
+    assert (tmp_path / "나" / "보고서.pdf").exists()
+    trashed = sorted(p.name for p in (tmp_path / ".organize" / "trash" / "r1").iterdir()
+                     if p.suffix == ".pdf")
+    assert trashed == ["보고서 (1).pdf", "보고서 (1)_(1).pdf"]

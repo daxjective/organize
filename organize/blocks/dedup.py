@@ -36,6 +36,7 @@ from organize.core.hashing import find_duplicate_groups, pick_original
 from organize.profiles import matches
 
 BLOCK = "dedup"
+_TRASH_REL = ".organize/trash/{run_id}"
 
 
 def _within_target(rel: str, target: str) -> bool:
@@ -100,7 +101,10 @@ def build(ctx: Context, cfg: BlockConfig) -> Plan:
             plan.actions.append(Action(
                 kind="quarantine",
                 src=ctx.current_path(other),
-                dst=ctx.trash_dir / ctx.current_path(other).name,
+                # 격리 폴더도 이름이 겹칠 수 있다. target 이 다른 dedup 단계가
+                # 둘이면 같은 이름을 같은 격리 폴더로 보낸다 — 실측했다.
+                dst=ctx.trash_dir / ctx.claim_name(_TRASH_REL.format(run_id=ctx.run_id),
+                                                   ctx.current_path(other).name),
                 reason=f"내용이 같음 · 남긴 파일 {ctx.current_path(keeper).name}",
                 block=BLOCK,
             ))

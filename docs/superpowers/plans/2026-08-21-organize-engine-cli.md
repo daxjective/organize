@@ -2444,7 +2444,13 @@ class Context:
         보장하지는 않는다. 실행기가 `claim_path` 로 다시 잡는다. 여기서 하는
         일은 **한 Plan 안에서의 애매함을 없애는 것**이다.
         """
-        taken = self._claimed.setdefault(rel, {
+        # 같은 폴더를 가리키는 문자열이 여러 가지다 — "02_Media", "02_Media/",
+        # "./02_Media", 그리고 윈도우에서는 "02_media" 까지. 정규화하지 않으면
+        # 한 폴더에 이름표가 여러 개 생겨 서로를 못 본다. 실측했다.
+        key = os.path.normpath(rel.replace("\\", "/") or ".").casefold()
+        if key == ".":
+            key = ""
+        taken = self._claimed.setdefault(key, {
             e.path.name.casefold() for e in self.files_at(rel)})
         stem, suffix = Path(name).stem, Path(name).suffix
         candidate, n = name, 0
@@ -3222,6 +3228,7 @@ from organize.core.hashing import find_duplicate_groups, pick_original
 from organize.profiles import matches
 
 BLOCK = "dedup"
+_TRASH_REL = ".organize/trash/{run_id}"
 
 
 def _within_target(rel: str, target: str) -> bool:
@@ -3296,7 +3303,10 @@ def build(ctx: Context, cfg: BlockConfig) -> Plan:
             plan.actions.append(Action(
                 kind="quarantine",
                 src=ctx.current_path(other),
-                dst=ctx.trash_dir / ctx.current_path(other).name,
+                # 격리 폴더도 이름이 겹칠 수 있다. target 이 다른 dedup 단계가
+                # 둘이면 같은 이름을 같은 격리 폴더로 보낸다 — 실측했다.
+                dst=ctx.trash_dir / ctx.claim_name(_TRASH_REL.format(run_id=ctx.run_id),
+                                                   ctx.current_path(other).name),
                 reason=f"내용이 같음 · 남긴 파일 {ctx.current_path(keeper).name}",
                 block=BLOCK,
             ))
@@ -3542,7 +3552,9 @@ def build(ctx: Context, cfg: BlockConfig) -> Plan:
 
         if extracted and cfg.options.get("delete_original", False):
             plan.actions.append(Action(
-                kind="quarantine", src=src, dst=ctx.trash_dir / entry.name,
+                kind="quarantine", src=src,
+                dst=ctx.trash_dir / ctx.claim_name(
+                    f".organize/trash/{ctx.run_id}", entry.name),
                 reason=f"압축을 푼 원본 ({extracted}개 꺼냄)", block=BLOCK,
             ))
     return plan

@@ -10,6 +10,7 @@ Context 가 그 장부다. 키는 항상 **원래 경로** 이므로 여러 번 
 (미리보기와 실행이 어긋나지는 않는다 — 실행기는 Context 가 아니라 Plan 을 그대로 쓴다.)
 """
 
+import os
 from datetime import date
 from pathlib import Path
 
@@ -84,7 +85,13 @@ class Context:
         보장하지는 않는다. 실행기가 `claim_path` 로 다시 잡는다. 여기서 하는
         일은 **한 Plan 안에서의 애매함을 없애는 것**이다.
         """
-        taken = self._claimed.setdefault(rel, {
+        # 같은 폴더를 가리키는 문자열이 여러 가지다 — "02_Media", "02_Media/",
+        # "./02_Media", 그리고 윈도우에서는 "02_media" 까지. 정규화하지 않으면
+        # 한 폴더에 이름표가 여러 개 생겨 서로를 못 본다. 실측했다.
+        key = os.path.normpath(rel.replace("\\", "/") or ".").casefold()
+        if key == ".":
+            key = ""
+        taken = self._claimed.setdefault(key, {
             e.path.name.casefold() for e in self.files_at(rel)})
         stem, suffix = Path(name).stem, Path(name).suffix
         candidate, n = name, 0

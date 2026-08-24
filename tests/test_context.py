@@ -207,3 +207,30 @@ def test_claim_name_does_not_know_about_moves_not_yet_applied_in_this_plan():
     leaving = e("02_Media/사진.png")     # 곧 다른 곳으로 옮겨질 예정(아직 미적용)
     c = ctx(leaving)
     assert c.claim_name("02_Media", "사진.png") == "사진_(1).png"
+
+
+def test_claim_name_treats_the_same_folder_as_one_ledger():
+    """같은 폴더를 가리키는 문자열이 여러 가지다 — 이름표가 갈라지면 안 된다.
+
+    `02_Media`, `02_Media/`, `./02_Media`, 그리고 윈도우에서는 `02_media` 까지
+    전부 같은 폴더다. 정규화하지 않으면 한 폴더에 이름표가 여러 개 생겨
+    서로를 못 보고, 미리보기에 같은 목적지가 두 번 나온다.
+    """
+    ctx = Context(root=Path("/작업"), entries=[], today=date(2026, 8, 21))
+    spellings = ["02_Media", "02_Media/", "./02_Media", "02_media",
+                 "02_Media\\", "02_Media/../02_Media"]
+    got = [ctx.claim_name(rel, "사진.png") for rel in spellings]
+    assert len(set(got)) == len(got), f"이름표가 갈라졌다: {got}"
+
+
+def test_claim_name_keeps_different_folders_apart():
+    """반대로 진짜 다른 폴더끼리는 서로 영향을 주면 안 된다."""
+    ctx = Context(root=Path("/작업"), entries=[], today=date(2026, 8, 21))
+    assert ctx.claim_name("01_Docs", "a.txt") == "a.txt"
+    assert ctx.claim_name("02_Media", "a.txt") == "a.txt"
+
+
+def test_claim_name_handles_the_root_folder():
+    ctx = Context(root=Path("/작업"), entries=[], today=date(2026, 8, 21))
+    assert ctx.claim_name("", "a.txt") == "a.txt"
+    assert ctx.claim_name(".", "a.txt") == "a_(1).txt"

@@ -104,7 +104,9 @@ def build(ctx: Context, cfg: BlockConfig) -> Plan:
 
         if extracted and cfg.options.get("delete_original", False):
             quarantines.append(Action(
-                kind="quarantine", src=src, dst=ctx.trash_dir / entry.name,
+                kind="quarantine", src=src,
+                dst=ctx.trash_dir / ctx.claim_name(
+                    f".organize/trash/{ctx.run_id}", entry.name),
                 reason=f"압축을 푼 원본 ({extracted}개 꺼냄)", block=BLOCK,
             ))
 
