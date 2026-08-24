@@ -31,6 +31,8 @@ class Context:
         # 현재 경로 -> 원래 경로. 블록이 넘겨주는 Action.src 는 '지금 위치' 이므로
         # 이 표가 없으면 두 번째 이동부터 추적이 끊긴다.
         self._by_current: dict[Path, Path] = {}
+        # 폴더별로 이 Plan 에서 이미 잡힌 이름. claim_name 이 쓴다.
+        self._claimed: dict[str, set[str]] = {}
         for e in entries:
             self._rel[e.path] = self._relative_folder(e.path)
             self._name[e.path] = e.path.name
@@ -64,6 +66,33 @@ class Context:
     def all_files(self) -> list[FileEntry]:
         alive = [e for e in self._entries if e.path not in self._gone]
         return sorted(alive, key=lambda e: (self.rel_of(e), e.path.name))
+
+    def claim_name(self, rel: str, name: str) -> str:
+        """이 Plan 안에서 `rel` 폴더에 `name` 을 쓰겠다고 잡는다. 잡힌 이름을 준다.
+
+        **블록이 같은 목적지를 가리키는 동작을 두 개 만들면 안 된다.** 그러면
+        미리보기가 거짓말을 하고(둘 다 같은 곳으로 간다고 보여준다), 실행기의
+        이름 대응표가 어느 파일 것인지 구분하지 못한다. 실측했다 —
+        같은 이름 파일 둘을 한 폴더로 보낸 뒤 날짜별로 또 나누게 했더니,
+        한 파일만 연도 폴더로 가고 다른 하나는 조용히 남았으며, 사용자가 본 적
+        없는 이름(`사진_(1).png`)으로 실패 메시지가 나왔다.
+
+        이미 그 폴더에 있는 이름과, 이 Plan 에서 앞서 잡힌 이름을 함께 본다.
+        **대소문자를 구분하지 않는다** — 주 사용 환경인 윈도우가 그렇다.
+
+        디스크는 미리보기 이후에도 바뀔 수 있으므로 이 이름이 최종이라고
+        보장하지는 않는다. 실행기가 `claim_path` 로 다시 잡는다. 여기서 하는
+        일은 **한 Plan 안에서의 애매함을 없애는 것**이다.
+        """
+        taken = self._claimed.setdefault(rel, {
+            e.path.name.casefold() for e in self.files_at(rel)})
+        stem, suffix = Path(name).stem, Path(name).suffix
+        candidate, n = name, 0
+        while candidate.casefold() in taken:
+            n += 1
+            candidate = f"{stem}_({n}){suffix}"
+        taken.add(candidate.casefold())
+        return candidate
 
     def files_at(self, rel: str) -> list[FileEntry]:
         return [e for e in self.all_files() if self.rel_of(e) == rel]

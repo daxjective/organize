@@ -119,7 +119,12 @@ def execute(built: BuiltPlan) -> ExecResult:
                                     "reason": a.reason, "block": a.block})
 
         except OrganizeError as e:
-            result.failed.append({"kind": a.kind, "src": src_label, "why": e.message})
+            # hint 를 버리지 않는다 — errors.py 가 메시지와 힌트를 같이 들고
+            # 다니게 설계한 이유(사람이 다음에 뭘 하면 되는지)를 실행 결과에서도
+            # 지켜야 한다(Task 16 리뷰 Minor #1).
+            result.failed.append({
+                "kind": a.kind, "src": src_label, "why": e.message, "hint": e.hint,
+            })
         except (OSError, zipfile.BadZipFile, KeyError):
             # 파이썬 예외 원문을 그대로 보여주지 않는다 — 이 프로젝트에서
             # 실제로 있었던 결함이다(hint 자리에 예외 원문을 넣으면 안 된다는

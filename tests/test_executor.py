@@ -239,6 +239,22 @@ def test_disk_error_injected_via_move_file_is_recorded_and_does_not_stop_the_res
     assert bad.exists()                # 원본은 그대로 남는다
 
 
+# --- 수정 라운드 1/5: Task 16 리뷰 Minor #1 — hint 가 실패 로그에서 버려지지 않는지 ---
+
+
+def test_organize_error_hint_is_kept_in_the_failed_entry(tmp_path):
+    """OrganizeError 의 hint(사람이 다음에 뭘 하면 되는지)가 실행 결과에서
+    사라지면 안 된다 — why 만 남기고 버리던 것이 결함이었다."""
+    missing = tmp_path / "없음.pdf"           # 계획 시점 이후 사라진 것으로 흉내
+    b = built_for(tmp_path, [
+        Action("move", missing, tmp_path / "01_Docs" / "없음.pdf", "이동", "route"),
+    ])
+    r = execute(b)
+    assert len(r.failed) == 1
+    assert r.failed[0]["hint"]
+    assert "미리보기" in r.failed[0]["hint"]
+
+
 def test_os_error_message_never_leaks_raw_python_exception_text(tmp_path, monkeypatch):
     """전역 규칙: 오류 문구에 파이썬 예외 원문을 그대로 넣지 않는다.
     strerror 가 없는 OSError 를 주입해, 그 원문이 사용자 메시지에 새지 않는지 확인한다."""

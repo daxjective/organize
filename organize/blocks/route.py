@@ -40,10 +40,13 @@ def build(ctx: Context, cfg: BlockConfig) -> Plan:
         folder = dest_folder(ctx, rel, block=BLOCK)      # root 밖이면 여기서 막힌다
         if rel not in folders:
             folders.append(rel)
+        # 같은 이름이 겹치면 여기서 갈라놓는다. 안 그러면 두 동작이 같은 곳을
+        # 가리켜 미리보기가 거짓말을 하고 실행기가 둘을 구분하지 못한다.
+        name = ctx.claim_name(rel, ctx.current_path(entry).name)
         moves.append(Action(
             kind="move",
             src=ctx.current_path(entry),
-            dst=folder / ctx.current_path(entry).name,
+            dst=folder / name,
             reason=f"확장자 {entry.ext or '없음'} → {category}",
             block=BLOCK,
         ))

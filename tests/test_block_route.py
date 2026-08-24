@@ -152,6 +152,41 @@ def test_missing_profile_option_is_a_friendly_error():
     assert ex.value.hint and "profile" in ex.value.hint
 
 
+def test_no_suffix_when_names_do_not_collide():
+    """[B] 과잉 _(1) 방지 — 이름이 안 겹치는 평범한 경우엔 붙으면 안 된다."""
+    c = ctx(e("보고서.pdf"), e("사진.png"))
+    plan = build(c, cfg())
+    names = {a.dst.name for a in plan.actions if a.kind == "move"}
+    assert names == {"보고서.pdf", "사진.png"}
+
+
+def test_first_file_into_an_empty_destination_keeps_its_name():
+    """[B] 목적지 폴더가 비어 있으면 첫 파일은 원래 이름 그대로여야 한다."""
+    c = ctx(e("사진.png"))
+    plan = build(c, cfg())
+    move = next(a for a in plan.actions if a.kind == "move")
+    assert move.dst.name == "사진.png"
+
+
+def test_two_files_with_the_same_name_from_different_folders_get_distinct_destinations():
+    """Task 16 리뷰 Critical 재현: 같은 이름 파일 둘을 같은 폴더로 보내면
+    실행기의 remap(경로 하나당 값 하나) 이 둘을 구분하지 못한다. 미리보기
+    Plan 자체가 서로 다른 dst 를 가리켜야 한다.
+
+    runner.build_plan 과 똑같이, 첫 route 의 결과를 ctx.apply() 로 반영한
+    뒤 두 번째 route 를 빌드해야 두 번째 호출이 첫 번째의 결과를 본다."""
+    c = ctx(e("하위1/사진.png"), e("하위2/사진.png"))
+    plan1 = build(c, cfg(target="하위1", dest=""))
+    c.apply(plan1)
+    plan2 = build(c, cfg(target="하위2", dest=""))
+
+    dst1 = next(a.dst for a in plan1.actions if a.kind == "move")
+    dst2 = next(a.dst for a in plan2.actions if a.kind == "move")
+    assert dst1 == ROOT / "02_Media" / "사진.png"
+    assert dst2 == ROOT / "02_Media" / "사진_(1).png"
+    assert dst1 != dst2
+
+
 def test_profile_to_with_absolute_path_is_rejected():
     """프로파일의 to='/etc' 도 같은 구멍이다 — dest 뿐 아니라 to 도 사용자가 손으로 쓴다."""
     escape_profile = Profile(name="탈출", rules=[

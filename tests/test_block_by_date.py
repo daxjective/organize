@@ -130,3 +130,33 @@ def test_layout_with_positional_placeholder_is_a_friendly_error():
     with pytest.raises(OrganizeError) as ex:
         build(ctx(e("2023-12-15.md")), BlockConfig(options={"layout": "{0}"}))
     assert "날짜 폴더 모양" in ex.value.message
+
+
+# --- 수정 라운드 1/5: 같은 이름 파일 처리 (Task 16 리뷰 Critical) ---
+
+
+def test_no_suffix_when_names_do_not_collide():
+    """[B] 과잉 _(1) 방지 — 이름이 안 겹치면 붙으면 안 된다."""
+    plan = build(ctx(e("2023-12-15.md"), e("2023-12-20.md")), BlockConfig())
+    names = {a.dst.name for a in plan.actions if a.kind == "move"}
+    assert names == {"2023-12-15.md", "2023-12-20.md"}
+
+
+def test_files_already_disambiguated_by_route_are_left_as_is():
+    """route 가 이미 사진.png / 사진_(1).png 로 갈라놨다면 by_date 는 이름이
+    이미 다르므로 또 건드리면 안 된다."""
+    a = e("02_Media/사진.png")
+    b = e("02_Media/사진_(1).png")
+    plan = build(ctx(a, b), BlockConfig(target="02_Media"))
+    dsts = {act.dst.name for act in plan.actions if act.kind == "move"}
+    assert dsts == {"사진.png", "사진_(1).png"}
+
+
+def test_collision_with_an_existing_file_already_in_the_year_folder():
+    """대상 연도 폴더에 이미 같은 이름의 파일이 있으면 새로 들어오는 파일이 밀려야 한다."""
+    existing = e("2024/사진.png", mtime_date=(2024, 1, 1))       # 이미 정리된 파일
+    incoming = e("사진.png", mtime_date=(2024, 3, 9))            # 새로 들어오는 파일
+    plan = build(ctx(existing, incoming), BlockConfig())
+    move = next(a for a in plan.actions if a.kind == "move")
+    assert move.src.name == "사진.png"
+    assert move.dst == ROOT / "2024" / "사진_(1).png"

@@ -161,3 +161,49 @@ def test_trash_dir_without_run_id_is_a_friendly_error():
 def test_trash_dir_with_run_id_is_the_run_folder():
     c = Context(root=ROOT, entries=[], today=TODAY, run_id="20260821-143210")
     assert c.trash_dir == ROOT / ".organize" / "trash" / "20260821-143210"
+
+
+# --- 수정 라운드 1/5: claim_name — 블록이 같은 dst 를 가리키는 동작을 두 개
+# 만들지 못하게 이름을 미리 잡는다 (Task 16 리뷰 Critical) ---
+
+
+def test_claim_name_keeps_the_name_when_the_folder_is_free():
+    c = ctx()
+    assert c.claim_name("02_Media", "사진.png") == "사진.png"
+
+
+def test_claim_name_avoids_collision_with_an_existing_file():
+    c = ctx(e("02_Media/사진.png"))
+    assert c.claim_name("02_Media", "사진.png") == "사진_(1).png"
+
+
+def test_claim_name_ignores_case_like_windows_does():
+    """윈도우가 주 사용 환경이다 — A.PNG 와 a.png 는 같은 파일로 본다."""
+    c = ctx(e("02_Media/사진.PNG"))
+    assert c.claim_name("02_Media", "사진.png") == "사진_(1).png"
+
+
+def test_claim_name_remembers_names_it_already_gave_out_in_this_plan():
+    c = ctx()
+    first = c.claim_name("02_Media", "사진.png")
+    second = c.claim_name("02_Media", "사진.png")
+    assert first == "사진.png"
+    assert second == "사진_(1).png"
+
+
+def test_claim_name_is_independent_per_folder():
+    c = ctx()
+    assert c.claim_name("02_Media", "사진.png") == "사진.png"
+    assert c.claim_name("03_Docs", "사진.png") == "사진.png"
+
+
+def test_claim_name_does_not_know_about_moves_not_yet_applied_in_this_plan():
+    """claim_name 은 Context 의 '지금' 상태만 본다. 같은 폴더를 떠날 예정인
+    파일이 있어도 apply() 전이라면 여전히 그 폴더를 차지한 것으로 본다 —
+    보수적인 쪽으로 치우친 선택이다(안전하게 _(1) 을 더 붙이는 쪽이지,
+    이름을 잘못 비워주는 쪽이 아니다). route/by_date 는 목적지(rel)를 항상
+    target 의 진짜 하위 경로로만 만들어서(같은 값이 될 수 없다) 이 상황
+    자체가 안 생긴다 — 여기서는 Context 단독 동작만 기록해 둔다."""
+    leaving = e("02_Media/사진.png")     # 곧 다른 곳으로 옮겨질 예정(아직 미적용)
+    c = ctx(leaving)
+    assert c.claim_name("02_Media", "사진.png") == "사진_(1).png"
