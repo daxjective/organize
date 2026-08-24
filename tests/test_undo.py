@@ -542,3 +542,87 @@ def test_undo_says_when_a_file_came_back_under_a_different_name(tmp_path):
     renamed = [r for r in result.done if r.get("renamed")]
     assert renamed, "이름이 바뀐 사실이 결과에 남아야 한다"
     assert renamed[0]["intended"] == str(tmp_path / "a.pdf")
+
+
+# --- 수정 라운드 2 재수정 — C1 의 `-2` 접미사가 최신순 정렬을 깨뜨렸다.
+# '-'(45) < '.'(46) 이라 '20260824-193928.json' 이 '20260824-193928-2.json' 보다
+# 뒤로 정렬되고, reverse 하면 **옛 기록이 맨 앞**에 온다. 되돌리기는 반드시
+# 시간 역순이어야 한다 — 컨트롤러가 실측으로 잡았다. ---
+
+
+def _two_runs_in_one_second(root: Path, stamp: str = "20260824-193928"):
+    """같은 초에 두 번 실행한 상태를 만든다. 두 번째 기록은 `-2` 로 비켜 간다."""
+    a = root / "a.pdf"
+    a.write_bytes(b"A")
+    first = BuiltPlan(root=root, run_id=stamp, plan=Plan(actions=[
+        Action("mkdir", None, root / "01_Docs", "폴더", "route"),
+        Action("move", a, root / "01_Docs" / "a.pdf", "이동", "route"),
+    ]))
+    prepare_runlog(first)
+    write_runlog(first, execute(first))
+
+    c = root / "c.pdf"
+    c.write_bytes(b"C")
+    second = BuiltPlan(root=root, run_id=stamp, plan=Plan(actions=[
+        Action("move", c, root / "01_Docs" / "c.pdf", "이동", "route"),
+    ]))
+    prepare_runlog(second)
+    write_runlog(second, execute(second))
+    return first, second
+
+
+def test_list_runs_is_ordered_by_when_it_happened_not_by_file_name(tmp_path):
+    """파일명 문자열 정렬은 `-2` 접미사에서 뒤집힌다. 실제 생성 순서를 따라야 한다."""
+    _two_runs_in_one_second(tmp_path)
+    rows = list_runs(tmp_path)
+    assert [r["run_id"] for r in rows] == ["20260824-193928-2", "20260824-193928"], \
+        "맨 앞이 가장 나중에 만든 기록이어야 한다"
+
+
+def test_latest_run_id_picks_the_later_of_two_runs_in_the_same_second(tmp_path):
+    _two_runs_in_one_second(tmp_path)
+    assert latest_run_id(tmp_path) == "20260824-193928-2"
+
+
+def test_two_runs_in_one_second_undo_newest_first_and_leave_no_empty_folder(tmp_path):
+    """옛 기록을 먼저 되돌리면 그때 `01_Docs` 안에 새 기록의 파일이 남아 있어
+    "비어있지 않다" 로 판정돼 안 지워지고, 새 기록에는 mkdir 항목이 없어서
+    나중에 아무도 안 지운다 — Important #2 가 이 경로로 되살아났다."""
+    _two_runs_in_one_second(tmp_path)
+    undo(tmp_path)
+    undo(tmp_path)
+
+    left = sorted(p.name for p in tmp_path.iterdir() if p.name != ".organize")
+    assert left == ["a.pdf", "c.pdf"], f"되돌린 뒤 없던 폴더가 남았다: {left}"
+
+
+def test_a_file_moved_by_two_runs_comes_back_to_its_original_spot(tmp_path):
+    """더 위험한 쪽 — 한 파일을 두 실행이 이어서 옮겼다면, 옛 실행을 먼저
+    되돌릴 때 그 자리에 파일이 없다. `undo` 의 주석이 스스로 말하는
+    "마지막에 한 일부터" 가 **실행 사이에서도** 지켜져야 한다."""
+    stamp = "20260824-193928"
+    src = tmp_path / "a.pdf"
+    src.write_bytes(b"DATA")
+
+    first = BuiltPlan(root=tmp_path, run_id=stamp, plan=Plan(actions=[
+        Action("mkdir", None, tmp_path / "01_Docs", "폴더", "route"),
+        Action("move", src, tmp_path / "01_Docs" / "a.pdf", "이동", "route"),
+    ]))
+    prepare_runlog(first)
+    write_runlog(first, execute(first))
+
+    second = BuiltPlan(root=tmp_path, run_id=stamp, plan=Plan(actions=[
+        Action("mkdir", None, tmp_path / "보관", "폴더", "route"),
+        Action("move", tmp_path / "01_Docs" / "a.pdf", tmp_path / "보관" / "a.pdf",
+               "이동", "route"),
+    ]))
+    prepare_runlog(second)
+    write_runlog(second, execute(second))
+    assert (tmp_path / "보관" / "a.pdf").exists()
+
+    r2 = undo(tmp_path)
+    r1 = undo(tmp_path)
+    assert not r2.failed and not r1.failed, "시간 역순이면 실패할 항목이 없다"
+    assert src.read_bytes() == b"DATA", "원래 자리로 돌아와야 한다"
+    left = sorted(p.name for p in tmp_path.iterdir() if p.name != ".organize")
+    assert left == ["a.pdf"], f"잔해가 남았다: {left}"

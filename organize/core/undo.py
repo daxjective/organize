@@ -11,6 +11,7 @@
 
 import json
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -21,6 +22,44 @@ from organize.errors import OrganizeError
 
 def _runs_dir(root: Path) -> Path:
     return root / ".organize" / "runs"
+
+
+# `make_run_id` 가 만드는 모양(`%Y%m%d-%H%M%S`)과, 이름이 겹쳐 비켜 갈 때
+# `_claim_runlog_path` 가 붙이는 접미사(`-2`, `-3` …).
+_RUN_STEM = re.compile(r"(?P<stamp>\d{8}-\d{6})(?:-(?P<n>\d+))?")
+
+
+def _run_order(stem: str) -> tuple[str, int]:
+    """실행 기록 파일 이름을 **실제 순서**로 비교할 수 있는 키로 바꾼다.
+
+    파일 이름 문자열을 그대로 정렬하면 안 된다. `'-'`(45) 가 `'.'`(46) 보다
+    작아서 이렇게 갈린다:
+
+        sorted(['20260824-193928.json', '20260824-193928-2.json'], reverse=True)
+        -> ['20260824-193928.json', '20260824-193928-2.json']
+              ^ 먼저 만든 기록이 맨 앞
+
+    그러면 `latest_run_id` 가 **옛 기록**을 집는다. 되돌리기는 반드시 시간
+    역순이어야 한다 — 한 파일을 두 실행이 이어서 옮겼다면(실행1: `a.pdf →
+    01_Docs`, 실행2: `01_Docs/a.pdf → 보관`) 옛 실행을 먼저 되돌릴 때 그
+    자리에 파일이 없다. 실측했다: "옮기려는 파일이 없습니다: a.pdf".
+    덤으로 빈 폴더도 남는다(옛 실행이 만든 폴더 안에 아직 새 실행의 파일이
+    있어 "비어있지 않다" 로 판정되고, 새 기록에는 그 폴더의 mkdir 항목이 없다).
+
+    그래서 **시각과 접미사 번호를 따로** 본다. 시각 부분은 고정폭이라
+    문자열 비교가 곧 시간 비교다. 접미사가 없으면 0 — 같은 초의 첫 기록이
+    `-2` 보다 앞선다는 뜻이고, 실제로 그렇다.
+
+    우리가 만든 형식이 아닌 이름(테스트의 `r1`, 사람이 손으로 만든 파일)도
+    죽지 않아야 하므로, 일반적인 `-숫자` 접미사만 떼어 보고 못 떼면 이름 그대로 쓴다.
+    """
+    m = _RUN_STEM.fullmatch(stem)
+    if m:
+        return m["stamp"], int(m["n"] or 0)
+    base, _, tail = stem.rpartition("-")
+    if base and tail.isdigit():
+        return base, int(tail)
+    return stem, 0
 
 
 def list_runs(root: Path) -> list[dict]:
@@ -38,7 +77,12 @@ def list_runs(root: Path) -> list[dict]:
     if not runs_dir.is_dir():
         return []
     rows = []
-    for path in sorted(runs_dir.glob("*.json"), reverse=True):
+    # 파일 이름 문자열이 아니라 (시각, 접미사 번호) 로 내림차순 정렬한다.
+    # 이 목록의 맨 앞이 곧 `latest_run_id` 가 집는 기록이다 — 순서가 틀리면
+    # 되돌리기가 시간 역순이 아니게 된다(_run_order 참고).
+    # 못 읽는 기록도 이름만으로 키가 나오므로 정렬이 죽지 않는다.
+    for path in sorted(runs_dir.glob("*.json"),
+                       key=lambda p: _run_order(p.stem), reverse=True):
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
             if not isinstance(data, dict):

@@ -643,3 +643,35 @@ def test_undo_tells_the_user_when_a_file_came_back_renamed(project, capsys):
     cli.main(["undo", "--root", str(work)])
     out = capsys.readouterr().out
     assert "이름" in out and "보고서_(1).pdf" in out
+
+
+def test_two_runs_in_the_same_second_undo_in_reverse_order(project, capsys):
+    """C1 수정이 새로 만든 결함 — `<run_id>-2.json` 이름이 `list_runs` 의
+    최신순 정렬을 뒤집었다('-'(45) < '.'(46)). 옛 기록을 먼저 되돌리면
+    그 실행이 만든 폴더 안에 아직 새 기록의 파일이 남아 있어 폴더가 안 지워지고,
+    새 기록에는 mkdir 항목이 없어 나중에 아무도 안 지운다."""
+    repo, work = project
+    old_file(work / "a.pdf")
+    old_file(work / "b.pdf")
+    old_file(work / "c.md")
+    write_recipe(repo, "ab", [work], [{"block": "route", "profile": "desktop",
+                                       "when": {"ext": [".pdf"]}}])
+    write_recipe(repo, "cc", [work], [{"block": "route", "profile": "desktop",
+                                       "when": {"ext": [".md"]}}])
+
+    import organize.cli as cli_mod
+    original = cli_mod.make_run_id
+    cli_mod.make_run_id = lambda now: "20260824-193928"
+    try:
+        assert cli.main(["run", "ab", "--apply"]) == 0
+        assert cli.main(["run", "cc", "--apply"]) == 0
+    finally:
+        cli_mod.make_run_id = original
+    capsys.readouterr()
+
+    assert cli.main(["undo", "--root", str(work)]) == 0
+    assert cli.main(["undo", "--root", str(work)]) == 0
+    capsys.readouterr()
+
+    left = sorted(p.name for p in work.iterdir() if p.name != ".organize")
+    assert left == ["a.pdf", "b.pdf", "c.md"], f"되돌린 뒤 없던 폴더가 남았다: {left}"
