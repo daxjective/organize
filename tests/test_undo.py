@@ -174,8 +174,11 @@ def test_oserror_during_restore_is_reported_in_korean_without_raw_exception_text
     assert "되돌리지 못했습니다" in why
     assert "Permission denied" not in why                 # 예외 원문을 그대로 보여주지 않는다
     assert "Permission denied" not in (result.failed[0].get("hint") or "")
-    # 실행 로그에는 "되돌렸다" 로 기록되어 무한 재시도 루프가 되지 않는다
-    assert latest_run_id(tmp_path) is None
+    # 고칠 수 있는 실패(권한 등)는 **재시도할 수 있게 남는다.** 예전에는 여기서
+    # "다 되돌렸다" 도장을 찍어 이 항목을 영원히 못 돌렸다. 다시 시도해도 소용없는
+    # 경우(되돌릴 파일이 아예 없어진 경우)는 따로 '끝난 것'으로 처리하므로,
+    # 고칠 수 없는 항목 하나가 실행을 영원히 붙드는 일은 생기지 않는다.
+    assert latest_run_id(tmp_path) == "r1"
 
 
 def test_undoing_an_already_undone_run_is_a_friendly_error(tmp_path):
@@ -243,3 +246,125 @@ def test_undo_already_undone_hint_has_no_trash_command(tmp_path):
     with pytest.raises(OrganizeError) as ex:
         undo(tmp_path, run_id="r1")
     assert "trash" not in (ex.value.hint or "")
+
+
+# --- 항목별 되돌림 기록: 부분 실패해도 재시도할 수 있어야 한다 ---
+
+def _flaky_move(monkeypatch, fail_for: str):
+    """`fail_for` 이름의 파일만 실패시키고 나머지는 진짜로 옮긴다."""
+    import organize.core.undo as undo_mod
+    real = undo_mod.move_file
+
+    def flaky(src, dst):
+        if Path(src).name == fail_for:
+            raise OSError(13, "Permission denied")
+        return real(src, dst)
+
+    monkeypatch.setattr(undo_mod, "move_file", flaky)
+    return real
+
+
+def test_a_failed_item_can_be_retried_after_the_cause_is_fixed(tmp_path, monkeypatch):
+    """되돌리기가 부분 실패하면, 원인을 고친 뒤 **다시 되돌릴 수 있어야 한다.**
+
+    예전에는 실패가 있어도 실행 로그에 "다 되돌렸다" 도장을 찍어서, 실패한
+    항목을 영원히 못 돌렸다. 권한 하나 때문에 파일이 옮겨진 자리에 갇혔다.
+    """
+    a, b = tmp_path / "a.pdf", tmp_path / "b.pdf"
+    a.write_bytes(b"A")
+    b.write_bytes(b"B")
+    run_plan(tmp_path, [
+        Action("move", a, tmp_path / "01_Docs" / "a.pdf", "이동", "route"),
+        Action("move", b, tmp_path / "01_Docs" / "b.pdf", "이동", "route"),
+    ])
+
+    import organize.core.undo as undo_mod
+    real = _flaky_move(monkeypatch, fail_for="a.pdf")
+
+    first = undo(tmp_path)
+    assert len(first.failed) == 1
+    assert b.read_bytes() == b"B"                  # b 는 돌아왔고
+    assert not a.exists()                          # a 는 아직 못 돌아왔다
+
+    monkeypatch.setattr(undo_mod, "move_file", real)   # 원인을 고쳤다
+    second = undo(tmp_path)
+
+    assert not second.failed
+    assert a.read_bytes() == b"A"                  # 이제 돌아왔다
+    # 이미 되돌린 b 를 두 번 건드리지 않았다
+    assert [r["kind"] for r in second.done] == ["restore"]
+
+
+def test_a_partly_undone_run_is_not_marked_finished(tmp_path, monkeypatch):
+    """아직 못 되돌린 항목이 있으면 '다 되돌렸다' 도장을 찍지 않는다."""
+    a, b = tmp_path / "a.pdf", tmp_path / "b.pdf"
+    a.write_bytes(b"A")
+    b.write_bytes(b"B")
+    run_plan(tmp_path, [
+        Action("move", a, tmp_path / "01_Docs" / "a.pdf", "이동", "route"),
+        Action("move", b, tmp_path / "01_Docs" / "b.pdf", "이동", "route"),
+    ])
+    _flaky_move(monkeypatch, fail_for="a.pdf")
+
+    undo(tmp_path)
+
+    log = json.loads((tmp_path / ".organize" / "runs" / "r1.json").read_text(encoding="utf-8"))
+    assert log.get("undone_at") is None, "남은 게 있는데 다 되돌렸다고 하면 재시도가 막힌다"
+    assert latest_run_id(tmp_path) == "r1", "되돌릴 게 남았으니 다시 집혀야 한다"
+
+
+def test_a_target_that_vanished_does_not_hold_the_run_forever(tmp_path):
+    """되돌릴 파일이 그 자리에 아예 없으면 다시 시도해도 결과가 같다.
+
+    그런 항목까지 '아직 남았다' 로 붙들면 그 실행이 영원히 되돌릴 게 남은
+    실행으로 남아, `organize undo` 가 **이전 실행을 영영 못 보게 가린다.**
+    """
+    src = tmp_path / "a.pdf"
+    src.write_bytes(b"DATA")
+    run_plan(tmp_path, [Action("move", src, tmp_path / "01_Docs" / "a.pdf", "이동", "route")])
+    (tmp_path / "01_Docs" / "a.pdf").unlink()      # 사용자가 지웠거나 옮겼다
+
+    result = undo(tmp_path)
+
+    assert result.failed                            # 무슨 일이 있었는지는 알린다
+    assert latest_run_id(tmp_path) is None, \
+        "다시 시도해도 소용없는 항목이 실행을 붙들면 안 된다"
+
+
+# --- 되돌린 뒤 우리가 만든 장부만 치운다 ---
+
+def test_undo_tidies_our_own_manifest_but_never_user_files(tmp_path):
+    """되돌리고 나면 격리 폴더에 우리가 쓴 `_manifest.json` 과 빈 폴더가 남았다.
+
+    이건 사용자 파일이 아니라 **우리 장부**다. 파일이 전부 제자리로 돌아가
+    폴더에 장부만 남았을 때에만 치운다.
+    """
+    src = tmp_path / "중복.pdf"
+    src.write_bytes(b"DATA")
+    trash = tmp_path / ".organize" / "trash" / "r1"
+    run_plan(tmp_path, [Action("quarantine", src, trash / "중복.pdf", "중복", "dedup")])
+    assert (trash / "_manifest.json").is_file()
+
+    undo(tmp_path)
+
+    assert src.read_bytes() == b"DATA"
+    assert not (trash / "_manifest.json").exists(), "우리가 쓴 장부는 치운다"
+    assert not trash.exists(), "빈 격리 폴더도 치운다"
+
+
+def test_the_manifest_is_kept_when_a_quarantined_file_could_not_be_restored(tmp_path, monkeypatch):
+    """격리에 사용자 파일이 아직 남아 있으면 장부를 지우지 않는다.
+
+    그 파일이 무엇이고 어디서 왔는지 적힌 유일한 기록이다.
+    """
+    src = tmp_path / "중복.pdf"
+    src.write_bytes(b"DATA")
+    trash = tmp_path / ".organize" / "trash" / "r1"
+    run_plan(tmp_path, [Action("quarantine", src, trash / "중복.pdf", "중복", "dedup")])
+    _flaky_move(monkeypatch, fail_for="중복.pdf")
+
+    undo(tmp_path)
+
+    assert (trash / "중복.pdf").exists(), "사용자 파일이 아직 격리에 남아 있다"
+    assert (trash / "_manifest.json").is_file(), \
+        "격리에 사용자 파일이 남아 있으면 그게 무엇인지 적힌 장부를 지우면 안 된다"

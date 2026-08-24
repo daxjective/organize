@@ -289,3 +289,57 @@ def test_multi_root_os_error_from_build_plan_does_not_abort_other_roots(
     out = capsys.readouterr().out
     assert (work_a / "01_Docs" / "가.pdf").exists()
     assert (work_c / "01_Docs" / "다.pdf").exists(), "B에서 OSError 가 나도 C는 처리돼야 한다"
+
+
+def test_undo_keeps_going_when_one_root_has_nothing_to_undo(project, tmp_path, capsys):
+    """폴더 여러 개를 되돌릴 때 하나가 실패해도 나머지는 되돌려야 한다.
+
+    되돌릴 기록이 없는 폴더는 흔하다 — 이번에 처리되지 않은 폴더, 이미 되돌린
+    폴더가 그렇다. 예전에는 `_cmd_undo` 의 반복문에 폴더 단위 격리가 없어서
+    **첫 폴더에서 통째로 죽고 나머지 폴더는 옮겨진 채 남았다.** 실행 쪽에서
+    고친 것과 정확히 같은 부류의 결함이다(Task 18 리뷰 Critical #2).
+    """
+    repo, work = project
+    empty = tmp_path / "빈폴더"
+    empty.mkdir()
+    # 대상 폴더를 두 곳으로 바꾼다. 앞 폴더는 정리할 게 없어 되돌릴 기록도 없다.
+    (repo / "recipes" / "t.json").write_text(json.dumps({
+        "name": "테스트", "roots": [str(empty), str(work)],
+        "steps": [{"block": "route", "profile": "desktop"}],
+    }, ensure_ascii=False), encoding="utf-8")
+
+    old_file(work / "보고서.pdf")
+    cli.main(["run", "t", "--apply"])
+    capsys.readouterr()
+    assert (work / "01_Docs" / "보고서.pdf").exists()
+
+    code = cli.main(["undo", "--recipe", "t"])
+    out = capsys.readouterr().out
+
+    assert (work / "보고서.pdf").read_bytes() == b"DATA", \
+        "앞 폴더가 실패했다고 뒤 폴더를 포기하면 안 된다"
+    assert str(empty) in out and str(work) in out, "두 폴더 모두 화면에 나와야 한다"
+    assert code == 1, "실패가 있었으면 종료 코드에 드러나야 한다"
+
+
+def test_undo_reports_a_failure_in_korean_without_a_raw_exception(project, tmp_path, capsys):
+    """되돌리는 중 순정 파이썬 예외가 나도 화면에는 한국어만 나온다."""
+    _, work = project
+    old_file(work / "보고서.pdf")
+    cli.main(["run", "t", "--apply"])
+    capsys.readouterr()
+
+    def _boom(_root, _run_id):
+        raise OSError(13, "Permission denied")
+
+    import organize.cli as cli_mod
+    original = cli_mod.undo_run
+    cli_mod.undo_run = _boom
+    try:
+        code = cli.main(["undo", "--root", str(work)])
+    finally:
+        cli_mod.undo_run = original
+
+    out = capsys.readouterr().out
+    assert "Permission denied" not in out
+    assert code == 1

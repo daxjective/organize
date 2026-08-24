@@ -352,3 +352,36 @@ def test_write_runlog_os_error_is_wrapped_as_organize_error(tmp_path, monkeypatc
     with pytest.raises(OrganizeError) as ex:
         write_runlog(b, r)
     assert secret not in (ex.value.message + (ex.value.hint or ""))
+
+
+def test_a_failed_quarantine_manifest_never_costs_us_the_run_record(tmp_path):
+    """격리 목록을 못 써도 실행 기록은 반드시 남아야 한다.
+
+    `_manifest.json` 은 "무엇이 왜 격리됐는지" 를 사람이 보라고 남기는 참고
+    자료다. 되돌리기는 이걸 **읽지 않는다** — 실행 로그만 본다. 그런데 예전에는
+    이 장부를 못 쓰면 예외가 execute() 밖으로 새어 나가, 부르는 쪽이 실행 로그를
+    아예 못 썼다. 파일은 격리 폴더에 있는데 `organize undo` 는 "되돌릴 기록이
+    없습니다" 라고 답했다 — 실측했다. 참고 자료 하나 때문에 되돌리기를 통째로
+    잃는 것은 이 프로젝트가 정의한 최악의 실패다.
+    """
+    src = tmp_path / "중복.pdf"
+    src.write_bytes(b"DATA")
+    trash = tmp_path / ".organize" / "trash" / "r1"
+    # _manifest.json 자리를 폴더로 막는다 — 파일이 열려 있거나 디스크가 꽉 찬
+    # 것과 같은 부류의 실패를 결정적으로 재현한다.
+    (trash / "_manifest.json").mkdir(parents=True)
+
+    b = BuiltPlan(root=tmp_path, run_id="r1", plan=Plan(actions=[
+        Action("quarantine", src, trash / "중복.pdf", "중복", "dedup")]))
+
+    result = execute(b)                    # 예외가 새어 나오면 안 된다
+
+    assert (trash / "중복.pdf").exists()    # 격리는 실제로 됐고
+    assert any(r["kind"] == "quarantine" for r in result.done), \
+        "격리한 사실이 done 에 남아야 되돌릴 수 있다"
+    # 조용히 넘어가지도 않는다 — 무엇이 안 됐는지 사람이 볼 수 있어야 한다
+    assert any("격리 목록" in r["why"] for r in result.failed)
+
+    # 그리고 실행 기록이 실제로 써진다 — 되돌릴 수 있다
+    log = write_runlog(b, result)
+    assert log.is_file()

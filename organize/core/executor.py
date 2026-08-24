@@ -135,10 +135,25 @@ def execute(built: BuiltPlan) -> ExecResult:
             })
 
     if quarantined:
+        # 이 장부는 "무엇이 왜 격리됐는지" 를 사람이 보라고 남기는 참고 자료다.
+        # 되돌리기는 이걸 **읽지 않는다** — 실행 로그만 본다. 그러니 이걸 못
+        # 썼다고 실행을 통째로 실패시키면 안 된다. 예전에는 여기서 난 예외가
+        # execute() 밖으로 새어 나가 실행 로그 자체가 안 써졌고, 파일은 격리
+        # 폴더에 있는데 organize undo 는 "되돌릴 기록이 없습니다" 라고 답했다.
+        # 실측했다 — Critical #1 이 닫으려던 것과 정확히 같은 등급의 실패다.
         trash = built.root / ".organize" / "trash" / built.run_id
-        trash.mkdir(parents=True, exist_ok=True)
-        (trash / "_manifest.json").write_text(
-            json.dumps(quarantined, ensure_ascii=False, indent=2), encoding="utf-8")
+        try:
+            trash.mkdir(parents=True, exist_ok=True)
+            (trash / "_manifest.json").write_text(
+                json.dumps(quarantined, ensure_ascii=False, indent=2), encoding="utf-8")
+        except OSError:
+            # 삼키지는 않는다 — 무엇이 안 됐는지 화면과 실행 기록에 남긴다.
+            result.failed.append({
+                "kind": "manifest", "src": str(trash),
+                "why": "격리 목록을 남기지 못했습니다 — 치운 파일은 그대로 있습니다",
+                "hint": f"'{trash}' 의 쓰기 권한과 디스크 남은 공간을 확인해 주세요. "
+                        "되돌리기는 실행 기록으로 하므로 영향받지 않습니다.",
+            })
 
     return result
 

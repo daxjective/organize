@@ -185,12 +185,43 @@ def _cmd_undo(args) -> int:
                                 hint="organize undo --root @downloads 처럼 폴더를 지정해 주세요.")
         roots = _resolve_roots(recipe, None)
 
+    failed_roots: list[Path] = []
+
     for root in roots:
-        result = undo_run(root, args.run_id)
         print(f"■ {root}")
+        # 폴더 하나가 죽어도 나머지는 계속 되돌린다. 되돌릴 기록이 없는 폴더는
+        # 흔하다 — 이번에 처리되지 않은 폴더, 이미 되돌린 폴더가 그렇다.
+        # 예전에는 여기서 통째로 죽어 **뒤 폴더가 옮겨진 채 남았다.**
+        # 실행 쪽 Critical #2 와 같은 부류다. KeyboardInterrupt 는 그대로 새게 둔다.
+        try:
+            result = undo_run(root, args.run_id)
+        except OrganizeError as e:
+            print(f"  되돌리지 못했습니다: {e.message}")
+            if e.hint:
+                print(f"  {e.hint}")
+            failed_roots.append(root)
+            continue
+        except OSError:
+            # 순정 파이썬 예외를 그대로 노출하지 않는다(전역 규칙).
+            print(f"  '{root}' 폴더를 되돌리는 동안 예상치 못한 오류가 났습니다.")
+            print("  디스크 상태나 쓰기 권한을 확인해 주세요.")
+            failed_roots.append(root)
+            continue
+
         print(f"  되돌림 {len(result.done)} · 실패 {len(result.failed)}")
         for row in result.failed:
             print(f"    실패  {row['why']}")
+        if result.failed:
+            # 항목별로 되돌림 여부를 기록해 두므로, 원인을 고치고 다시 부르면
+            # 못 되돌린 것만 이어서 처리한다.
+            print("\n  원인을 고친 뒤 같은 명령을 다시 실행하면 남은 것만 되돌립니다:")
+            print(f"      organize undo --root {root}")
+            failed_roots.append(root)
+
+    if failed_roots:
+        print(f"\n  폴더 {len(roots)}곳 중 {len(failed_roots)}곳에서 문제가 생겼습니다: "
+              + ", ".join(str(r) for r in failed_roots))
+        return 1
     return 0
 
 

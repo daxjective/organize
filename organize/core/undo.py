@@ -80,45 +80,94 @@ def undo(root: Path, run_id: str | None = None) -> ExecResult:
 
     result = ExecResult()
     undo_trash = root / ".organize" / "trash" / f"{resolved_id}-undo"
+    items = data.get("done", [])
 
-    # 마지막에 한 일부터 되돌려야 경로가 맞는다 — route 뒤에 by_date 가
-    # 한 번 더 옮겼다면, by_date 부터 풀어야 route 가 남긴 자리로 돌아간다.
-    for item in reversed(data.get("done", [])):
-        kind = item["kind"]
-        try:
-            if kind == "mkdir":
-                folder = Path(item["final"])
-                if folder.is_dir() and not any(folder.iterdir()):
-                    folder.rmdir()                       # 비어 있을 때만 지운다
-                    result.done.append({"kind": "rmdir", "final": str(folder)})
-                continue
+    try:
+        # 마지막에 한 일부터 되돌려야 경로가 맞는다 — route 뒤에 by_date 가
+        # 한 번 더 옮겼다면, by_date 부터 풀어야 route 가 남긴 자리로 돌아간다.
+        for item in reversed(items):
+            if item.get("undone"):
+                continue                 # 앞선 시도에서 이미 되돌렸다
+            kind = item["kind"]
+            try:
+                if kind == "mkdir":
+                    folder = Path(item["final"])
+                    if folder.is_dir() and not any(folder.iterdir()):
+                        folder.rmdir()                   # 비어 있을 때만 지운다
+                        result.done.append({"kind": "rmdir", "final": str(folder)})
+                    item["undone"] = True
+                    continue
 
-            final = Path(item["final"])
-            if kind in ("move", "quarantine"):
-                back = move_file(final, Path(item["src"]))
-                result.done.append({"kind": "restore", "src": str(final), "final": str(back)})
-            elif kind == "extract":
-                # 압축을 푼 파일은 되돌릴 자리가 없다(원본은 zip 안이다).
-                # 그대로 두면 되돌린 뒤에도 폴더가 되돌리기 전보다 어수선해지므로
-                # 격리 폴더로 보낸다 — 원본 zip 은 건드리지 않는다.
-                moved = move_file(final, undo_trash / final.name)
-                result.done.append({"kind": "quarantine", "src": str(final), "final": str(moved)})
+                final = Path(item["final"])
+                if kind in ("move", "quarantine"):
+                    back = move_file(final, Path(item["src"]))
+                    result.done.append({"kind": "restore", "src": str(final), "final": str(back)})
+                elif kind == "extract":
+                    # 압축을 푼 파일은 되돌릴 자리가 없다(원본은 zip 안이다).
+                    # 그대로 두면 되돌린 뒤에도 폴더가 되돌리기 전보다 어수선해지므로
+                    # 격리 폴더로 보낸다 — 원본 zip 은 건드리지 않는다.
+                    moved = move_file(final, undo_trash / final.name)
+                    result.done.append({"kind": "quarantine", "src": str(final), "final": str(moved)})
+                item["undone"] = True
 
-        except OrganizeError as e:
-            # hint 를 버리지 않는다 — executor.py 와 같은 이유다.
-            result.failed.append({
-                "kind": kind, "src": item.get("final"), "why": e.message, "hint": e.hint,
-            })
-        except OSError:
-            # 파이썬 예외 원문을 그대로 보여주지 않는다 — hint 자리에 예외
-            # 원문을 넣지 말라는 전역 규칙과 같은 이유다.
-            name = Path(item.get("final") or "").name
-            result.failed.append({
-                "kind": kind, "src": item.get("final"),
-                "why": f"되돌리지 못했습니다: {name}",
-                "hint": "대상 위치의 쓰기 권한이나 파일이 다른 프로그램에서 열려있는지 확인해 주세요.",
-            })
-
-    data["undone_at"] = datetime.now().isoformat(timespec="seconds")
-    log_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            except OrganizeError as e:
+                # hint 를 버리지 않는다 — executor.py 와 같은 이유다.
+                item["undone"] = _nothing_left_to_undo(item)
+                result.failed.append({
+                    "kind": kind, "src": item.get("final"), "why": e.message, "hint": e.hint,
+                })
+            except OSError:
+                # 파이썬 예외 원문을 그대로 보여주지 않는다 — hint 자리에 예외
+                # 원문을 넣지 말라는 전역 규칙과 같은 이유다.
+                name = Path(item.get("final") or "").name
+                item["undone"] = _nothing_left_to_undo(item)
+                result.failed.append({
+                    "kind": kind, "src": item.get("final"),
+                    "why": f"되돌리지 못했습니다: {name}",
+                    "hint": "대상 위치의 쓰기 권한이나 파일이 다른 프로그램에서 열려있는지 확인해 주세요.",
+                })
+    finally:
+        # 예상 못 한 예외로 빠져나가더라도 **어디까지 되돌렸는지는 반드시 남긴다.**
+        # 안 남기면 다음 시도가 이미 되돌린 것을 또 되돌리려 들어 실패만 쌓인다.
+        if all(i.get("undone") for i in items):
+            data["undone_at"] = datetime.now().isoformat(timespec="seconds")
+            _tidy_our_own_bookkeeping(root, resolved_id)
+        log_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     return result
+
+
+def _nothing_left_to_undo(item: dict) -> bool:
+    """되돌릴 대상이 그 자리에 아예 없는가 — 그렇다면 다시 시도해도 결과가 같다.
+
+    실패한 항목을 무조건 "아직 남았다" 로 붙들면, 고칠 수 없는 항목 하나가
+    그 실행을 영원히 '되돌릴 게 남은 실행' 으로 만든다. 그러면 `organize undo`
+    가 매번 그 실행만 집어 **이전 실행을 영영 못 보게 가린다.** 다시 해 봐야
+    소용없는 항목은 '끝난 것' 으로 기록한다.
+    """
+    try:
+        return not Path(item["final"]).exists()
+    except (KeyError, OSError):
+        return True                      # 경로조차 알 수 없으면 더 할 수 있는 게 없다
+
+
+def _tidy_our_own_bookkeeping(root: Path, run_id: str) -> None:
+    """되돌리기가 끝난 뒤 **우리가 만든 장부만** 치운다.
+
+    격리 폴더에는 사용자 파일이 들어간다. 그건 절대 지우지 않는다("파일을
+    삭제하지 않는다" 는 전역 제약은 사용자 파일 얘기다). 파일이 전부 제자리로
+    돌아가 폴더에 우리가 쓴 `_manifest.json` 만 남았을 때에만, 그 장부와 빈
+    폴더를 치운다. 되돌리기가 부분 실패해 아직 격리에 남은 사용자 파일이
+    있으면 **아무것도 건드리지 않는다** — 그 장부가 그 파일이 무엇이고 어디서
+    왔는지 적힌 유일한 기록이기 때문이다.
+    """
+    trash = root / ".organize" / "trash" / run_id
+    try:
+        if not trash.is_dir():
+            return
+        if any(p.name != "_manifest.json" for p in trash.iterdir()):
+            return                       # 사용자 파일이 남아 있다 — 손대지 않는다
+        (trash / "_manifest.json").unlink(missing_ok=True)
+        trash.rmdir()
+        trash.parent.rmdir()             # .organize/trash 도 비었으면 같이 치운다
+    except OSError:
+        pass                             # 못 치워도 되돌리기 자체는 성공이다
