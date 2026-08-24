@@ -143,16 +143,65 @@ def execute(built: BuiltPlan) -> ExecResult:
     return result
 
 
+def prepare_runlog(built: BuiltPlan) -> Path:
+    """execute() 를 부르기 전에 실행 기록 자리를 미리 마련해 둔다.
+
+    Task 18 리뷰 Critical #1: write_runlog 가 실행 *뒤에* 실패하면 파일은
+    이미 옮겨졌는데 기록이 없어 되돌릴 수 없다. 핵심은 "아무것도 건드리기
+    전에 실패하게 만드는 것" — 여기서 죽으면 execute() 가 아직 불리지
+    않았으므로 파일이 하나도 안 움직인 상태다.
+
+    뼈대는 유효한 JSON 이어야 한다 — 실행 중 강제 종료돼도 list_runs 가
+    깨지지 않는다. done 이 비어 있으므로 latest_run_id 는 이 기록을 집지
+    않는다(그 함수는 count 가 참일 때만 집는다).
+    """
+    runs = built.root / ".organize" / "runs"
+    path = runs / f"{built.run_id}.json"
+    try:
+        runs.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({
+            "run_id": built.run_id,
+            "root": str(built.root),
+            "started_at": datetime.now().isoformat(timespec="seconds"),
+            "done": [], "failed": [], "stale": [],
+            "complete": False,
+        }, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError as e:
+        # 파이썬 예외 원문을 그대로 보여주지 않는다(전역 규칙) — 무엇을
+        # 확인하면 되는지만 한국어로 알린다.
+        raise OrganizeError(
+            f"실행 기록을 준비하지 못해 아무 파일도 옮기지 않았습니다: {built.root}",
+            hint=f"'{runs}' 자리를 확인해 주세요 — 디스크 용량, 쓰기 권한, "
+                 "또는 같은 이름의 파일이 이미 있는지 살펴보세요.",
+        ) from e
+    return path
+
+
 def write_runlog(built: BuiltPlan, result: ExecResult) -> Path:
     runs = built.root / ".organize" / "runs"
-    runs.mkdir(parents=True, exist_ok=True)
+    # mkdir(parents=True, exist_ok=True) 는 그대로 남겨 둔다 — prepare_runlog
+    # 없이 write_runlog 만 부르는 기존 호출자(test_executor.py, test_undo.py 의
+    # run_plan 헬퍼)가 계속 통과해야 한다.
     path = runs / f"{built.run_id}.json"
-    path.write_text(json.dumps({
-        "run_id": built.run_id,
-        "root": str(built.root),
-        "finished_at": datetime.now().isoformat(timespec="seconds"),
-        "done": result.done,
-        "failed": result.failed,
-        "stale": result.stale,
-    }, ensure_ascii=False, indent=2), encoding="utf-8")
+    try:
+        runs.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({
+            "run_id": built.run_id,
+            "root": str(built.root),
+            "finished_at": datetime.now().isoformat(timespec="seconds"),
+            "done": result.done,
+            "failed": result.failed,
+            "stale": result.stale,
+            "complete": True,
+        }, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError as e:
+        # 이 시점엔 이미 execute() 가 끝나 파일이 옮겨져 있다. 그래서 여기서는
+        # "실패했다"만 알리고 끝내지 않는다 — 호출부(CLI)가 이 오류를 받아
+        # result(무엇을 어디로 옮겼는지)를 화면에 통째로 찍어야
+        # 사람이 손으로 되돌릴 근거가 남는다.
+        raise OrganizeError(
+            f"파일은 옮겼지만 실행 기록을 남기지 못했습니다: {built.root}",
+            hint=f"'{runs}' 자리를 확인해 주세요 — 디스크 용량, 쓰기 권한, "
+                 "또는 같은 이름의 파일이 이미 있는지 살펴보세요.",
+        ) from e
     return path

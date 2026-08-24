@@ -17,8 +17,19 @@ class Recipe:
 def load_recipe(path: Path) -> Recipe:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as e:
-        raise OrganizeError(f"레시피를 읽지 못했습니다: {path.name}", hint=str(e)) from e
+    except OSError as e:
+        raise OrganizeError(
+            f"레시피를 읽지 못했습니다: {path.name}",
+            hint="파일이 있는지, 읽기 권한이 있는지 확인해 주세요.",
+        ) from e
+    except json.JSONDecodeError as e:
+        # userconfig.py::_read() 와 같은 패턴 — hint 자리에 파이썬 예외
+        # 원문(영어)을 그대로 넣지 않는다(전역 규칙). 몇 번째 줄인지만
+        # 한국어로 짚어 준다.
+        raise OrganizeError(
+            f"레시피를 읽지 못했습니다: {path.name} ({e.lineno}번째 줄)",
+            hint="파일을 열어 쉼표나 따옴표가 빠지지 않았는지 확인해 주세요.",
+        ) from e
 
     if "steps" not in data:
         raise OrganizeError(

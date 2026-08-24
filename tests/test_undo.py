@@ -214,3 +214,32 @@ def test_restore_never_overwrites_a_file_that_reappeared_at_the_original_spot(tm
     assert sibling.exists()
     assert sibling.read_bytes() == b"ORIGINAL"
     assert not result.failed
+
+
+# ---------------------------------------------------------------------------
+# 수정 라운드 1(Task 18 리뷰) Minor #1 — hint 가 존재하지 않는
+# `organize trash --list` 를 안내하던 것. 두 발생 지점 모두 확인한다.
+# ---------------------------------------------------------------------------
+
+
+def test_undo_unknown_run_id_hint_has_no_trash_command(tmp_path):
+    src = tmp_path / "a.pdf"
+    src.write_bytes(b"DATA")
+    run_plan(tmp_path, [
+        Action("move", src, tmp_path / "01_Docs" / "a.pdf", "이동", "route"),
+    ])
+    with pytest.raises(OrganizeError) as ex:
+        undo(tmp_path, run_id="있지도-않는-id")
+    assert "trash" not in (ex.value.hint or "")
+
+
+def test_undo_already_undone_hint_has_no_trash_command(tmp_path):
+    src = tmp_path / "a.pdf"
+    src.write_bytes(b"DATA")
+    run_plan(tmp_path, [
+        Action("move", src, tmp_path / "01_Docs" / "a.pdf", "이동", "route"),
+    ])
+    undo(tmp_path, run_id="r1")
+    with pytest.raises(OrganizeError) as ex:
+        undo(tmp_path, run_id="r1")
+    assert "trash" not in (ex.value.hint or "")

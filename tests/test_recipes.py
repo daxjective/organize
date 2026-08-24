@@ -46,3 +46,17 @@ def test_list_recipes(tmp_path):
     (tmp_path / "b.json").write_text("{}", encoding="utf-8")
     (tmp_path / "a.json").write_text("{}", encoding="utf-8")
     assert list_recipes(tmp_path) == ["a", "b"]
+
+
+def test_broken_json_hint_has_no_raw_python_exception_text(tmp_path):
+    """수정 라운드 1(Task 18 리뷰) Minor #2 — 레시피 JSON 이 깨졌을 때 hint 는
+    파이썬 JSONDecodeError.__str__() 원문(영어)을 그대로 노출하면 안 된다.
+    userconfig.py::_read() 와 같은 한국어 힌트 패턴을 따라야 한다."""
+    p = tmp_path / "broken.json"
+    p.write_text("{이건 JSON 이 아닙니다", encoding="utf-8")
+    with pytest.raises(OrganizeError) as ex:
+        load_recipe(p)
+    hint = ex.value.hint or ""
+    # JSONDecodeError.__str__() 이 항상 남기는 영어 표지들이 사라졌는지 확인한다.
+    for marker in ("Expecting", "delimiter", "column", "Errno"):
+        assert marker not in hint, f"영어 예외 원문이 hint 에 남아 있다: {hint!r}"

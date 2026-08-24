@@ -58,9 +58,12 @@ def undo(root: Path, run_id: str | None = None) -> ExecResult:
 
     log_path = _runs_dir(root) / f"{resolved_id}.json"
     if not log_path.is_file():
+        # Task 18 리뷰 Minor #1 — organize trash 커맨드는 존재하지 않는다
+        # (Task 19 범위). 실제로 있는 명령과, 기록이 어디 있는지로 안내한다.
         raise OrganizeError(
             f"'{resolved_id}' 실행 기록을 찾을 수 없습니다.",
-            hint="organize trash --list 로 남은 기록을 볼 수 있습니다.",
+            hint=f"'{_runs_dir(root)}' 에 남은 실행 기록을 확인해 주세요. "
+                 "organize undo --root <폴더> 로 가장 최근 실행을 되돌릴 수 있습니다.",
         )
 
     data = json.loads(log_path.read_text(encoding="utf-8"))
@@ -71,7 +74,8 @@ def undo(root: Path, run_id: str | None = None) -> ExecResult:
         raise OrganizeError(
             f"'{resolved_id}' 실행은 이미 되돌렸습니다 ({data['undone_at']}).",
             hint="같은 실행을 두 번 되돌릴 수는 없습니다. "
-                 "organize trash --list 로 다른 실행 기록을 확인해 주세요.",
+                 f"'{_runs_dir(root)}' 에서 다른 실행 ID 를 찾아 "
+                 "organize undo <실행ID> --root <폴더> 로 되돌려 주세요.",
         )
 
     result = ExecResult()

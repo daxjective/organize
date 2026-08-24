@@ -16,6 +16,24 @@ def old_file(path: Path, data: bytes = b"DATA") -> Path:
     return path
 
 
+def write_multi_recipe(repo, name: str, roots: list[Path]) -> None:
+    """root 가 여러 개인 레시피를 만든다 — 단일 root 만 다루는 `project` 픽스처로는
+    root 여러 개 중 하나가 죽는 상황(Critical #2)을 재현할 수 없다."""
+    (repo / "recipes" / f"{name}.json").write_text(json.dumps({
+        "name": name, "roots": [str(r) for r in roots],
+        "steps": [{"block": "route", "profile": "desktop"}],
+    }, ensure_ascii=False), encoding="utf-8")
+
+
+def block_runlog_path(root: Path) -> None:
+    """`<root>/.organize/runs` 자리에 파일을 미리 놓아, write_runlog/prepare_runlog
+    가 mkdir 하려는 자리를 막는다 — 디스크 풀·권한 거부와 같은 부류의 실패를
+    결정적으로 재현하는 방법(컨트롤러가 실측에 쓴 것과 같은 방법)."""
+    organize_dir = root / ".organize"
+    organize_dir.mkdir(parents=True, exist_ok=True)
+    (organize_dir / "runs").write_text("나는 파일입니다", encoding="utf-8")
+
+
 @pytest.fixture
 def project(tmp_path, monkeypatch):
     """저장소 구조와 대상 폴더를 통째로 흉내낸다."""
@@ -129,3 +147,145 @@ def test_preview_suggestion_keeps_the_root_you_asked_for(project, tmp_path, caps
     assert suggested, "제안한 명령이 아예 없다"
     for line in suggested:
         assert f"--root {other}" in line, f"제안한 명령에 대상 폴더가 없다: {line.strip()}"
+
+
+# ---------------------------------------------------------------------------
+# 수정 라운드 1(Task 18 리뷰) — Critical #1/#2, Important #1.
+# 컨트롤러가 실측으로 재현한 것과 같은 방법(.organize/runs 자리를 파일로
+# 막기)을 그대로 쓴다.
+# ---------------------------------------------------------------------------
+
+
+def test_run_with_apply_blocked_runlog_leaves_files_untouched(project, capsys):
+    """Critical #1 — .organize/runs 자리가 막혀 있으면 execute() 를 부르기도
+    전에 막혀야 한다. 원본이 제자리에 있는지가 이 테스트의 핵심 단언이다."""
+    _, work = project
+    old_file(work / "보고서.pdf")
+    block_runlog_path(work)
+
+    assert cli.main(["run", "t", "--apply"]) == 1
+    out = capsys.readouterr().out
+
+    assert (work / "보고서.pdf").exists(), "파일이 하나도 움직이지 않아야 한다"
+    assert not (work / "01_Docs").exists(), "옮겨진 흔적이 있으면 안 된다"
+    assert "Traceback" not in out and "FileExistsError" not in out
+
+
+def test_run_with_apply_prints_moved_list_when_write_runlog_fails_after_move(
+        project, capsys, monkeypatch):
+    """Critical #1 — prepare_runlog 는 통과했지만(자리는 확보됨) 실행 후
+    write_runlog 이 실패하면(디스크가 도중에 꽉 차는 등), 파일은 이미
+    옮겨졌으므로 최소한 무엇을 어디로 옮겼는지 화면에 전부 남아야 한다.
+    이게 사람이 손으로 되돌릴 수 있는 유일한 근거다."""
+    _, work = project
+    old_file(work / "보고서.pdf")
+
+    from organize.errors import OrganizeError
+
+    def boom(built, result):
+        raise OrganizeError("실행 기록을 남기지 못했습니다(시뮬레이션)",
+                            hint="디스크 공간을 확인해 주세요.")
+
+    monkeypatch.setattr(cli, "write_runlog", boom)
+
+    assert cli.main(["run", "t", "--apply"]) == 1
+    out = capsys.readouterr().out
+
+    assert (work / "01_Docs" / "보고서.pdf").exists(), "파일은 실제로 옮겨졌다"
+    assert "보고서.pdf" in out
+    assert "01_Docs" in out
+    assert "실행 기록을 남기지 못했습니다" in out
+
+
+def test_multi_root_continues_past_a_blocked_root_and_exits_nonzero(project, tmp_path, capsys):
+    """Critical #2 — root 3개 중 가운데가 죽어도 나머지 root(특히 세 번째)는
+    처리돼야 한다. 조용히 넘어가면 안 되고, 종료 코드가 1 이어야 한다."""
+    repo, _ = project
+    work_a = tmp_path / "a"
+    work_b = tmp_path / "b"
+    work_c = tmp_path / "c"
+    old_file(work_a / "가.pdf")
+    old_file(work_b / "나.pdf")
+    old_file(work_c / "다.pdf")
+    block_runlog_path(work_b)
+    write_multi_recipe(repo, "multi3", [work_a, work_b, work_c])
+
+    assert cli.main(["run", "multi3", "--apply"]) == 1
+    out = capsys.readouterr().out
+
+    assert (work_a / "01_Docs" / "가.pdf").exists(), "A는 정상 처리돼야 한다"
+    assert (work_b / "나.pdf").exists(), "B는 막혔으니 손도 대지 않아야 한다"
+    assert not (work_b / "01_Docs").exists()
+    assert (work_c / "01_Docs" / "다.pdf").exists(), \
+        "B가 죽어도 C는 계속 처리돼야 한다 — 이게 이번 결함의 핵심이다"
+    assert str(work_b) in out, "어느 폴더가 실패했는지 화면에 안내가 있어야 한다"
+
+
+def test_multi_root_partial_failure_suggests_per_root_undo_not_recipe(project, tmp_path, capsys):
+    """직접 CLI 로 확인해서 찾은 것: 일부 root 만 성공했을 때
+    `organize undo --recipe` 를 그대로 권하면, 그 명령 자체가
+    `_cmd_undo` 의 (root 단위로 격리돼 있지 않은) 반복문에서 실패한 root 를
+    만나 멈춰 버려 성공한 root(C)는 되돌아가지 않는다 — 우리가 권한
+    명령이 조용한 무작동을 낳는 꼴이다. 그래서 일부만 성공했을 때는
+    성공한 root 만 하나씩 --root 로 짚어 줘야 한다."""
+    repo, _ = project
+    work_a = tmp_path / "a"
+    work_b = tmp_path / "b"
+    work_c = tmp_path / "c"
+    old_file(work_a / "가.pdf")
+    old_file(work_b / "나.pdf")
+    old_file(work_c / "다.pdf")
+    block_runlog_path(work_b)
+    write_multi_recipe(repo, "multi3c", [work_a, work_b, work_c])
+
+    assert cli.main(["run", "multi3c", "--apply"]) == 1
+    out = capsys.readouterr().out
+
+    assert "organize undo --recipe" not in out
+    assert f"organize undo --root {work_a}" in out
+    assert f"organize undo --root {work_c}" in out
+
+
+def test_multi_root_apply_suggests_undo_by_recipe_not_only_first_root(project, tmp_path, capsys):
+    """Important #1 — root 가 여러 개면 '되돌리려면' 안내가 roots[0] 만
+    보여줘선 안 된다. organize undo --recipe <이름> 처럼 전체를 되돌리는
+    명령을 제안해야 한다."""
+    repo, _ = project
+    work_a = tmp_path / "a"
+    work_b = tmp_path / "b"
+    old_file(work_a / "가.pdf")
+    old_file(work_b / "나.pdf")
+    write_multi_recipe(repo, "multi2", [work_a, work_b])
+
+    assert cli.main(["run", "multi2", "--apply"]) == 0
+    out = capsys.readouterr().out
+
+    assert "organize undo --recipe multi2" in out
+
+
+def test_multi_root_os_error_from_build_plan_does_not_abort_other_roots(
+        project, tmp_path, capsys, monkeypatch):
+    """Critical #2(보강) — OrganizeError 뿐 아니라 순정 OSError 도 root
+    하나에서 새면 나머지 root 처리를 막지 못해야 한다."""
+    repo, _ = project
+    work_a = tmp_path / "a"
+    work_b = tmp_path / "b"
+    work_c = tmp_path / "c"
+    old_file(work_a / "가.pdf")
+    old_file(work_b / "나.pdf")
+    old_file(work_c / "다.pdf")
+    write_multi_recipe(repo, "multi3b", [work_a, work_b, work_c])
+
+    real_build_plan = cli.build_plan
+
+    def flaky(root, *a, **k):
+        if root == work_b:
+            raise OSError("디스크가 갑자기 사라짐(시뮬레이션)")
+        return real_build_plan(root, *a, **k)
+
+    monkeypatch.setattr(cli, "build_plan", flaky)
+
+    assert cli.main(["run", "multi3b", "--apply"]) == 1
+    out = capsys.readouterr().out
+    assert (work_a / "01_Docs" / "가.pdf").exists()
+    assert (work_c / "01_Docs" / "다.pdf").exists(), "B에서 OSError 가 나도 C는 처리돼야 한다"

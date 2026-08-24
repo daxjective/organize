@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from organize.core.action import Action, Plan
-from organize.core.executor import execute, write_runlog
+from organize.core.executor import execute, prepare_runlog, write_runlog
 from organize.core.runner import BuiltPlan
 from organize.errors import OrganizeError
 
@@ -295,3 +295,60 @@ def test_extract_corrupt_zip_is_reported_and_leaves_no_stray_file(tmp_path):
     r = execute(b)
     assert len(r.failed) == 1
     assert not dst.exists()
+
+
+# --- 수정 라운드 1(Task 18 리뷰) — Critical #1: write_runlog 가 실패하면 방금
+# 옮긴 파일이 영원히 미아가 된다. 핵심은 "아무것도 건드리기 전에 실패하게
+# 만드는 것" — prepare_runlog 가 execute() 앞에서 자리를 미리 마련한다. ---
+
+
+def test_prepare_runlog_raises_organize_error_when_runs_path_is_blocked(tmp_path):
+    """`.organize/runs` 자리에 파일이 이미 있으면(디스크 풀/권한 거부와 같은
+    부류) execute() 를 부르기도 전에 한국어 오류로 막혀야 한다. 여기서
+    막히면 파일이 하나도 안 움직인 상태라는 게 이 함수의 존재 이유다."""
+    organize_dir = tmp_path / ".organize"
+    organize_dir.mkdir()
+    (organize_dir / "runs").write_text("나는 파일입니다", encoding="utf-8")
+
+    b = built_for(tmp_path, [])
+    with pytest.raises(OrganizeError) as ex:
+        prepare_runlog(b)
+    # 순정 파이썬 예외 원문이 새면 안 된다(전역 규칙).
+    assert "FileExistsError" not in (ex.value.message + (ex.value.hint or ""))
+    assert "Errno" not in (ex.value.message + (ex.value.hint or ""))
+
+
+def test_prepare_runlog_writes_a_valid_empty_skeleton(tmp_path):
+    """뼈대는 유효한 JSON 이어야 한다 — 강제 종료돼도 list_runs 가 깨지지
+    않는다. done 이 비어 있으므로 latest_run_id 는 이 기록을 집지 않는다."""
+    b = built_for(tmp_path, [])
+    path = prepare_runlog(b)
+    assert path == tmp_path / ".organize" / "runs" / "r1.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert data["run_id"] == "r1"
+    assert data["done"] == [] and data["failed"] == [] and data["stale"] == []
+    assert data["complete"] is False
+
+    from organize.core.undo import latest_run_id
+    assert latest_run_id(tmp_path) is None      # 뼈대만으론 되돌릴 대상으로 안 잡힌다
+
+
+def test_write_runlog_os_error_is_wrapped_as_organize_error(tmp_path, monkeypatch):
+    """write_runlog 자체가 실패해도(디스크 풀 등) 파이썬 traceback 이 그대로
+    새면 안 된다 — 한국어 OrganizeError 로 바뀌어야 사용자가 읽을 수 있고,
+    호출부(CLI)가 '그래도 파일은 옮겨졌다'는 안내를 붙일 수 있다."""
+    src = tmp_path / "a.pdf"
+    src.write_bytes(b"x")
+    b = built_for(tmp_path, [Action("move", src, tmp_path / "01_Docs" / "a.pdf", "이동", "route")])
+    r = execute(b)
+    assert (tmp_path / "01_Docs" / "a.pdf").exists()   # 실제로 이미 옮겨졌다
+
+    secret = "raw OSError internal 0xdeadbeef"
+
+    def boom(self, *a, **k):
+        raise OSError(secret)
+
+    monkeypatch.setattr(Path, "write_text", boom)
+    with pytest.raises(OrganizeError) as ex:
+        write_runlog(b, r)
+    assert secret not in (ex.value.message + (ex.value.hint or ""))
