@@ -3999,6 +3999,10 @@ class BuiltPlan:
     root: Path
     run_id: str
     plan: Plan
+    # (블록 이름, 그 블록이 만든 Action 수). **파일 개수가 아니다** — mkdir 도
+    # 하나로 센다. 화면에 "route 2건" 을 그냥 내보내면 "파일 2개 옮김" 으로
+    # 읽힌다(실제로는 폴더 1 + 파일 1 인 경우가 있다). 보여줄 때는 kind 별로
+    # 나눠 세야 한다.
     per_block: list[tuple[str, int]] = field(default_factory=list)
     snapshot: dict[str, tuple[int, float]] = field(default_factory=dict)
 
