@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from organize import cli, userconfig
+from organize.errors import OrganizeError
 
 
 @pytest.fixture
@@ -223,3 +224,73 @@ def test_doctor_never_tells_you_to_just_delete_them(project, capsys):
     cli.main(["doctor"])
     out = capsys.readouterr().out
     assert "지워 주세요" not in out and "지우세요" not in out
+
+
+def test_paths_set_refuses_an_empty_value(project, capsys):
+    """`organize paths --set 이름=` 을 그대로 저장하면 그 별칭이 **현재 작업
+    폴더**를 가리킨다(`Path("")` 는 `.` 이다). 나중에 `--root @이름 --apply`
+    로 쓰면 의도하지 않은 폴더를 정리해 버린다. 받아 주면 안 된다.
+    """
+    repo, _ = project
+    assert cli.main(["paths", "--set", "보관="]) == 1
+    assert "경로" in capsys.readouterr().out
+    assert not (repo / "config.local.json").exists(), "거부했으면 저장도 하지 않는다"
+
+
+def test_paths_set_refuses_a_blank_name(project):
+    """이름 쪽이 비어도 마찬가지다 — 부를 수 없는 별칭이 생긴다."""
+    assert cli.main(["paths", "--set", "=/tmp/어딘가"]) == 1
+
+
+def test_doctor_admits_it_did_not_look_inside_hidden_folders(project, capsys):
+    """숨김 폴더를 안 봤으면 "없음(확인함)" 이라고만 말하면 안 된다.
+
+    목적지 폴더 이름을 숨김(`to = ".백업"`)으로 적는 것을 막는 코드가 없다.
+    그러면 정리 결과가 숨김 폴더로 가는데 doctor 는 그 안을 안 본다. 그러고도
+    "없음" 이라고 하면 **확인 안 한 것을 됐다고 말하는 것**이다 — 이 프로젝트가
+    여섯 번 물린 고질병이다. 숨김 폴더는 계속 건너뛰되(안 그러면 남의
+    프로그램 파일 1081개가 다시 쏟아진다) 안 봤다는 사실은 밝힌다.
+    """
+    _, work = project
+    (work / ".organize" / "runs").mkdir(parents=True)
+
+    cli.main(["doctor"])
+    out = capsys.readouterr().out
+    assert "숨김" in out, "숨김 폴더를 안 봤다는 사실이 화면에 있어야 한다"
+
+
+def test_doctor_also_checks_raw_paths_written_in_recipes(project, capsys):
+    """레시피의 대상 폴더가 `@별칭` 이 아니라 생짜 경로면 doctor 가 아예 안 봤다.
+
+    그 폴더야말로 사용자가 실제로 정리하는 곳이다.
+    """
+    repo, work = project
+    생짜 = work.parent / "생짜폴더"
+    (생짜 / ".organize" / "runs").mkdir(parents=True)
+    (생짜 / "잔해.pdf").touch()
+    (repo / "recipes" / "t.json").write_text(json.dumps({
+        "name": "테스트", "roots": [str(생짜)],
+        "steps": [{"block": "route", "profile": "desktop"}],
+    }, ensure_ascii=False), encoding="utf-8")
+
+    cli.main(["doctor"])
+    assert "잔해.pdf" in capsys.readouterr().out
+
+
+def test_do_suggestion_survives_a_value_with_a_space(project, capsys):
+    """제안한 명령을 그대로 복사해 붙였을 때 깨지면 안 된다."""
+    _, work = project
+    old = work / "보고서.pdf"
+    old.write_bytes(b"DATA")
+    import os, time
+    past = time.time() - 3600
+    os.utime(old, (past, past))
+
+    cli.main(["do", "route", "--profile", "desktop", "--dest", "내 보관함",
+              "--root", str(work)])
+    out = capsys.readouterr().out
+    suggested = [ln for ln in out.splitlines() if "organize do" in ln]
+    assert suggested
+    for line in suggested:
+        assert '"내 보관함"' in line or "'내 보관함'" in line, \
+            f"공백이 든 값이 따옴표 없이 나갔다: {line.strip()}"

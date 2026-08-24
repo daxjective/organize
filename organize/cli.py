@@ -261,6 +261,7 @@ def _cmd_undo(args) -> int:
     return 0
 
 
+_HIDDEN_CAVEAT = "숨김 폴더는 보지 않았습니다"
 _ZERO_BYTE_SHOWN = 10        # 화면을 덮지 않게 이만큼만 보이고 나머지는 개수로 알린다
 
 
@@ -380,6 +381,15 @@ def _cmd_doctor(args) -> int:
             continue
         for spec in recipe.roots:
             if not spec.startswith("@"):
+                # 생짜 경로다. 별칭이 아니라고 넘겨 버리면 **사용자가 실제로
+                # 정리하는 폴더**를 doctor 가 아예 안 보게 된다 — 잔해도
+                # 끊긴 기록도 거기 생기는데 말이다. 점검 대상에 넣는다.
+                try:
+                    raw = resolve_alias(spec, cfg)
+                except (OrganizeError, AliasNotDefined):
+                    continue
+                if raw not in checked_folders:
+                    checked_folders.append(raw)
                 continue
             head = spec[1:].split("/")[0]
             if head not in BUILTIN and head not in cfg.paths:
@@ -412,8 +422,12 @@ def _cmd_doctor(args) -> int:
             # 지우라고 말하지 않는다 — 빈 파일을 정상적으로 쓰는 프로그램이 많다.
             print("      정리가 중간에 끊긴 적이 있는지 확인해 보세요."
                   " 우리가 남긴 것이 아니면 그대로 두면 됩니다.")
+            print(f"      ({_HIDDEN_CAVEAT})")
         else:
-            print(f"    없음 (폴더 {len(looked_at)}곳 확인함)")
+            # "없음" 이라고만 하면 **확인 안 한 것을 됐다고 말하는 것**이 된다.
+            # 목적지 폴더 이름을 숨김(`to = ".백업"`)으로 적는 것을 막는 코드가
+            # 없어서, 정리 결과가 숨김 폴더로 갈 수 있다. 어디까지 봤는지 밝힌다.
+            print(f"    없음 (폴더 {len(looked_at)}곳 확인함 · {_HIDDEN_CAVEAT})")
 
     print("\n  완료되지 않은 실행 기록 (undo 가 거부합니다 — 무엇을 옮겼는지 알 수 없습니다)")
     if not checked_folders:
@@ -438,8 +452,20 @@ def _cmd_paths(args) -> int:
             raise OrganizeError(f"형식이 올바르지 않습니다: {args.set}",
                                 hint="organize paths --set archive=D:/보관  처럼 적어 주세요.")
         name, value = args.set.split("=", 1)
-        save_local_path(root, name.strip(), value.strip())
-        print(f"  @{name.strip()} → {value.strip()} 로 저장했습니다.")
+        name, value = name.strip(), value.strip()
+        if not value:
+            # 빈 값을 그대로 저장하면 Path("") 가 "." 이 되어 그 별칭이 **현재
+            # 작업 폴더**를 가리킨다. 나중에 `--root @이름 --apply` 로 쓰면
+            # 의도하지 않은 폴더를 정리해 버린다. 여기서 막는다.
+            raise OrganizeError(
+                f"'@{name}' 에 넣을 경로가 비어 있습니다.",
+                hint="organize paths --set archive=D:/보관  처럼 경로까지 적어 주세요.")
+        if not name:
+            raise OrganizeError(
+                "별칭 이름이 비어 있습니다.",
+                hint="organize paths --set archive=D:/보관  처럼 이름을 적어 주세요.")
+        save_local_path(root, name, value)
+        print(f"  @{name} → {value} 로 저장했습니다.")
         return 0
 
     cfg = load_config(root)
@@ -465,6 +491,15 @@ def _cmd_list(args) -> int:
     return 0
 
 
+def _quoted(value: str) -> str:
+    """공백이 든 값은 큰따옴표로 감싼다 — 제안한 명령을 그대로 복사해 붙였을 때
+    깨지지 않게. 작은따옴표가 아니라 큰따옴표인 이유는, 이 도구의 주 사용처인
+    윈도우 `cmd.exe` 가 작은따옴표를 따옴표로 보지 않기 때문이다. 큰따옴표는
+    cmd.exe · PowerShell · 리눅스 셸에서 모두 통한다.
+    """
+    return f'"{value}"' if any(c.isspace() for c in value) else value
+
+
 def _do_label(args) -> str:
     """`do` 를 그대로 다시 부를 때 필요한 인자를 전부 담는다. `--root` 는
     `_run_recipe` 가 root_opt 로 따로 붙이므로 여기엔 넣지 않는다.
@@ -476,13 +511,13 @@ def _do_label(args) -> str:
     """
     parts = [args.block]
     if args.profile:
-        parts += ["--profile", args.profile]
+        parts += ["--profile", _quoted(args.profile)]
     if args.layout:
-        parts += ["--layout", args.layout]
+        parts += ["--layout", _quoted(args.layout)]
     if args.dest:
-        parts += ["--dest", args.dest]
+        parts += ["--dest", _quoted(args.dest)]
     if args.only:
-        parts += ["--only", f'"{args.only}"']
+        parts += ["--only", _quoted(args.only)]
     return " ".join(parts)
 
 
