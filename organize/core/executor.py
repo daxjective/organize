@@ -158,6 +158,53 @@ def execute(built: BuiltPlan) -> ExecResult:
     return result
 
 
+def _claim_runlog_path(runs: Path, run_id: str) -> Path:
+    """`<run_id>.json` 자리를 원자적으로 잡는다. 이미 있으면 `-2`, `-3` … 으로 비켜 간다.
+
+    `run_id` 는 초 단위(`%Y%m%d-%H%M%S`)라 겹칠 수 있다 — 같은 폴더가 레시피의
+    `roots` 에 두 번 들어가거나(별칭 두 개가 같은 곳을 가리키는 흔한 상황),
+    1초 안에 두 번 실행하면 그렇다. 예전에는 그 자리를 **확인 없이 덮어써서**
+    앞 실행이 무엇을 옮겼는지가 통째로 사라졌다. 파일은 옮겨졌는데 되돌릴 수
+    없는, 이 프로젝트가 정의한 최악의 실패다.
+
+    `paths.claim_path` 가 파일 이름을 잡는 것과 같은 이유이고 같은 방식이다 —
+    `O_CREAT | O_EXCL` 은 "없을 때만 만든다" 를 운영체제가 원자적으로 보장하므로
+    경쟁 상태가 없다.
+    """
+    n = 1
+    while True:
+        candidate = runs / (f"{run_id}.json" if n == 1 else f"{run_id}-{n}.json")
+        try:
+            fd = os.open(candidate, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        except FileExistsError:
+            n += 1
+            continue
+        os.close(fd)
+        return candidate
+
+
+def write_json_atomic(path: Path, data: dict) -> None:
+    """임시 파일에 쓰고 `os.replace` 로 갈아끼운다. **반쯤 쓰인 기록이 안 생긴다.**
+
+    예전에는 `path.write_text(...)` 로 통째 덮어썼다. 그건 먼저 파일을 비우고
+    쓰기 때문에, 쓰는 도중 끊기면(강제 종료·전원) 기록이 깨진 JSON 으로 남는다.
+    그러면 `list_runs` 도 `doctor` 도 그 기록을 못 읽어 **없는 것처럼** 다뤘고,
+    파일은 옮겨져 있는데 "되돌릴 실행 기록이 없습니다" 가 나왔다. 실측했다.
+
+    `os.replace` 는 원자적이다 — `paths.py` 의 `_move_onto` 가 같은 이유로 쓴다.
+    """
+    tmp = path.with_name(path.name + ".tmp")
+    try:
+        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            tmp.unlink(missing_ok=True)      # 조각을 남기지 않는다
+        except OSError:
+            pass                             # 정리에 실패해도 원래 오류를 덮지 않는다
+        raise
+
+
 def prepare_runlog(built: BuiltPlan) -> Path:
     """execute() 를 부르기 전에 실행 기록 자리를 미리 마련해 둔다.
 
@@ -169,18 +216,26 @@ def prepare_runlog(built: BuiltPlan) -> Path:
     뼈대는 유효한 JSON 이어야 한다 — 실행 중 강제 종료돼도 list_runs 가
     깨지지 않는다. done 이 비어 있으므로 latest_run_id 는 이 기록을 집지
     않는다(그 함수는 count 가 참일 때만 집는다).
+
+    **남의 기록을 덮어쓰지 않는다.** 잡은 실제 경로를 `built.runlog_path` 에
+    실어 두고, `write_runlog` 이 반드시 그 경로에 쓴다 — 여기서 어긋나면
+    준비는 비켜 간 자리에 해 놓고 결과는 원래 이름에 덮어쓰는 꼴이 되어
+    고치려던 결함이 그대로 남는다.
     """
     runs = built.root / ".organize" / "runs"
-    path = runs / f"{built.run_id}.json"
     try:
         runs.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps({
-            "run_id": built.run_id,
+        path = _claim_runlog_path(runs, built.run_id)
+        write_json_atomic(path, {
+            # 기록 안의 실행ID 는 **파일 이름과 반드시 같아야 한다** — undo 는
+            # list_runs 가 준 run_id 로 `<run_id>.json` 을 찾기 때문이다.
+            "run_id": path.stem,
+            "trash_id": built.run_id,        # 격리 폴더 이름은 계획 때 이미 정해졌다
             "root": str(built.root),
             "started_at": datetime.now().isoformat(timespec="seconds"),
             "done": [], "failed": [], "stale": [],
             "complete": False,
-        }, ensure_ascii=False, indent=2), encoding="utf-8")
+        })
     except OSError as e:
         # 파이썬 예외 원문을 그대로 보여주지 않는다(전역 규칙) — 무엇을
         # 확인하면 되는지만 한국어로 알린다.
@@ -189,6 +244,7 @@ def prepare_runlog(built: BuiltPlan) -> Path:
             hint=f"'{runs}' 자리를 확인해 주세요 — 디스크 용량, 쓰기 권한, "
                  "또는 같은 이름의 파일이 이미 있는지 살펴보세요.",
         ) from e
+    built.runlog_path = path
     return path
 
 
@@ -197,18 +253,19 @@ def write_runlog(built: BuiltPlan, result: ExecResult) -> Path:
     # mkdir(parents=True, exist_ok=True) 는 그대로 남겨 둔다 — prepare_runlog
     # 없이 write_runlog 만 부르는 기존 호출자(test_executor.py, test_undo.py 의
     # run_plan 헬퍼)가 계속 통과해야 한다.
-    path = runs / f"{built.run_id}.json"
+    path = built.runlog_path or (runs / f"{built.run_id}.json")
     try:
         runs.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps({
-            "run_id": built.run_id,
+        write_json_atomic(path, {
+            "run_id": path.stem,             # 파일 이름과 어긋나면 undo 가 못 찾는다
+            "trash_id": built.run_id,
             "root": str(built.root),
             "finished_at": datetime.now().isoformat(timespec="seconds"),
             "done": result.done,
             "failed": result.failed,
             "stale": result.stale,
             "complete": True,
-        }, ensure_ascii=False, indent=2), encoding="utf-8")
+        })
     except OSError as e:
         # 이 시점엔 이미 execute() 가 끝나 파일이 옮겨져 있다. 그래서 여기서는
         # "실패했다"만 알리고 끝내지 않는다 — 호출부(CLI)가 이 오류를 받아

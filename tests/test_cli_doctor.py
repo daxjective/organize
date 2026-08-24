@@ -294,3 +294,17 @@ def test_do_suggestion_survives_a_value_with_a_space(project, capsys):
     for line in suggested:
         assert '"내 보관함"' in line or "'내 보관함'" in line, \
             f"공백이 든 값이 따옴표 없이 나갔다: {line.strip()}"
+
+
+def test_doctor_reports_records_it_could_not_read(project, capsys):
+    """Critical #3 — 못 읽은 기록을 조용히 건너뛰면 doctor 가 "없음 (확인함)"
+    이라고 답한다. 사용자가 그 사실을 알 방법은 doctor 뿐이다."""
+    _, work = project
+    runs = work / ".organize" / "runs"
+    runs.mkdir(parents=True)
+    (runs / "20260101-000000.json").write_text('{"run_id": "20260101-0', encoding="utf-8")
+
+    assert cli.main(["doctor"]) == 0
+    out = capsys.readouterr().out
+    assert "20260101-000000.json" in out, "어느 파일인지 알려줘야 한다"
+    assert "읽지" in out or "손상" in out

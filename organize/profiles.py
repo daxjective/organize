@@ -56,6 +56,92 @@ CONDITION_KEYS = frozenset({"ext", "name_contains", "name_regex", "older_than",
 _CONDITION_KEYS = CONDITION_KEYS        # 기존 내부 사용처(이 파일 안)는 그대로 둔다
 _META_KEYS = {"to", "default"}          # 조건이 아니라 규칙 자체를 기술하는 키
 
+# 값이 "여러 개 중 하나라도 맞으면" 인 조건 — 목록을 받는다.
+_ANY_OF_KEYS = ("ext", "name_contains")
+
+
+def normalize_conditions(conditions: dict, where: str) -> dict:
+    """조건 **값의 타입까지** 검사하고 정규화한다. 파일을 건드리기 전에 부른다.
+
+    커밋 63dcb33 이 조건 **키**의 오타(`whne`)를 막았지만, **값의 타입**은
+    아무도 안 봤다. 결과가 똑같이 나빴다 — 실측이다.
+
+      name_contains = "report"   ← 대괄호만 빠뜨림
+      => any(w in name for w in "report") 는 글자 단위로 순회한다.
+         `.jpg` 의 'p' 하나에도 걸려서 **폴더를 통째로 옮겼다.**
+      ext = ".pdf"
+      => ['.','p','d','f'] 가 되어 **아무것도 안 걸렸다.**
+
+    그래서 문자열 하나는 **한 칸짜리 목록으로 감싼다.** 사용자가 쓴 대로
+    동작하는 것이 가장 안 놀랍고, 거부보다 친절하다. 대신 그 밖의 타입
+    (숫자·사전·빈 목록·목록 안의 비문자열)은 조용히 다르게 동작하느니
+    한국어로 거부한다.
+
+    `name_regex` 는 여기서 미리 컴파일해 본다. `re.error` 는 ValueError 의
+    자식이라 실행 중에 터지면 per-root `except (OrganizeError, OSError)` 도
+    `main()` 의 `except OrganizeError` 도 빠져나가, **앞 폴더에서 이미 옮긴
+    것의 되돌리기 안내가 통째로 사라졌다.** 파일을 하나도 건드리기 전에
+    죽는 것이 맞다.
+    """
+    out: dict = {}
+    for key, want in conditions.items():
+        if key in _ANY_OF_KEYS:
+            out[key] = _as_list(key, want, where)
+        elif key == "name_regex":
+            if not isinstance(want, str):
+                raise OrganizeError(
+                    f"{where} 의 'name_regex' 는 글자로 적어야 합니다.",
+                    hint='예: name_regex = "^IMG_[0-9]+"')
+            try:
+                re.compile(want)
+            except re.error as e:
+                raise OrganizeError(
+                    f"{where} 의 'name_regex' 표현식을 이해하지 못했습니다: {want}",
+                    # 파이썬 예외 원문(영어)을 그대로 넣지 않는다(전역 규칙).
+                    hint="대괄호 [ ] · 괄호 ( ) 의 짝이 맞는지 확인해 주세요. "
+                         '단순히 이름에 든 글자를 찾는 것이라면 name_contains = ["찾을말"] '
+                         "가 더 안전합니다.") from e
+            out[key] = want
+        elif key == "older_than":
+            parse_age(_as_text(key, want, where))       # 표기가 틀리면 여기서 막힌다
+            out[key] = want
+        elif key == "larger_than":
+            parse_size(_as_text(key, want, where))
+            out[key] = want
+        elif key == "has_exif_camera":
+            if not isinstance(want, bool):
+                raise OrganizeError(
+                    f"{where} 의 'has_exif_camera' 는 true 또는 false 여야 합니다.",
+                    hint="예: has_exif_camera = true")
+            out[key] = want
+        else:
+            out[key] = want                              # 키 검사는 부르는 쪽이 한다
+    return out
+
+
+def _as_list(key: str, want, where: str) -> list[str]:
+    if isinstance(want, str):
+        return [want]                                    # 사용자가 쓴 대로 동작시킨다
+    if isinstance(want, (list, tuple)) and want and all(isinstance(w, str) for w in want):
+        return list(want)
+    if isinstance(want, (list, tuple)) and not want:
+        raise OrganizeError(
+            f"{where} 의 '{key}' 가 비어 있습니다 — 아무 파일도 걸리지 않습니다.",
+            hint=f'값을 적거나 조건 자체를 지워 주세요. 예: {key} = ["보고서"]')
+    raise OrganizeError(
+        f"{where} 의 '{key}' 값을 이해하지 못했습니다: {want!r}",
+        hint=f'글자 하나이거나 글자 목록이어야 합니다. 예: {key} = ["보고서", "리포트"]')
+
+
+def _as_text(key: str, want, where: str) -> str:
+    if isinstance(want, str):
+        return want
+    if isinstance(want, (int, float)) and not isinstance(want, bool):
+        return str(want)
+    raise OrganizeError(
+        f"{where} 의 '{key}' 값을 이해하지 못했습니다: {want!r}",
+        hint='따옴표로 감싼 글자여야 합니다. 예: older_than = "30d", larger_than = "100MB"')
+
 
 def load_profile(path: Path) -> Profile:
     if not path.is_file():
@@ -80,7 +166,9 @@ def load_profile(path: Path) -> Profile:
                 f"모르는 조건이 있습니다: {', '.join(unknown)}",
                 hint="쓸 수 있는 조건: " + ", ".join(sorted(_CONDITION_KEYS)),
             )
-        conditions = {k: v for k, v in raw.items() if k in _CONDITION_KEYS}
+        conditions = normalize_conditions(
+            {k: v for k, v in raw.items() if k in _CONDITION_KEYS},
+            f"{path.name} 의 {i}번째 규칙(to=\"{raw.get('to', '?')}\")")
         rules.append(Rule(to=raw.get("to"), conditions=conditions,
                           is_default=bool(raw.get("default", False))))
 
@@ -102,6 +190,11 @@ def load_profile(path: Path) -> Profile:
 
 
 def matches(entry: FileEntry, conditions: dict, today: date) -> bool:
+    # 값 타입 정규화를 여기서도 한 번 더 한다. 계획 시점(load_profile ·
+    # runner._to_config)에서 이미 걸렀지만, 이 함수를 직접 부르는 길이 남아
+    # 있으면 **같은 조건이 자리에 따라 다르게 동작하는** 상황이 생긴다.
+    # 미리보기와 실행이 같아야 한다는 이 도구의 존재 이유가 걸린 자리다.
+    conditions = normalize_conditions(conditions, "조건")
     for key, want in conditions.items():
         if key == "ext":
             if entry.ext not in [e.lower() for e in want]:

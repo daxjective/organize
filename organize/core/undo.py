@@ -10,10 +10,11 @@
 """
 
 import json
+import os
 from datetime import datetime
 from pathlib import Path
 
-from organize.core.executor import ExecResult
+from organize.core.executor import ExecResult, write_json_atomic
 from organize.core.paths import move_file
 from organize.errors import OrganizeError
 
@@ -23,6 +24,16 @@ def _runs_dir(root: Path) -> Path:
 
 
 def list_runs(root: Path) -> list[dict]:
+    """실행 기록 목록. **못 읽은 기록도 빠뜨리지 않고 알린다.**
+
+    예전에는 깨진 기록을 조용히 `continue` 했다. 그래서 그 기록은 **없는 것처럼**
+    취급됐고, 파일은 옮겨져 있는데 `undo` 는 "되돌릴 실행 기록이 없습니다",
+    `doctor` 는 "없음 (확인함)" 이라고 답했다 — 이 프로젝트가 여덟 번 물린
+    "조용한 무작동" 의 가장 순수한 형태다. 실측했다.
+
+    되돌릴 대상으로 집지 않는 것은 그대로다(`latest_run_id` 가 거른다).
+    **없는 척하지 않는 것**이 요점이다.
+    """
     runs_dir = _runs_dir(root)
     if not runs_dir.is_dir():
         return []
@@ -30,19 +41,36 @@ def list_runs(root: Path) -> list[dict]:
     for path in sorted(runs_dir.glob("*.json"), reverse=True):
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+            if not isinstance(data, dict):
+                raise ValueError("기록의 모양이 다르다")
+        except (OSError, ValueError):
+            # JSONDecodeError 는 ValueError 의 자식이다. 내용이 dict 가 아닌
+            # 경우도 같이 받는다 — 아래 .get 이 AttributeError 로 터진다.
+            rows.append({
+                "run_id": path.stem, "finished_at": None, "undone_at": None,
+                "count": 0, "unreadable": True, "path": str(path),
+            })
             continue
         rows.append({
             "run_id": data.get("run_id", path.stem),
             "finished_at": data.get("finished_at"),
             "undone_at": data.get("undone_at"),
             "count": len(data.get("done", [])),
+            "unreadable": False,
+            "path": str(path),
         })
     return rows
 
 
+def unreadable_runs(root: Path) -> list[str]:
+    """읽지 못한 실행 기록의 파일 경로. doctor 와 undo 가 사람에게 알릴 때 쓴다."""
+    return [row["path"] for row in list_runs(root) if row["unreadable"]]
+
+
 def latest_run_id(root: Path) -> str | None:
     for row in list_runs(root):
+        if row["unreadable"]:
+            continue                 # 무엇을 옮겼는지 모르는 기록은 되돌릴 수 없다
         if row["undone_at"] is None and row["count"]:
             return row["run_id"]
     return None
@@ -51,6 +79,16 @@ def latest_run_id(root: Path) -> str | None:
 def undo(root: Path, run_id: str | None = None) -> ExecResult:
     resolved_id = run_id or latest_run_id(root)
     if resolved_id is None:
+        broken = unreadable_runs(root)
+        if broken:
+            # "없다" 로 뭉개면 안 된다 — 파일은 옮겨져 있는데 되돌릴 방법이
+            # 없다는 사실 자체가 사용자가 알아야 할 전부다.
+            raise OrganizeError(
+                f"되돌릴 수 있는 실행 기록이 없고, 읽지 못한 기록이 {len(broken)}개 있습니다: "
+                + ", ".join(Path(b).name for b in broken),
+                hint=f"기록이 손상되어 무엇을 옮겼는지 알 수 없습니다. '{root}' 안에 "
+                     f"새로 생긴 폴더와 '{root / '.organize' / 'trash'}' 를 직접 확인해 주세요.",
+            )
         raise OrganizeError(
             "되돌릴 실행 기록이 없습니다.",
             hint="organize run <레시피> --apply 로 한 번 실행한 뒤에 쓸 수 있습니다.",
@@ -66,7 +104,20 @@ def undo(root: Path, run_id: str | None = None) -> ExecResult:
                  "organize undo --root <폴더> 로 가장 최근 실행을 되돌릴 수 있습니다.",
         )
 
-    data = json.loads(log_path.read_text(encoding="utf-8"))
+    try:
+        data = json.loads(log_path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("기록의 모양이 다르다")
+    except (OSError, ValueError) as e:
+        # JSONDecodeError(ValueError 의 자식)가 그대로 새면 파이썬 트레이스백이
+        # 화면에 뜬다 — 전역 규칙 위반이자, 사용자가 다음에 뭘 해야 할지
+        # 알 수 없게 만드는 자리다.
+        raise OrganizeError(
+            f"'{resolved_id}' 실행 기록이 손상되어 읽을 수 없습니다: {log_path.name}",
+            hint=f"쓰는 도중에 끊긴 기록일 수 있습니다. '{root}' 안에 새로 생긴 폴더와 "
+                 f"'{root / '.organize' / 'trash'}' 를 직접 확인해 주세요.",
+        ) from e
+
     if data.get("undone_at"):
         # 두 번 되돌리는 경우: 이미 restore 된 파일은 옮긴 자리에 없으므로
         # 그대로 진행하면 "옮기려는 파일이 없습니다" 가 항목마다 실패로
@@ -162,8 +213,20 @@ def undo(root: Path, run_id: str | None = None) -> ExecResult:
         # 안 남기면 다음 시도가 이미 되돌린 것을 또 되돌리려 들어 실패만 쌓인다.
         if all(i.get("undone") for i in items):
             data["undone_at"] = datetime.now().isoformat(timespec="seconds")
-            _tidy_our_own_bookkeeping(root, resolved_id)
-        log_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            # 격리 폴더 이름은 계획 때의 run_id 로 정해졌다. 기록 파일 이름이
+            # 충돌을 피해 `-2` 로 비켜 갔을 수 있으므로 둘을 따로 들고 다닌다.
+            _tidy_our_own_bookkeeping(root, data.get("trash_id") or resolved_id)
+        try:
+            write_json_atomic(log_path, data)
+        except OSError as e:
+            # 통째 덮어쓰기가 아니라 갈아끼우기이므로 여기서 실패해도 **이전
+            # 기록은 그대로 남는다.** 다만 어디까지 되돌렸는지는 못 적었으므로
+            # 조용히 넘어가지 않고 사실대로 알린다.
+            raise OrganizeError(
+                f"되돌리기는 했지만 그 사실을 기록에 남기지 못했습니다: {log_path.name}",
+                hint=f"'{_runs_dir(root)}' 의 쓰기 권한과 디스크 남은 공간을 확인해 주세요. "
+                     "같은 명령을 다시 실행하면 이미 되돌린 것을 또 되돌리려 할 수 있습니다.",
+            ) from e
     return result
 
 

@@ -343,3 +343,187 @@ def test_undo_reports_a_failure_in_korean_without_a_raw_exception(project, tmp_p
     out = capsys.readouterr().out
     assert "Permission denied" not in out
     assert code == 1
+
+
+# ---------------------------------------------------------------------------
+# 수정 라운드 2(최종 리뷰) — Critical #1/#2/#3.
+# 셋 다 "파일은 옮겨졌는데 되돌릴 수 없고, 화면은 완료라고 말한다" 는 한 부류다.
+# ---------------------------------------------------------------------------
+
+
+def write_recipe(repo, name: str, roots: list[Path], steps: list[dict]) -> None:
+    (repo / "recipes" / f"{name}.json").write_text(json.dumps({
+        "name": name, "roots": [str(r) for r in roots], "steps": steps,
+    }, ensure_ascii=False), encoding="utf-8")
+
+
+def test_same_folder_listed_twice_still_leaves_a_usable_run_record(project, capsys):
+    """Critical #1 — 레시피 roots 에 같은 폴더가 두 번 있으면(별칭 두 개가 같은
+    곳을 가리키는 흔한 상황) 두 번째 통과가 **같은 run_id 로** prepare_runlog 을
+    다시 불러 첫 통과의 기록을 `done: []` 뼈대로 덮어썼다. 화면은 "완료" 라고
+    말하고 되돌리기 명령까지 권하는데, 그 명령은 "되돌릴 실행 기록이 없습니다"
+    라고 답한다. 컨트롤러가 실측한 그대로다."""
+    repo, work = project
+    old_file(work / "보고서.pdf")
+    write_recipe(repo, "dup", [work, work], [{"block": "route", "profile": "desktop"}])
+
+    assert cli.main(["run", "dup", "--apply"]) == 0
+    out = capsys.readouterr().out
+    assert out.count(f"■ {work}") == 1, "같은 폴더를 두 번 정리하지 않는다"
+    assert (work / "01_Docs" / "보고서.pdf").exists()
+
+    assert cli.main(["undo", "--root", str(work)]) == 0, \
+        "권한 되돌리기 명령이 실제로 되돌려야 한다"
+    assert (work / "보고서.pdf").read_bytes() == b"DATA"
+
+
+def test_two_runs_in_the_same_second_keep_both_records(project, tmp_path, capsys):
+    """Critical #1(b) — run_id 는 초 단위다. 1초 안에 두 번 실행하면 두 번째
+    prepare_runlog 이 첫 기록을 덮어써, 첫 실행이 옮긴 파일이 영영 갇힌다."""
+    repo, work = project
+    old_file(work / "보고서.pdf")
+    old_file(work / "사진.png")
+    write_recipe(repo, "one", [work], [{"block": "route", "profile": "desktop",
+                                        "when": {"ext": [".pdf"]}}])
+    write_recipe(repo, "two", [work], [{"block": "route", "profile": "desktop",
+                                        "when": {"ext": [".png"]}}])
+
+    # 같은 run_id 를 강제한다 — 1초 안에 두 번 친 것과 같다(타이밍 운에 안 맡긴다).
+    import organize.cli as cli_mod
+    original = cli_mod.make_run_id
+    cli_mod.make_run_id = lambda now: "20260824-185957"
+    try:
+        assert cli.main(["run", "one", "--apply"]) == 0
+        assert cli.main(["run", "two", "--apply"]) == 0
+    finally:
+        cli_mod.make_run_id = original
+    capsys.readouterr()
+
+    logs = sorted((work / ".organize" / "runs").glob("*.json"))
+    assert len(logs) == 2, "실행 두 번이면 기록도 두 개여야 한다 — 덮어쓰면 안 된다"
+    moved = [d for p in logs
+             for d in json.loads(p.read_text(encoding="utf-8"))["done"]
+             if d["kind"] == "move"]
+    assert len(moved) == 2, "두 실행이 옮긴 것이 모두 기록에 남아야 한다"
+
+    # 두 번 되돌리면 두 파일 모두 제자리로 온다
+    assert cli.main(["undo", "--root", str(work)]) == 0
+    assert cli.main(["undo", "--root", str(work)]) == 0
+    assert (work / "보고서.pdf").exists() and (work / "사진.png").exists()
+
+
+def test_bad_regex_in_a_recipe_never_reaches_a_python_traceback(project, tmp_path, capsys):
+    """Critical #2 — 레시피의 정규식 오타 하나가 `re.error` 로 터졌다.
+    `re.error` 는 ValueError 의 자식이라 per-root `except (OrganizeError, OSError)`
+    도 `main()` 의 `except OrganizeError` 도 빠져나간다. 폴더 여러 개짜리
+    레시피에서는 **앞 폴더에서 이미 옮긴 것의 되돌리기 안내가 통째로 사라진다.**
+    파일을 하나도 건드리기 전에 한국어로 거부하는 것이 맞다."""
+    repo, _ = project
+    work_a = tmp_path / "a"
+    work_b = tmp_path / "b"
+    old_file(work_a / "가.pdf")
+    old_file(work_b / "나.txt")          # route 의 when 에 안 걸려 root 에 남는다
+    # 컨트롤러 재현과 같은 모양: 앞 폴더는 정규식을 만나지 않고(파일이 이미
+    # 옮겨져 by_date 의 대상이 0건), 뒤 폴더에서만 터진다.
+    write_recipe(repo, "badre", [work_a, work_b], [
+        {"block": "route", "profile": "desktop", "when": {"ext": [".pdf"]}},
+        {"block": "by_date", "when": {"name_regex": "[불완전"}},
+    ])
+
+    code = cli.main(["run", "badre", "--apply"])         # 예외가 새면 여기서 죽는다
+    out = capsys.readouterr().out
+
+    assert code == 1
+    assert "Traceback" not in out and "re.error" not in out
+    assert "name_regex" in out, "어느 조건이 잘못됐는지 짚어 줘야 한다"
+    assert (work_a / "가.pdf").exists(), "계획 단계에서 막히므로 파일은 그대로다"
+    assert not (work_a / "01_Docs").exists()
+    assert (work_b / "나.txt").exists()
+
+
+def test_an_unexpected_exception_in_one_root_does_not_abandon_the_others(
+        project, tmp_path, capsys, monkeypatch):
+    """Critical #2(그물) — 우리가 미처 못 본 예외가 또 있을 수 있다. 예외 종류를
+    열거하는 그물은 세 번 뚫렸다. 무엇이 터지든 나머지 폴더는 살리고, 화면에
+    한국어로 남기고, 종료 코드에 반영한다."""
+    repo, _ = project
+    work_a, work_b, work_c = tmp_path / "a", tmp_path / "b", tmp_path / "c"
+    for w, n in ((work_a, "가.pdf"), (work_b, "나.pdf"), (work_c, "다.pdf")):
+        old_file(w / n)
+    write_multi_recipe(repo, "boom", [work_a, work_b, work_c])
+
+    real_build_plan = cli.build_plan
+
+    def flaky(root, *a, **k):
+        if root == work_b:
+            raise ValueError("아무도 예상 못 한 예외(시뮬레이션)")
+        return real_build_plan(root, *a, **k)
+
+    monkeypatch.setattr(cli, "build_plan", flaky)
+
+    code = cli.main(["run", "boom", "--apply"])
+    out = capsys.readouterr().out
+
+    assert code == 1
+    assert (work_a / "01_Docs" / "가.pdf").exists()
+    assert (work_c / "01_Docs" / "다.pdf").exists(), "B가 죽어도 C는 처리돼야 한다"
+    assert "아무도 예상 못 한 예외" not in out, "파이썬 예외 원문을 노출하지 않는다"
+    assert str(work_b) in out
+
+
+def test_ctrl_c_still_stops_everything(project, tmp_path, monkeypatch):
+    """그물을 넓히면서 Ctrl-C 까지 삼키면 안 된다. KeyboardInterrupt 는
+    Exception 의 자식이 아니므로 그대로 새어 나가야 한다."""
+    repo, _ = project
+    work_a = tmp_path / "a"
+    old_file(work_a / "가.pdf")
+    write_multi_recipe(repo, "ctrlc", [work_a])
+
+    def interrupted(*a, **k):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli, "build_plan", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        cli.main(["run", "ctrlc", "--apply"])
+
+
+def test_undo_says_the_record_is_unreadable_instead_of_nothing_to_undo(project, capsys):
+    """Critical #3 — 기록이 쓰다 만 상태면 list_runs 가 조용히 건너뛰어
+    "되돌릴 실행 기록이 없습니다" 가 나왔다. 파일은 옮겨져 있는데 말이다.
+    없는 척하지 않는 것이 요점이다."""
+    _, work = project
+    old_file(work / "보고서.pdf")
+    cli.main(["run", "t", "--apply"])
+    capsys.readouterr()
+
+    log = next((work / ".organize" / "runs").glob("*.json"))
+    text = log.read_text(encoding="utf-8")
+    log.write_text(text[:len(text) // 2], encoding="utf-8")     # 쓰다가 끊긴 상태
+
+    code = cli.main(["undo", "--root", str(work)])
+    out = capsys.readouterr().out
+
+    assert code == 1
+    assert "되돌릴 실행 기록이 없습니다" not in out, \
+        "못 읽은 기록을 '없다' 로 말하면 안 된다"
+    assert "읽지" in out or "손상" in out
+    assert str(log) in out or log.name in out, "어느 파일인지 알려줘야 한다"
+
+
+def test_undo_by_run_id_on_a_corrupted_record_is_korean_not_a_traceback(project, capsys):
+    """Critical #3(덤) — 깨진 기록을 실행ID 로 콕 집으면 JSONDecodeError
+    트레이스백이 그대로 떴다."""
+    _, work = project
+    old_file(work / "보고서.pdf")
+    cli.main(["run", "t", "--apply"])
+    capsys.readouterr()
+
+    log = next((work / ".organize" / "runs").glob("*.json"))
+    text = log.read_text(encoding="utf-8")
+    log.write_text(text[:len(text) // 2], encoding="utf-8")
+
+    code = cli.main(["undo", log.stem, "--root", str(work)])
+    out = capsys.readouterr().out
+    assert code == 1
+    assert "JSONDecodeError" not in out and "Traceback" not in out
+    assert "손상" in out or "읽지" in out

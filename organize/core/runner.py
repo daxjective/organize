@@ -14,7 +14,7 @@ from organize.core.action import Plan
 from organize.core.context import Context
 from organize.core.scanner import scan
 from organize.errors import OrganizeError
-from organize.profiles import CONDITION_KEYS, load_profile
+from organize.profiles import CONDITION_KEYS, load_profile, normalize_conditions
 
 _RESERVED = {"block", "target", "dest", "when"}
 
@@ -30,6 +30,10 @@ class BuiltPlan:
     # 나눠 세야 한다.
     per_block: list[tuple[str, int]] = field(default_factory=list)
     snapshot: dict[str, tuple[int, float]] = field(default_factory=dict)
+    # prepare_runlog 이 실제로 잡은 실행 기록 경로. run_id 가 겹쳐 `-2` 로 비켜
+    # 갔을 수 있으므로 write_runlog 은 반드시 이 경로에 써야 한다 — 어긋나면
+    # 준비한 자리와 결과를 쓴 자리가 달라져 남의 기록을 덮어쓴다.
+    runlog_path: Path | None = None
 
 
 def make_run_id(now: datetime) -> str:
@@ -59,6 +63,12 @@ def _check_keys(step: dict, block_name: str, order: int) -> None:
             hint="쓸 수 있는 조건: " + ", ".join(sorted(CONDITION_KEYS)),
         )
 
+    # 키만 보고 값을 안 보면 `name_contains = "report"`(대괄호 누락) 하나가
+    # 필터를 "전부 일치" 로 뒤집고, `name_regex` 오타 하나가 실행 도중
+    # re.error 로 터진다. 파일을 하나도 건드리기 전인 여기서 막는다.
+    normalize_conditions(step.get("when") or {},
+                         f"{order}번째 작업('{block_name}')의 'when'")
+
 
 def _to_config(step: dict, profiles_dir: Path, block_name: str,
                order: int) -> BlockConfig:
@@ -69,7 +79,10 @@ def _to_config(step: dict, profiles_dir: Path, block_name: str,
     return BlockConfig(
         target=step.get("target", ""),
         dest=step.get("dest"),
-        when=step.get("when", {}) or {},
+        # 정규화한 값을 넘긴다 — 검사만 하고 원본을 넘기면 검사와 실제 동작이
+        # 갈라진다.
+        when=normalize_conditions(step.get("when", {}) or {},
+                                  f"{order}번째 작업('{block_name}')의 'when'"),
         options=options,
     )
 

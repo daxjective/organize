@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from organize.core import executor
 from organize.core.action import Action, Plan
 from organize.core.executor import execute, prepare_runlog, write_runlog
 from organize.core.runner import BuiltPlan
@@ -385,3 +386,68 @@ def test_a_failed_quarantine_manifest_never_costs_us_the_run_record(tmp_path):
     # 그리고 실행 기록이 실제로 써진다 — 되돌릴 수 있다
     log = write_runlog(b, result)
     assert log.is_file()
+
+
+# --- 수정 라운드 2(최종 리뷰) — Critical #1: 같은 run_id 로 두 번 준비하면
+# 앞 기록이 통째로 지워졌다. Critical #3: 기록 쓰기가 원자적이지 않았다. ---
+
+
+def test_prepare_runlog_never_overwrites_an_existing_record(tmp_path):
+    """같은 run_id 로 두 번 준비하면(같은 폴더가 roots 에 두 번 · 1초 내 재실행)
+    앞 실행이 무엇을 옮겼는지가 사라졌다. `claim_path` 가 이름을 잡는 것과 같은
+    이유로, 이미 있는 이름은 비켜 가야 한다."""
+    src = tmp_path / "a.pdf"
+    src.write_bytes(b"DATA")
+    first = built_for(tmp_path, [Action("move", src, tmp_path / "01_Docs" / "a.pdf", "이동", "route")])
+    p1 = prepare_runlog(first)
+    r1 = execute(first)
+    assert write_runlog(first, r1) == p1
+
+    second = built_for(tmp_path, [])
+    p2 = prepare_runlog(second)
+
+    assert p2 != p1, "같은 이름을 덮어쓰면 앞 실행을 영영 못 되돌린다"
+    kept = json.loads(p1.read_text(encoding="utf-8"))
+    assert any(d["kind"] == "move" for d in kept["done"]), "첫 기록이 살아 있어야 한다"
+
+
+def test_write_runlog_writes_where_prepare_runlog_claimed(tmp_path):
+    """비켜 간 경로를 write_runlog 이 안 쓰면 지금과 똑같은 결함이 된다 —
+    준비는 -2 에 해 놓고 결과는 원래 이름에 덮어쓰는 꼴."""
+    (tmp_path / ".organize" / "runs").mkdir(parents=True)
+    (tmp_path / ".organize" / "runs" / "r1.json").write_text("{}", encoding="utf-8")
+
+    src = tmp_path / "a.pdf"
+    src.write_bytes(b"DATA")
+    b = built_for(tmp_path, [Action("move", src, tmp_path / "01_Docs" / "a.pdf", "이동", "route")])
+    claimed = prepare_runlog(b)
+    log = write_runlog(b, execute(b))
+
+    assert log == claimed
+    data = json.loads(log.read_text(encoding="utf-8"))
+    assert data["run_id"] == log.stem, \
+        "기록 안의 실행ID 와 파일 이름이 어긋나면 undo 가 그 기록을 못 찾는다"
+    assert (tmp_path / ".organize" / "runs" / "r1.json").read_text(encoding="utf-8") == "{}", \
+        "남의 기록을 건드리면 안 된다"
+
+
+def test_write_runlog_never_destroys_the_previous_record_when_the_write_fails(
+        tmp_path, monkeypatch):
+    """Critical #3 — 통째 덮어쓰기(write_text)는 원자적이지 않다. 쓰는 도중
+    죽으면 기록이 반쯤 쓰인 채 남아 되돌리기가 통째로 불가능해진다.
+    임시 파일에 쓰고 os.replace 로 갈아끼우면 그런 상태가 아예 안 생긴다."""
+    src = tmp_path / "a.pdf"
+    src.write_bytes(b"DATA")
+    b = built_for(tmp_path, [Action("move", src, tmp_path / "01_Docs" / "a.pdf", "이동", "route")])
+    r = execute(b)
+    log = write_runlog(b, r)
+    before = log.read_text(encoding="utf-8")
+
+    def boom(a, b_):
+        raise OSError("갈아끼우기 실패(시뮬레이션)")
+
+    monkeypatch.setattr(executor.os, "replace", boom)
+    with pytest.raises(OrganizeError):
+        write_runlog(b, r)
+    assert log.read_text(encoding="utf-8") == before, \
+        "쓰기가 실패해도 이전 기록이 남아 있어야 한다"

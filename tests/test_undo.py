@@ -414,3 +414,75 @@ def test_a_corrupted_log_entry_is_reported_in_korean_without_a_traceback(tmp_pat
 
     assert result.failed
     assert "실행 기록" in result.failed[0]["why"]
+
+
+# --- 수정 라운드 2(최종 리뷰) — Critical #3: 못 읽은 기록을 없는 척했다. ---
+
+
+def test_list_runs_reports_a_record_it_could_not_read(tmp_path):
+    """조용히 `continue` 하면 깨진 기록이 **없는 것처럼** 취급된다.
+    doctor 가 "없음 (확인함)" 이라고 답한 뿌리다."""
+    runs = tmp_path / ".organize" / "runs"
+    runs.mkdir(parents=True)
+    (runs / "20260101-000000.json").write_text('{"run_id": "20260101-0', encoding="utf-8")
+
+    rows = list_runs(tmp_path)
+    assert len(rows) == 1
+    assert rows[0]["unreadable"] is True
+    assert rows[0]["path"] == str(runs / "20260101-000000.json")
+
+
+def test_latest_run_id_never_picks_an_unreadable_record(tmp_path):
+    runs = tmp_path / ".organize" / "runs"
+    runs.mkdir(parents=True)
+    (runs / "20260101-000000.json").write_text('{"run_id": "20260101-0', encoding="utf-8")
+    assert latest_run_id(tmp_path) is None
+
+
+def test_undo_with_no_run_id_says_the_record_is_unreadable(tmp_path):
+    """파일은 옮겨져 있는데 "되돌릴 실행 기록이 없습니다" 는 거짓말이다."""
+    runs = tmp_path / ".organize" / "runs"
+    runs.mkdir(parents=True)
+    broken = runs / "20260101-000000.json"
+    broken.write_text('{"run_id": "20260101-0', encoding="utf-8")
+
+    with pytest.raises(OrganizeError) as ex:
+        undo(tmp_path)
+    text = ex.value.message + (ex.value.hint or "")
+    assert "없습니다" not in ex.value.message or "읽지" in text
+    assert broken.name in text
+
+
+def test_undo_by_run_id_on_a_corrupted_record_raises_a_korean_error(tmp_path):
+    runs = tmp_path / ".organize" / "runs"
+    runs.mkdir(parents=True)
+    (runs / "20260101-000000.json").write_text('{"run_id": "20260101-0', encoding="utf-8")
+
+    with pytest.raises(OrganizeError) as ex:
+        undo(tmp_path, "20260101-000000")
+    text = ex.value.message + (ex.value.hint or "")
+    assert "JSONDecodeError" not in text and "Expecting" not in text
+
+
+def test_undo_bookkeeping_write_never_destroys_the_record(tmp_path, monkeypatch):
+    """되돌리기의 마지막 쓰기도 원자적이어야 한다 — 여기서 반쯤 쓰이면
+    '어디까지 되돌렸는지' 가 사라져 재시도가 불가능해진다."""
+    from organize.core import undo as undo_mod
+
+    src = tmp_path / "a.pdf"
+    src.write_bytes(b"DATA")
+    run_plan(tmp_path, [
+        Action("mkdir", None, tmp_path / "01_Docs", "폴더", "route"),
+        Action("move", src, tmp_path / "01_Docs" / "a.pdf", "이동", "route"),
+    ])
+    log = tmp_path / ".organize" / "runs" / "r1.json"
+    before = log.read_text(encoding="utf-8")
+
+    def boom(a, b):
+        raise OSError("갈아끼우기 실패(시뮬레이션)")
+
+    monkeypatch.setattr(undo_mod.os, "replace", boom)
+    with pytest.raises(OrganizeError):
+        undo(tmp_path)
+    assert log.read_text(encoding="utf-8") == before, \
+        "기록을 갈아끼우다 실패해도 이전 내용이 남아 있어야 한다"

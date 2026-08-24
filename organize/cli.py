@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import os
 import sys
 from datetime import date, datetime
 from pathlib import Path
@@ -11,6 +12,7 @@ from organize.aliases import BUILTIN
 from organize.core.executor import execute, prepare_runlog, write_runlog
 from organize.core.runner import build_plan, make_run_id
 from organize.core.undo import undo as undo_run
+from organize.core.undo import unreadable_runs
 from organize.errors import OrganizeError
 from organize.recipes import Recipe, find_recipe, list_recipes, load_recipe
 from organize.userconfig import AliasNotDefined, load_config, resolve_alias, save_local_path
@@ -35,12 +37,33 @@ def repo_root() -> Path:
 
 
 def _resolve_roots(recipe, override: str | None) -> list[Path]:
+    """레시피의 폴더 목록을 실제 경로로 바꾼다. **같은 폴더는 한 번만 돌려준다.**
+
+    별칭 두 개가 같은 곳을 가리키는 것은 흔하다 — 이 저장소가 싣고 있는
+    `config.default.json` 만 봐도 `"work": "@documents"` 다.
+    `roots: ["@documents", "@work"]` 는 사용자가 쓸 법한 레시피인데, 한 번의
+    실행에서 같은 폴더를 두 번 정리하는 것은 **의도된 적이 없다.** 게다가 두
+    통과가 같은 run_id 를 공유해 뒤 통과가 앞 통과의 실행 기록을 지웠다.
+
+    비교는 `os.path.realpath` 로 한다 — 심볼릭 링크나 `..` 가 섞여 문자열이
+    달라도 같은 폴더면 같다고 봐야 한다. **순서는 처음 나온 대로 유지한다**
+    (결정적이어야 한다).
+    """
     cfg = load_config(repo_root())
     specs = [override] if override else recipe.roots
     if not specs:
         raise OrganizeError("정리할 폴더가 지정되지 않았습니다.",
                             hint='레시피의 "roots" 에 폴더를 적거나 --root 를 쓰세요.')
-    return [resolve_alias(s, cfg) for s in specs]
+    roots: list[Path] = []
+    seen: set[str] = set()
+    for spec in specs:
+        path = resolve_alias(spec, cfg)
+        key = os.path.realpath(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        roots.append(path)
+    return roots
 
 
 def _print_plan(built, verbose: bool) -> dict:
@@ -100,8 +123,15 @@ def _run_recipe(recipe, args, *, apply: bool, label: str) -> int:
 
         # root 하나가 죽어도 나머지 root 는 계속 처리한다. 여기서 조용히
         # 빠져나가는 게 이 프로젝트의 고질병("조용한 무작동")이었다
-        # (Task 18 리뷰 Critical #2). OrganizeError·OSError 를 둘 다 넓게
-        # 잡되 KeyboardInterrupt 는 그대로 새게 둔다.
+        # (Task 18 리뷰 Critical #2).
+        #
+        # **예외 종류를 열거하지 않는다.** 예전에는 (OrganizeError, OSError) 로
+        # 못박아 뒀는데, 레시피의 정규식 오타가 내는 `re.error` 는 ValueError 의
+        # 자식이라 그 그물을 그냥 빠져나갔다 — 앞 폴더에서 이미 옮긴 것의
+        # 되돌리기 안내가 통째로 사라졌다. 격리의 목적은 "무엇이 터지든 나머지
+        # 폴더는 살린다" 이므로 Exception 을 통째로 받는다. KeyboardInterrupt 와
+        # SystemExit 은 Exception 의 자식이 아니라 그대로 새어 나간다 — Ctrl-C 는
+        # 여전히 통해야 한다.
         try:
             built = build_plan(root, recipe.steps, today=date.today(), run_id=run_id,
                                profiles_dir=repo_root() / "profiles")
@@ -144,17 +174,19 @@ def _run_recipe(recipe, args, *, apply: bool, label: str) -> int:
                 print(f"    실패  {Path(row['src']).name} — {row['why']}")
             applied_roots.append(root)
 
-        except (OrganizeError, OSError) as e:
-            if isinstance(e, OrganizeError):
-                print(f"\n  실패: {e.message}")
-                if e.hint:
-                    print(f"  {e.hint}")
-            else:
-                # 순정 파이썬 예외를 그대로 노출하지 않는다(전역 규칙) — 어느
-                # 폴더가 실패했는지만 한국어로 알린다.
-                print(f"\n  실패: '{root}' 폴더를 처리하는 동안 예상치 못한 "
-                      "오류가 났습니다.")
-                print("  디스크 상태나 쓰기 권한을 확인해 주세요.")
+        except OrganizeError as e:
+            print(f"\n  실패: {e.message}")
+            if e.hint:
+                print(f"  {e.hint}")
+            failed_roots.append(root)
+            continue
+        except Exception:
+            # 순정 파이썬 예외를 그대로 노출하지 않는다(전역 규칙) — 어느
+            # 폴더가 실패했는지만 한국어로 알린다. 삼키지는 않는다:
+            # 화면에 남기고 아래에서 종료 코드 1 로 반영한다.
+            print(f"\n  실패: '{root}' 폴더를 처리하는 동안 예상치 못한 "
+                  "오류가 났습니다. 이 폴더는 건너뜁니다.")
+            print("  디스크 상태나 쓰기 권한을 확인해 주세요.")
             failed_roots.append(root)
             continue
 
@@ -237,7 +269,9 @@ def _cmd_undo(args) -> int:
                 print(f"  {e.hint}")
             failed_roots.append(root)
             continue
-        except OSError:
+        except Exception:
+            # 예외 종류를 열거하지 않는다 — 실행 쪽과 같은 이유다(무엇이 터지든
+            # 나머지 폴더는 되돌린다). KeyboardInterrupt 는 그대로 새어 나간다.
             # 순정 파이썬 예외를 그대로 노출하지 않는다(전역 규칙).
             print(f"  '{root}' 폴더를 되돌리는 동안 예상치 못한 오류가 났습니다.")
             print("  디스크 상태나 쓰기 권한을 확인해 주세요.")
@@ -312,6 +346,20 @@ def _find_zero_byte_files(folders: list[Path]) -> list[Path]:
     return sorted(set(found), key=str)
 
 
+def _find_unreadable_runs(folders: list[Path]) -> list[tuple[str, Path]]:
+    """읽지 못한 실행 기록. **"없음 (확인함)" 으로 뭉개면 안 되는 것들이다.**
+
+    기록이 쓰다 만 상태면 `undo` 는 그 기록을 되돌릴 대상으로 집지 못한다.
+    파일은 옮겨져 있는데 도구는 "되돌릴 실행 기록이 없습니다" 라고 답한다 —
+    사용자가 그 사실을 알 방법은 doctor 뿐이다.
+    """
+    found: list[tuple[str, Path]] = []
+    for folder in folders:
+        for path in unreadable_runs(folder):
+            found.append((Path(path).name, folder))
+    return found
+
+
 def _find_incomplete_runs(folders: list[Path]) -> list[tuple[str, Path]]:
     """`prepare_runlog`(organize/core/executor.py) 가 실행 **전에** 남긴
     뼈대(`complete: false`)가 `write_runlog` 로 덮어써지지 않은 채 남아 있으면,
@@ -327,9 +375,9 @@ def _find_incomplete_runs(folders: list[Path]) -> list[tuple[str, Path]]:
         for path in sorted(runs_dir.glob("*.json")):
             try:
                 data = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                continue                           # 손상된 기록은 list_runs 도 건너뛴다
-            if data.get("complete") is False:
+            except (OSError, ValueError):
+                continue                           # 못 읽은 기록은 _find_unreadable_runs 가 알린다
+            if isinstance(data, dict) and data.get("complete") is False:
                 found.append((data.get("run_id", path.stem), folder))
     return found
 
@@ -439,6 +487,19 @@ def _cmd_doctor(args) -> int:
                   " .organize/trash 를 직접 확인해 주세요.")
             for run_id, folder in incomplete:
                 print(f"      {run_id}  ({folder})")
+        else:
+            print("    없음 (확인함)")
+
+    print("\n  읽지 못한 실행 기록 (무엇을 옮겼는지 알 수 없어 되돌리기가 거부합니다)")
+    if not checked_folders:
+        print("    확인할 폴더가 없어 못 봤습니다.")
+    else:
+        broken = _find_unreadable_runs(checked_folders)
+        if broken:
+            print(f"    {len(broken)}개 발견 — 기록이 쓰다 만 상태입니다."
+                  " 아래 폴더 안 새로 생긴 폴더와 .organize/trash 를 직접 확인해 주세요.")
+            for name, folder in broken:
+                print(f"      {name}  ({folder / '.organize' / 'runs'})")
         else:
             print("    없음 (확인함)")
 
