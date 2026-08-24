@@ -1,19 +1,34 @@
 """명령줄. 출력 끝에는 항상 다음에 칠 명령어를 그대로 보여준다."""
 
 import argparse
+import json
 import sys
+import sys as _sys
 from datetime import date, datetime
 from pathlib import Path
 
 from organize import __version__
+from organize.aliases import BUILTIN
 from organize.core.executor import execute, prepare_runlog, write_runlog
 from organize.core.runner import build_plan, make_run_id
 from organize.core.undo import undo as undo_run
 from organize.errors import OrganizeError
-from organize.recipes import find_recipe, list_recipes, load_recipe
-from organize.userconfig import load_config, resolve_alias
+from organize.recipes import Recipe, find_recipe, list_recipes, load_recipe
+from organize.userconfig import AliasNotDefined, load_config, resolve_alias, save_local_path
 
 _KIND_LABEL = {"mkdir": "폴더 생성", "move": "이동", "quarantine": "격리", "extract": "압축 해제"}
+
+_ALIAS_LABEL = {"home": "홈", "desktop": "바탕화면", "downloads": "다운로드",
+                "documents": "문서", "pictures": "사진", "music": "음악", "videos": "영상"}
+
+
+def _count_files(path: Path) -> str:
+    if not path.is_dir():
+        return "없음!"
+    try:
+        return str(sum(1 for p in path.iterdir() if p.is_file()))
+    except OSError:
+        return "읽을 수 없음"
 
 
 def repo_root() -> Path:
@@ -50,16 +65,28 @@ def _print_plan(built, verbose: bool) -> dict:
 
 
 def _cmd_preview(args) -> int:
-    return _preview_or_run(args, apply=False)
+    recipe = load_recipe(find_recipe(repo_root() / "recipes", args.recipe))
+    return _run_recipe(recipe, args, apply=False, label=args.recipe)
 
 
 def _cmd_run(args) -> int:
-    return _preview_or_run(args, apply=bool(args.apply))
+    recipe = load_recipe(find_recipe(repo_root() / "recipes", args.recipe))
+    return _run_recipe(recipe, args, apply=bool(args.apply), label=args.recipe)
 
 
-def _preview_or_run(args, *, apply: bool) -> int:
-    recipes_dir = repo_root() / "recipes"
-    recipe = load_recipe(find_recipe(recipes_dir, args.recipe))
+def _run_recipe(recipe, args, *, apply: bool, label: str) -> int:
+    """레시피 하나를 미리보거나 실행한다. `preview`/`run`/`do` 가 모두 이걸 쓴다.
+
+    `do` 는 레시피 파일 없이 블록 하나짜리 임시 레시피를 만들어 넘긴다 —
+    그때 `args.recipe` 는 일부러 None 이다(아래 `is_do` 판정에 쓴다). `label` 은
+    화면 맨 끝에 "다음에 그대로 칠 명령"을 고를 때만 쓴다: 레시피 모드에서는
+    레시피 이름("t")이고, `do` 모드에서는 재실행에 필요한 인자를 다 담은
+    문구("route --profile desktop")다 — 여기서 --profile 이나 --only 를
+    빠뜨리면, 미리보기 때는 걸러졌던 파일이 사용자가 그대로 복사한 명령에서는
+    안 걸러진 채로 옮겨진다. 미리보기가 보장하는 것과 실제로 벌어지는 일이
+    달라지는 조용한 사고이므로, 브리프의 `label=args.block` 보다 넓게 잡았다.
+    """
+    is_do = getattr(args, "recipe", None) is None
     roots = _resolve_roots(recipe, args.root)
     run_id = make_run_id(datetime.now())
 
@@ -146,10 +173,14 @@ def _preview_or_run(args, *, apply: bool) -> int:
             print("  되돌리려면:")
             if len(roots) == 1:
                 print(f"      organize undo --root {applied_roots[0]}")
-            elif not failed_roots:
+            elif not failed_roots and not is_do:
                 # root 가 여러 개면 roots[0] 만 알려주지 않는다(Task 18 리뷰
                 # Important #1) — 전부 성공했을 때는 _cmd_undo 가 --root 없이
                 # 레시피의 roots 를 전부 순회하므로 --recipe 하나로 끝난다.
+                # `do` 는 항상 root 가 하나뿐이라 이 분기는 안 타지만(len(roots)==1
+                # 에서 이미 걸린다), args.recipe 가 None 인 do 에서 실수로
+                # 이 줄을 타는 일이 생겨도 "organize undo --recipe None" 같은
+                # 못 쓰는 명령을 보여주지 않도록 방어한다.
                 print(f"      organize undo --recipe {args.recipe}")
             else:
                 # 일부 root 만 성공했을 때는 --recipe 를 권하지 않는다.
@@ -167,10 +198,16 @@ def _preview_or_run(args, *, apply: bool) -> int:
             print("  되돌릴 수 있는 실행이 없습니다.")
     else:
         print("  실제로 실행하려면:")
-        print(f"      organize run {args.recipe}{root_opt} --apply")
+        if is_do:
+            print(f"      organize do {label}{root_opt} --apply")
+        else:
+            print(f"      organize run {label}{root_opt} --apply")
         if not args.verbose:
             print("\n  무엇이 어디로 가는지 전부 보려면:")
-            print(f"      organize preview {args.recipe}{root_opt} --verbose")
+            if is_do:
+                print(f"      organize do {label}{root_opt} --verbose")
+            else:
+                print(f"      organize preview {label}{root_opt} --verbose")
     return 1 if failed_roots else 0
 
 
@@ -225,6 +262,217 @@ def _cmd_undo(args) -> int:
     return 0
 
 
+def _find_zero_byte_files(folders: list[Path]) -> list[Path]:
+    """`claim_path`(organize/core/paths.py) 가 이름을 먼저 잡으려고 만든 빈
+    파일이, 그 직후 강제 종료로 남았을 수 있다. **찾기만 하고 지우지 않는다**
+    — 사용자가 일부러 만든 빈 파일일 수도 있다("파일을 삭제하지 않는다"
+    는 이 프로젝트의 절대 규칙이다). 우리 자신의 장부 폴더(.organize)는
+    대상이 아니므로 뺀다.
+    """
+    found: list[Path] = []
+    for folder in folders:
+        if not folder.is_dir():
+            continue
+        try:
+            for p in folder.rglob("*"):
+                if ".organize" in p.parts:
+                    continue
+                if not p.is_file():
+                    continue
+                try:
+                    if p.stat().st_size == 0:
+                        found.append(p)
+                except OSError:
+                    continue                       # 그 사이 사라졌으면 확인할 게 없다
+        except OSError:
+            continue                               # 폴더를 못 읽어도 나머지는 계속 본다
+    return sorted(set(found), key=str)
+
+
+def _find_incomplete_runs(folders: list[Path]) -> list[tuple[str, Path]]:
+    """`prepare_runlog`(organize/core/executor.py) 가 실행 **전에** 남긴
+    뼈대(`complete: false`)가 `write_runlog` 로 덮어써지지 않은 채 남아 있으면,
+    실행이 중간에 끊겨 무엇을 옮겼는지 아무 데도 안 적힌 상태다.
+    `organize/core/undo.py::undo` 는 이런 기록을 거부하기만 할 뿐 알리지
+    않으므로, 사용자가 이걸 알 방법은 doctor 뿐이다.
+    """
+    found: list[tuple[str, Path]] = []
+    for folder in folders:
+        runs_dir = folder / ".organize" / "runs"
+        if not runs_dir.is_dir():
+            continue
+        for path in sorted(runs_dir.glob("*.json")):
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue                           # 손상된 기록은 list_runs 도 건너뛴다
+            if data.get("complete") is False:
+                found.append((data.get("run_id", path.stem), folder))
+    return found
+
+
+def _cmd_doctor(args) -> int:
+    root = repo_root()
+    cfg = load_config(root)
+
+    print(f"  Python          {_sys.version.split()[0]:<18}"
+          f"{'OK' if _sys.version_info >= (3, 11) else '3.11 이상이 필요합니다'}")
+    try:
+        import tkinter
+        print(f"  tkinter         {tkinter.TkVersion:<18}OK")
+    except ImportError:
+        print("  tkinter         없음              선택  GUI 를 쓰려면 필요합니다")
+    try:
+        import PIL  # noqa: F401
+        print("  Pillow          있음              OK   EXIF 촬영일을 읽습니다")
+    except ImportError:
+        print("  Pillow          없음              선택  EXIF 촬영일을 못 읽습니다.")
+        print("                                        파일명과 수정시각으로 대체합니다.")
+        print("                                        쓰려면: pip install Pillow")
+
+    print("\n  폴더 위치")
+    checked_folders: list[Path] = []               # 아래 두 점검이 볼 대상 — 실제로 확인된 폴더만
+    for name in BUILTIN:
+        try:
+            p = resolve_alias(f"@{name}", cfg)
+        except AliasNotDefined:
+            continue
+        print(f"    {_ALIAS_LABEL.get(name, name):<10} {str(p):<44} 파일 {_count_files(p)}")
+        if p not in checked_folders:
+            checked_folders.append(p)
+    for name in sorted(cfg.paths):
+        p = resolve_alias(f"@{name}", cfg)
+        print(f"    @{name:<9} {str(p):<44} 파일 {_count_files(p)}")
+        if p not in checked_folders:
+            checked_folders.append(p)
+
+    recipes_dir = root / "recipes"
+    names = list_recipes(recipes_dir)
+    print(f"\n  레시피 {len(names)}개 · 프로파일 {len(list((root / 'profiles').glob('*.toml')))}개")
+
+    missing: set[str] = set()
+    for name in names:
+        try:
+            recipe = load_recipe(find_recipe(recipes_dir, name))
+        except OrganizeError:
+            continue
+        for spec in recipe.roots:
+            if not spec.startswith("@"):
+                continue
+            head = spec[1:].split("/")[0]
+            if head not in BUILTIN and head not in cfg.paths:
+                missing.add(head)
+
+    if missing:
+        print()
+        for head in sorted(missing):
+            print(f"  '@{head}' 위치가 정해져 있지 않습니다. 지정하려면:")
+            print(f"      organize paths --set {head}=<경로>")
+
+    # 아래 두 점검은 브리프에는 없지만, claim_path 와 prepare_runlog 가 남길 수
+    # 있는 흔적을 사용자가 doctor 밖에서는 알 방법이 없어서 넣었다(컨트롤러
+    # 지시). "확인 안 한 것을 됐다고 말하지 않는다" 는 규칙에 따라, 대상
+    # 폴더가 하나도 안 잡혔을 때는 "없음"이 아니라 그 사실을 그대로 밝힌다.
+    print("\n  0바이트 파일 (강제 종료 후 남은 잔해일 수 있습니다 — 지우지 않았습니다)")
+    if not checked_folders:
+        print("    확인할 폴더가 없어 못 봤습니다.")
+    else:
+        zero_byte = _find_zero_byte_files(checked_folders)
+        if zero_byte:
+            print(f"    {len(zero_byte)}개 발견 — 직접 열어 보고 필요 없으면 손으로 지워 주세요.")
+            for p in zero_byte:
+                print(f"      {p}")
+        else:
+            print("    없음 (확인함)")
+
+    print("\n  완료되지 않은 실행 기록 (undo 가 거부합니다 — 무엇을 옮겼는지 알 수 없습니다)")
+    if not checked_folders:
+        print("    확인할 폴더가 없어 못 봤습니다.")
+    else:
+        incomplete = _find_incomplete_runs(checked_folders)
+        if incomplete:
+            print(f"    {len(incomplete)}개 발견 — 아래 폴더 안 새로 생긴 폴더와"
+                  " .organize/trash 를 직접 확인해 주세요.")
+            for run_id, folder in incomplete:
+                print(f"      {run_id}  ({folder})")
+        else:
+            print("    없음 (확인함)")
+
+    return 0
+
+
+def _cmd_paths(args) -> int:
+    root = repo_root()
+    if args.set:
+        if "=" not in args.set:
+            raise OrganizeError(f"형식이 올바르지 않습니다: {args.set}",
+                                hint="organize paths --set archive=D:/보관  처럼 적어 주세요.")
+        name, value = args.set.split("=", 1)
+        save_local_path(root, name.strip(), value.strip())
+        print(f"  @{name.strip()} → {value.strip()} 로 저장했습니다.")
+        return 0
+
+    cfg = load_config(root)
+    for name in BUILTIN:
+        print(f"  @{name:<10} {resolve_alias(f'@{name}', cfg)}")
+    for name in sorted(cfg.paths):
+        print(f"  @{name:<10} {resolve_alias(f'@{name}', cfg)}")
+    print("\n  위치를 바꾸려면:")
+    print("      organize paths --set <이름>=<경로>")
+    return 0
+
+
+def _cmd_list(args) -> int:
+    root = repo_root()
+    print("  레시피")
+    for name in list_recipes(root / "recipes"):
+        print(f"    {name}")
+    print("\n  분류 설정")
+    for p in sorted((root / "profiles").glob("*.toml")):
+        print(f"    {p.stem}")
+    print("\n  미리보려면:")
+    print("      organize preview <레시피>")
+    return 0
+
+
+def _do_label(args) -> str:
+    """`do` 를 그대로 다시 부를 때 필요한 인자를 전부 담는다. `--root` 는
+    `_run_recipe` 가 root_opt 로 따로 붙이므로 여기엔 넣지 않는다.
+
+    `--only`/`--profile` 등을 빠뜨리면, 미리보기에서 걸러졌던 파일이 사용자가
+    그대로 복사한 "실제로 실행하려면" 명령에서는 안 걸러진 채 옮겨진다 —
+    미리보기가 보여준 것과 다른 일이 실제로 벌어지는, 이 프로젝트가 가장
+    경계하는 종류의 사고다.
+    """
+    parts = [args.block]
+    if args.profile:
+        parts += ["--profile", args.profile]
+    if args.layout:
+        parts += ["--layout", args.layout]
+    if args.dest:
+        parts += ["--dest", args.dest]
+    if args.only:
+        parts += ["--only", f'"{args.only}"']
+    return " ".join(parts)
+
+
+def _cmd_do(args) -> int:
+    step: dict = {"block": args.block}
+    if args.profile:
+        step["profile"] = args.profile
+    if args.layout:
+        step["layout"] = args.layout
+    if args.dest:
+        step["dest"] = args.dest
+    if args.only:
+        step["when"] = {"ext": [Path(args.only).suffix.lower()]}
+
+    recipe = Recipe(name=f"즉석 {args.block}", roots=[args.root], steps=[step])
+    fake = argparse.Namespace(recipe=None, root=args.root, verbose=args.verbose,
+                              apply=args.apply)
+    return _run_recipe(recipe, fake, apply=bool(args.apply), label=_do_label(args))
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="organize", description="파일 정리 자동화")
     p.add_argument("--version", action="version", version=f"organize {__version__}")
@@ -250,6 +498,27 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--recipe")
     sp.add_argument("--root")
     sp.set_defaults(func=_cmd_undo)
+
+    sp = sub.add_parser("doctor", help="환경 점검")
+    sp.set_defaults(func=_cmd_doctor)
+
+    sp = sub.add_parser("paths", help="폴더 위치 확인·지정")
+    sp.add_argument("--set", help="이름=경로")
+    sp.set_defaults(func=_cmd_paths)
+
+    sp = sub.add_parser("list", help="레시피와 분류 설정 목록")
+    sp.set_defaults(func=_cmd_list)
+
+    sp = sub.add_parser("do", help="레시피 없이 작업 하나만 실행")
+    sp.add_argument("block")
+    sp.add_argument("--root", required=True)
+    sp.add_argument("--profile")
+    sp.add_argument("--layout")
+    sp.add_argument("--dest")
+    sp.add_argument("--only", help='확장자만 고릅니다. 예: "*.md"')
+    sp.add_argument("--apply", action="store_true")
+    sp.add_argument("--verbose", action="store_true")
+    sp.set_defaults(func=_cmd_do)
 
     return p
 

@@ -71,6 +71,15 @@ def _first_existing(candidates: list[str], cfg: "UserConfig",
     return resolved[-1]
 
 
+def save_local_path(repo_root: Path, name: str, value: str) -> None:
+    """`config.local.json` 에 별칭 경로 하나를 갱신한다. 이 PC 전용 설정이라
+    저장소 공용 파일(config.default.json)이 아니라 local 쪽만 건드린다."""
+    path = repo_root / "config.local.json"
+    data = _read(path)
+    data.setdefault("paths", {})[name] = value
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def resolve_alias(spec: str, cfg: UserConfig, *,
                   _seen: tuple[str, ...] = ()) -> Path:
     """'@downloads', '@documents/메모', '~/foo', 'F:/day' 를 모두 받는다."""
