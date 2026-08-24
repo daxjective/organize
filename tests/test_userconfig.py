@@ -123,3 +123,28 @@ def test_an_empty_pins_list_does_not_break_an_old_config(tmp_path):
     cfg = load_config(tmp_path)
     assert cfg.paths == {} and cfg.unsupported == ()
     refuse_unsupported(cfg)                  # 아무것도 안 던진다
+
+
+# --- 설정 파일이 문법은 맞고 모양만 틀린 경우 ---
+# 되돌리기는 사용자의 마지막 안전줄이다. 설정 파일 하나가 이상하다고
+# 파이썬 트레이스백으로 죽으면, 파일이 옮겨진 채 손쓸 방법이 없어진다.
+
+@pytest.mark.parametrize("bad,왜", [
+    ("[]", "목록"),
+    ("null", "빈 값"),
+    ('{"paths": "문자열"}', "paths 가 문자열"),
+    ('{"paths": {"a": 1}}', "경로가 숫자"),
+    ('{"folder_names": ["a"]}', "folder_names 가 목록"),
+])
+def test_a_wrongly_shaped_config_is_a_korean_error_not_a_traceback(tmp_path, bad, 왜):
+    (tmp_path / "config.local.json").write_text(bad, encoding="utf-8")
+
+    with pytest.raises(OrganizeError) as ex:
+        load_config(tmp_path)
+
+    assert "config.local.json" in ex.value.message, f"어느 파일인지 말해야 한다 ({왜})"
+    assert ex.value.hint, "어떻게 고치는지 알려야 한다"
+    # 파이썬 예외 원문을 그대로 노출하지 않는다
+    합친것 = ex.value.message + (ex.value.hint or "")
+    for 원문 in ("AttributeError", "TypeError", "object has no attribute", "not iterable"):
+        assert 원문 not in 합친것

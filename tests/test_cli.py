@@ -788,3 +788,33 @@ def test_a_run_with_pins_in_the_config_still_refuses(project, capsys):
     # 미리보기도 막는다 — 사용자가 미리보기 화면을 믿고 --apply 를 치기 때문이다.
     assert cli.main(["preview", "t"]) == 1
     assert "pins" in capsys.readouterr().out
+
+
+def test_undo_mentions_records_it_could_not_use(project, capsys):
+    """되돌리기가 성공해도, **옆에 못 되돌리는 기록이 남아 있으면 말해야 한다.**
+
+    끊긴 실행이 옮겨 놓은 파일은 그대로 남아 있는데 화면은 `되돌림 N · 실패 0`
+    뿐이다. 도구는 그 사실을 알고 있으면서(같은 `list_runs` 를 읽는다) 말하지
+    않는다 — 사용자는 다 정리됐다고 믿는다. 이 프로젝트가 여덟 번 물린
+    "조용한 무작동" 이다.
+    """
+    from organize.core.executor import prepare_runlog
+    from organize.core.runner import BuiltPlan
+    from organize.core.action import Action, Plan
+
+    _, work = project
+    old_file(work / "보고서.pdf")
+    cli.main(["run", "t", "--apply"])          # 되돌릴 수 있는 정상 실행
+    capsys.readouterr()
+
+    # 그 옆에, 끊겨서 뼈대만 남은 실행 하나
+    stranded = work / "01_Docs" / "끊긴것.pdf"
+    prepare_runlog(BuiltPlan(root=work, run_id="99999999-000000",
+                             plan=Plan(actions=[Action("move", stranded, stranded,
+                                                       "이동", "route")])))
+
+    assert cli.main(["undo", "--root", str(work)]) == 0
+    out = capsys.readouterr().out
+
+    assert "되돌림" in out
+    assert "99999999-000000" in out, "못 되돌리는 기록이 있으면 어느 것인지 말해야 한다"

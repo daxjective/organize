@@ -13,6 +13,7 @@ from organize.aliases import BUILTIN
 from organize.core.executor import (execute, prepare_runlog, write_json_atomic,
                                     write_runlog)
 from organize.core.runner import build_plan, make_run_id
+from organize.core.undo import list_runs
 from organize.core.undo import undo as undo_run
 from organize.core.undo import unreadable_runs
 from organize.errors import OrganizeError
@@ -353,6 +354,28 @@ def _warn_unsupported_config() -> None:
         print(f"  {hint}")
 
 
+def _report_unusable_runs(root: Path) -> None:
+    """되돌릴 수 없는 실행 기록이 남아 있으면 어느 것인지 알린다.
+
+    끊긴 실행(`complete: false`)과 못 읽는 기록이 여기 해당한다. 되돌리기가
+    거부하는 기록들이므로, 그것이 옮겨 놓은 파일은 제자리로 돌아오지 않는다.
+    """
+    try:
+        rows = list_runs(root)
+    except OSError:
+        return                       # 기록을 못 읽어도 되돌리기 자체는 끝났다
+    남은것 = [r for r in rows
+             if r["undone_at"] is None and (r["unreadable"] or r.get("complete") is False)]
+    if not 남은것:
+        return
+    print(f"    되돌릴 수 없는 기록이 {len(남은것)}개 남아 있습니다"
+          " — 그 실행이 옮긴 파일은 제자리로 오지 않습니다:")
+    for r in 남은것:
+        왜 = "읽을 수 없음" if r["unreadable"] else "중간에 끊김"
+        print(f"      {r['run_id']}  ({왜})")
+    print(f"      organize doctor --root {root}  로 자세히 볼 수 있습니다.")
+
+
 def _cmd_undo(args) -> int:
     _warn_unsupported_config()
     recipes_dir = repo_root() / "recipes"
@@ -391,6 +414,11 @@ def _cmd_undo(args) -> int:
             continue
 
         print(f"  되돌림 {len(result.done)} · 실패 {len(result.failed)}")
+        # 되돌리기가 성공해도 **옆에 못 쓰는 기록이 남아 있으면 말한다.**
+        # 그 기록이 옮겨 놓은 파일은 그대로 남아 있는데 화면이 "되돌림 N · 실패 0"
+        # 만 보여주면, 사용자는 다 정리됐다고 믿는다. 도구는 알면서 말하지 않는
+        # 셈이고, 그게 이 프로젝트가 여덟 번 물린 "조용한 무작동" 이다.
+        _report_unusable_runs(root)
         for row in result.done:
             if row.get("renamed"):
                 # 원래 자리에 다른 것이 생겨서 비켜 놓았다. 덮어쓰지 않은 것은

@@ -38,26 +38,67 @@ def _read(path: Path) -> dict:
     if not path.is_file():
         return {}
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as e:
         raise OrganizeError(
             f"설정 파일을 읽지 못했습니다: {path.name} ({e.lineno}번째 줄)",
             hint="파일을 열어 쉼표나 따옴표가 빠지지 않았는지 확인해 주세요.",
         ) from e
+    # 문법은 맞는데 **모양**이 틀린 경우가 있다 — `[]`, `null` 처럼. 그대로
+    # 내보내면 부르는 쪽에서 `.get()` 이 터져 파이썬 트레이스백이 화면에 뜬다.
+    # 되돌리기는 사용자의 마지막 안전줄이라, 설정 파일 하나 때문에 그게 죽으면
+    # 파일이 옮겨진 채 손쓸 방법이 없어진다. 실측한 결함이다.
+    if not isinstance(data, dict):
+        raise OrganizeError(
+            f"설정 파일의 모양이 올바르지 않습니다: {path.name}",
+            hint='맨 바깥이 { } 로 감싼 형태여야 합니다. 예: {"paths": {"보관": "D:/보관"}}  '
+                 f"'{path.name}' 을 지우면 기본 위치로 돌아갑니다.",
+        )
+    return data
+
+
+def _mapping(src: dict, key: str, path: Path) -> dict:
+    """설정에서 이름표 묶음 하나를 꺼낸다. 모양이 아니면 한국어로 거부한다.
+
+    없거나 비어 있으면 빈 묶음이다(옛 설정 파일이 깨지지 않게). 그러나 목록이나
+    문자열이 들어 있으면 `.items()` 가 터져 파이썬 트레이스백이 화면에 뜬다.
+    """
+    value = src.get(key)
+    if not value:
+        return {}
+    if not isinstance(value, dict):
+        raise OrganizeError(
+            f"설정의 '{key}' 모양이 올바르지 않습니다: {path.name}",
+            hint=f"'{key}' 아래에는 이름과 값을 짝지어 " '{ "이름": "값" } 형태로 적어 주세요.')
+    return value
 
 
 def load_config(repo_root: Path) -> UserConfig:
-    base = _read(repo_root / "config.default.json")
-    local = _read(repo_root / "config.local.json")
+    sources = [(repo_root / "config.default.json", _read(repo_root / "config.default.json")),
+               (repo_root / "config.local.json", _read(repo_root / "config.local.json"))]
 
     paths: dict[str, list[str]] = {}
-    for src in (base, local):
-        for name, value in (src.get("paths") or {}).items():
-            paths[name] = [value] if isinstance(value, str) else list(value)
+    for path, src in sources:
+        for name, value in _mapping(src, "paths", path).items():
+            # 경로는 문자열 하나이거나 문자열 목록이다. 숫자·객체가 오면
+            # list(1) 이 터진다 — 무엇이 잘못됐는지 한국어로 알린다.
+            if isinstance(value, str):
+                paths[name] = [value]
+            elif isinstance(value, list) and all(isinstance(v, str) for v in value):
+                paths[name] = list(value)
+            else:
+                raise OrganizeError(
+                    f"설정의 'paths' 에서 '{name}' 의 값이 경로가 아닙니다: {path.name}",
+                    hint='경로는 따옴표로 감싼 글자여야 합니다. '
+                         '예: "보관": "D:/보관"  또는  "보관": ["D:/보관", "E:/보관"]')
 
     folder_names: dict[str, dict[str, str]] = {}
-    for src in (base, local):
-        for profile, mapping in (src.get("folder_names") or {}).items():
+    for path, src in sources:
+        for profile, mapping in _mapping(src, "folder_names", path).items():
+            if not isinstance(mapping, dict):
+                raise OrganizeError(
+                    f"설정의 'folder_names' 에서 '{profile}' 의 모양이 올바르지 않습니다: {path.name}",
+                    hint='분류 설정 이름 아래에 { "원래이름": "바꿀이름" } 형태로 적어 주세요.')
             folder_names.setdefault(profile, {}).update(mapping)
 
     # `pins` 는 "이 파일들은 건드리지 마라" 로 읽힌다. 그런데 그 보호를
@@ -66,7 +107,7 @@ def load_config(repo_root: Path) -> UserConfig:
     # 빈 목록은 아무것도 약속하지 않으므로 예전 설정 파일이 깨지지 않게 통과시킨다.
     unsupported = tuple(
         name for name in _UNSUPPORTED_KEYS
-        if any(src.get(name) for src in (base, local)))
+        if any(src.get(name) for _, src in sources))
 
     return UserConfig(paths=paths, folder_names=folder_names, unsupported=unsupported)
 
