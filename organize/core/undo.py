@@ -78,6 +78,24 @@ def undo(root: Path, run_id: str | None = None) -> ExecResult:
                  "organize undo <실행ID> --root <폴더> 로 되돌려 주세요.",
         )
 
+    if data.get("complete") is False:
+        # 뼈대 기록이다 — prepare_runlog 이 실행 **전에** 써 두고, execute() 가
+        # 끝난 뒤 write_runlog 이 진짜 결과로 덮어쓴다. 덮어쓰이지 않았다는 것은
+        # **실행 중에 끊겼거나 기록을 못 남겼다**는 뜻이고, 그때가 바로 파일은
+        # 옮겨졌는데 무엇을 옮겼는지 모르는 상황이다.
+        # done 이 비어 있다고 "되돌릴 게 없다" 로 읽으면 all([]) 이 참이라
+        # 되돌렸다고 도장을 찍어 버려, 옮겨진 파일이 영영 갇히고 재시도까지
+        # 막힌다. 실측한 결함이다. 아무것도 건드리지 않고 사실대로 알린다.
+        # (옛 기록에는 'complete' 자체가 없다 — 그건 write_runlog 이 쓴 것이므로
+        #  완전한 기록이다. `is False` 로만 걸러 하위 호환을 지킨다.)
+        raise OrganizeError(
+            f"'{resolved_id}' 실행은 기록이 완전하지 않아 되돌릴 수 없습니다 "
+            "— 무엇을 옮겼는지 알 수 없습니다.",
+            hint="실행이 중간에 끊겼거나 기록을 남기지 못한 경우입니다. "
+                 f"'{root}' 안에 새로 생긴 폴더와 "
+                 f"'{root / '.organize' / 'trash'}' 를 직접 확인해 주세요.",
+        )
+
     result = ExecResult()
     undo_trash = root / ".organize" / "trash" / f"{resolved_id}-undo"
     items = data.get("done", [])
@@ -88,7 +106,19 @@ def undo(root: Path, run_id: str | None = None) -> ExecResult:
         for item in reversed(items):
             if item.get("undone"):
                 continue                 # 앞선 시도에서 이미 되돌렸다
-            kind = item["kind"]
+            kind = item.get("kind", "")
+            if kind not in ("mkdir", "move", "quarantine", "extract"):
+                # 손상됐거나 우리가 모르는 항목이다. 예전에는 여기서 item["kind"]
+                # 가 KeyError 를 내고 그 파이썬 예외가 화면까지 그대로 샜다.
+                # 더 해 볼 수 있는 게 없으므로 '끝난 것' 으로 보되, 조용히
+                # 넘기지 않고 무엇이 이상한지 남긴다.
+                item["undone"] = True
+                result.failed.append({
+                    "kind": kind or "?", "src": item.get("final"),
+                    "why": "실행 기록의 항목을 알아볼 수 없어 건너뜁니다",
+                    "hint": f"'{log_path}' 파일이 손상되었을 수 있습니다.",
+                })
+                continue
             try:
                 if kind == "mkdir":
                     folder = Path(item["final"])
@@ -116,9 +146,10 @@ def undo(root: Path, run_id: str | None = None) -> ExecResult:
                 result.failed.append({
                     "kind": kind, "src": item.get("final"), "why": e.message, "hint": e.hint,
                 })
-            except OSError:
-                # 파이썬 예외 원문을 그대로 보여주지 않는다 — hint 자리에 예외
-                # 원문을 넣지 말라는 전역 규칙과 같은 이유다.
+            except (OSError, KeyError):
+                # 손상된 기록(필요한 키가 없음)도 여기서 받는다. 파이썬 예외
+                # 원문을 그대로 보여주지 않는다 — hint 자리에 예외 원문을 넣지
+                # 말라는 전역 규칙과 같은 이유다.
                 name = Path(item.get("final") or "").name
                 item["undone"] = _nothing_left_to_undo(item)
                 result.failed.append({

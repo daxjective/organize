@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from organize.core.action import Action, Plan
-from organize.core.executor import execute, write_runlog
+from organize.core.executor import execute, prepare_runlog, write_runlog
 from organize.core.runner import BuiltPlan
 from organize.core.undo import latest_run_id, list_runs, undo
 from organize.errors import OrganizeError
@@ -368,3 +368,49 @@ def test_the_manifest_is_kept_when_a_quarantined_file_could_not_be_restored(tmp_
     assert (trash / "중복.pdf").exists(), "사용자 파일이 아직 격리에 남아 있다"
     assert (trash / "_manifest.json").is_file(), \
         "격리에 사용자 파일이 남아 있으면 그게 무엇인지 적힌 장부를 지우면 안 된다"
+
+
+def test_an_incomplete_run_record_is_never_read_as_nothing_to_undo(tmp_path):
+    """뼈대 기록(`complete: false`)은 "되돌릴 게 없다" 가 **아니다.**
+
+    `prepare_runlog` 이 실행 *전에* 써 두는 뼈대는 `done` 이 비어 있다. 실행
+    중 기록을 못 남기면 그 뼈대만 남는데 — 그때가 바로 **파일은 옮겨졌는데
+    무엇을 옮겼는지 모르는** 상황이다. 이걸 "되돌릴 게 없다" 로 읽으면
+    `all([])` 이 참이라 되돌렸다고 도장을 찍어 버리고, 옮겨진 파일은 영영
+    갇히고 재시도까지 "이미 되돌렸습니다" 로 막힌다. 실측한 결함이다.
+    """
+    src = tmp_path / "보고서.pdf"
+    src.write_bytes(b"DATA")
+    b = BuiltPlan(root=tmp_path, run_id="r1", plan=Plan(actions=[
+        Action("move", src, tmp_path / "01_Docs" / "보고서.pdf", "이동", "route")]))
+    prepare_runlog(b)
+    execute(b)                         # 파일은 실제로 옮겨졌다
+    # write_runlog 이 실패했다고 가정 — 뼈대만 남았다
+    assert (tmp_path / "01_Docs" / "보고서.pdf").exists()
+
+    with pytest.raises(OrganizeError) as ex:
+        undo(tmp_path, run_id="r1")    # 사용자가 run_id 를 직접 지정한 경우
+
+    assert "완전하지 않" in ex.value.message
+    assert ex.value.hint                # 무엇을 확인하면 되는지 알려준다
+
+    log = json.loads((tmp_path / ".organize" / "runs" / "r1.json").read_text(encoding="utf-8"))
+    assert log.get("undone_at") is None, \
+        "되돌린 게 없는데 도장을 찍으면 재시도가 영원히 막힌다"
+
+
+def test_a_corrupted_log_entry_is_reported_in_korean_without_a_traceback(tmp_path):
+    """실행 기록이 손상돼도 파이썬 예외 원문이 화면에 새면 안 된다."""
+    src = tmp_path / "a.pdf"
+    src.write_bytes(b"DATA")
+    run_plan(tmp_path, [Action("move", src, tmp_path / "01_Docs" / "a.pdf", "이동", "route")])
+
+    log_path = tmp_path / ".organize" / "runs" / "r1.json"
+    data = json.loads(log_path.read_text(encoding="utf-8"))
+    del data["done"][0]["kind"]        # 항목이 손상됐다
+    log_path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+    result = undo(tmp_path)            # KeyError 가 새어 나오면 안 된다
+
+    assert result.failed
+    assert "실행 기록" in result.failed[0]["why"]
