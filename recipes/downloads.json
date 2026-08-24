@@ -1,0 +1,8 @@
+{
+  "name": "다운로드 정리",
+  "roots": ["@downloads"],
+  "steps": [
+    { "block": "dedup" },
+    { "block": "route", "profile": "desktop" }
+  ]
+}
