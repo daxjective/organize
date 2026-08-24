@@ -28,6 +28,9 @@ ext = [".py", ".js", ".ts", ".ipynb", ".json", ".sql", ".sh"]
 to      = "99_Unsorted"
 default = true
 
+# 아래 [synonyms] 는 **아직 아무 데서도 읽지 않는다.** 분류 결과 폴더 이름은
+# 위 규칙의 to 값 그대로다. 여기에 이름을 더 적어도 정리 동작은 바뀌지 않는다
+# (GUI 에서 "이미 있는 폴더 고르기" 를 만들 때 쓸 자리다).
 [synonyms]
 "01_Docs"     = ["문서", "자료", "Documents", "Docs"]
 "02_Media"    = ["사진", "이미지", "그림", "영상", "Pictures", "Images", "Media", "Videos"]

@@ -82,6 +82,8 @@ def scan(
     *,
     recursive: bool = False,
     now: float | None = None,
+    # production 에서는 아무도 안 넘긴다 — 러너는 항상 기본값으로 부른다.
+    # 늘 빠지는 `.organize` 는 _ALWAYS_EXCLUDE_DIRS 가 따로 책임진다.
     exclude_dirs: frozenset[str] = frozenset(),
 ) -> ScanResult:
     now = time.time() if now is None else now

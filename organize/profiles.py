@@ -47,6 +47,9 @@ class Rule:
 class Profile:
     name: str
     rules: list[Rule] = field(default_factory=list)
+    # **아직 아무 데서도 읽지 않는다.** GUI(다음 단계)가 "이미 있는 폴더 중
+    # 이 분류에 해당하는 것" 을 찾아 줄 때 쓸 자리다. 분류 동작에는 영향이 없다
+    # — `route` 는 오직 `to` 만 본다.
     synonyms: dict[str, list[str]] = field(default_factory=dict)
 
 

@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from organize import aliases, userconfig
+from organize.errors import OrganizeError
 from organize.userconfig import AliasNotDefined, UserConfig, load_config, resolve_alias
 
 
@@ -27,7 +28,6 @@ def test_works_with_no_local_file(tmp_path):
 def test_missing_both_files_is_not_an_error(tmp_path):
     cfg = load_config(tmp_path)
     assert cfg.paths == {}
-    assert cfg.pins == []
 
 
 def test_single_string_is_normalised_to_a_list(tmp_path):
@@ -38,39 +38,37 @@ def test_single_string_is_normalised_to_a_list(tmp_path):
 def test_chain_picks_the_first_existing_path(tmp_path):
     present = tmp_path / "있음"
     present.mkdir()
-    cfg = UserConfig(paths={"archive": [str(tmp_path / "없음"), str(present)]},
-                     folder_names={}, pins=[])
+    cfg = UserConfig(paths={"archive": [str(tmp_path / "없음"), str(present)]}, folder_names={})
     assert resolve_alias("@archive", cfg) == present
 
 
 def test_chain_falls_back_to_the_last_entry_when_none_exist(tmp_path):
     last = tmp_path / "만들예정"
-    cfg = UserConfig(paths={"archive": [str(tmp_path / "없음"), str(last)]},
-                     folder_names={}, pins=[])
+    cfg = UserConfig(paths={"archive": [str(tmp_path / "없음"), str(last)]}, folder_names={})
     assert resolve_alias("@archive", cfg) == last
 
 
 def test_builtin_alias_resolves(monkeypatch, tmp_path):
     monkeypatch.setattr(userconfig, "builtin_path",
                         lambda name: tmp_path / "다운로드" if name == "downloads" else None)
-    cfg = UserConfig(paths={}, folder_names={}, pins=[])
+    cfg = UserConfig(paths={}, folder_names={})
     assert resolve_alias("@downloads", cfg) == tmp_path / "다운로드"
 
 
 def test_builtin_alias_with_subpath(monkeypatch, tmp_path):
     monkeypatch.setattr(userconfig, "builtin_path",
                         lambda name: tmp_path / "문서" if name == "documents" else None)
-    cfg = UserConfig(paths={}, folder_names={}, pins=[])
+    cfg = UserConfig(paths={}, folder_names={})
     assert resolve_alias("@documents/메모", cfg) == tmp_path / "문서" / "메모"
 
 
 def test_plain_path_passes_through(tmp_path):
-    cfg = UserConfig(paths={}, folder_names={}, pins=[])
+    cfg = UserConfig(paths={}, folder_names={})
     assert resolve_alias(str(tmp_path), cfg) == tmp_path
 
 
 def test_undefined_alias_says_what_to_do():
-    cfg = UserConfig(paths={}, folder_names={}, pins=[])
+    cfg = UserConfig(paths={}, folder_names={})
     with pytest.raises(AliasNotDefined) as e:
         resolve_alias("@archive", cfg)
     assert "archive" in e.value.message
@@ -78,7 +76,7 @@ def test_undefined_alias_says_what_to_do():
 
 
 def test_self_referencing_alias_raises_error():
-    cfg = UserConfig(paths={"archive": ["@archive"]}, folder_names={}, pins=[])
+    cfg = UserConfig(paths={"archive": ["@archive"]}, folder_names={})
     with pytest.raises(AliasNotDefined) as e:
         resolve_alias("@archive", cfg)
     assert "archive" in e.value.message
@@ -86,7 +84,7 @@ def test_self_referencing_alias_raises_error():
 
 
 def test_mutually_referencing_aliases_raise_error():
-    cfg = UserConfig(paths={"a": ["@b"], "b": ["@a"]}, folder_names={}, pins=[])
+    cfg = UserConfig(paths={"a": ["@b"], "b": ["@a"]}, folder_names={})
     with pytest.raises(AliasNotDefined) as e:
         resolve_alias("@a", cfg)
     assert "a" in e.value.message
@@ -96,6 +94,24 @@ def test_mutually_referencing_aliases_raise_error():
 
 
 def test_seen_parameter_is_keyword_only():
-    cfg = UserConfig(paths={}, folder_names={}, pins=[])
+    cfg = UserConfig(paths={}, folder_names={})
     with pytest.raises(TypeError):
         resolve_alias("@a", cfg, ("x",))
+
+
+def test_pins_in_a_config_is_rejected_loudly(tmp_path):
+    """Minor #1 — `pins` 는 "건드리지 말 것" 으로 읽히는데 **아무 데서도 안 읽혔다.**
+    보호를 기대하고 적은 파일이 그대로 옮겨진다. 아직 없는 기능이라면
+    조용히 무시하는 것보다 사실대로 말하고 멈추는 쪽이 안전하다."""
+    (tmp_path / "config.local.json").write_text(
+        '{"pins": ["세금.pdf"]}', encoding="utf-8")
+    with pytest.raises(OrganizeError) as ex:
+        load_config(tmp_path)
+    assert "pins" in ex.value.message
+    assert ex.value.hint
+
+
+def test_an_empty_pins_list_does_not_break_an_old_config(tmp_path):
+    """빈 목록은 아무것도 약속하지 않는다 — 예전 설정 파일이 깨지면 안 된다."""
+    (tmp_path / "config.local.json").write_text('{"pins": []}', encoding="utf-8")
+    assert load_config(tmp_path).paths == {}

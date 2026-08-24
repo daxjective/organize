@@ -23,8 +23,10 @@ class AliasNotDefined(OrganizeError):
 @dataclass(frozen=True)
 class UserConfig:
     paths: dict[str, list[str]] = field(default_factory=dict)
+    # **아직 아무 데서도 읽지 않는다.** GUI(다음 단계)가 분류 폴더 이름을
+    # 사용자 취향대로 바꿔 부를 때 쓸 자리다. 지금 여기에 적어도 정리 결과의
+    # 폴더 이름은 프로파일의 `to` 그대로다.
     folder_names: dict[str, dict[str, str]] = field(default_factory=dict)
-    pins: list[str] = field(default_factory=list)
 
 
 def _read(path: Path) -> dict:
@@ -53,13 +55,19 @@ def load_config(repo_root: Path) -> UserConfig:
         for profile, mapping in (src.get("folder_names") or {}).items():
             folder_names.setdefault(profile, {}).update(mapping)
 
-    pins: list[str] = []
+    # `pins` 는 "이 파일들은 건드리지 마라" 로 읽힌다. 그런데 그 보호를
+    # 실제로 하는 코드가 **한 줄도 없었다** — 적어 둔 파일이 그대로 옮겨졌다.
+    # 조용히 무시하는 것이 이 프로젝트가 여덟 번 물린 바로 그 실패다.
+    # 기능을 만들기 전까지는 사실대로 말하고 멈춘다. 빈 목록은 아무것도
+    # 약속하지 않으므로 예전 설정 파일이 깨지지 않게 그냥 통과시킨다.
     for src in (base, local):
-        for pattern in (src.get("pins") or []):
-            if pattern not in pins:
-                pins.append(pattern)
+        if src.get("pins"):
+            raise OrganizeError(
+                "설정의 'pins' 는 아직 만들지 않은 기능입니다 — 적어 두어도 보호되지 않습니다.",
+                hint="config.local.json 에서 'pins' 줄을 지워 주세요. "
+                     "특정 파일을 빼려면 레시피의 'when' 조건으로 대상을 좁히는 방법이 있습니다.")
 
-    return UserConfig(paths=paths, folder_names=folder_names, pins=pins)
+    return UserConfig(paths=paths, folder_names=folder_names)
 
 
 def _first_existing(candidates: list[str], cfg: "UserConfig",

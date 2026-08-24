@@ -1,9 +1,14 @@
 """실제로 파일을 옮긴다. 덮어쓰지 않는다.
 
-이름을 고르는 것(`unique_path`)과 그 자리를 실제로 차지하는 것(`claim_path`)은
-다른 동작이다. 둘 사이에 시간차가 있으면 그 틈에 다른 프로그램이 같은 이름을
-만들 수 있고, 그러면 우리가 그걸 조용히 덮어쓴다. 그래서 실제로 쓰기 직전에는
-반드시 `claim_path` 로 "없음 확인"과 "이름 잡기"를 한 syscall로 합친다.
+이름을 고르는 것과 그 자리를 실제로 차지하는 것(`claim_path`)은 다른 동작이다.
+둘 사이에 시간차가 있으면 그 틈에 다른 프로그램이 같은 이름을 만들 수 있고,
+그러면 우리가 그걸 조용히 덮어쓴다. 그래서 실제로 쓰기 직전에는 반드시
+`claim_path` 로 "없음 확인"과 "이름 잡기"를 한 syscall로 합친다.
+
+**미리보기에서 이름을 고르는 자리는 이 파일이 아니라
+`organize.core.context.Context.claim_name` 이다.** 아래 `unique_path` 는
+production 에서 아무도 부르지 않는다 — 그 함수를 살아 있는 미리보기 경로로
+읽으면 안 된다.
 
 드라이브가 다르면 `shutil.move` 도 내부적으로 복사 후 삭제를 하지만,
 복사가 끝났는지 확인하지 않는다. 파일이 사라지면 안 되므로
@@ -54,7 +59,13 @@ def claim_path(dst: Path) -> Path:
 
 
 def unique_path(dst: Path) -> Path:
-    """미리보기용. 확인과 쓰기 사이에 틈이 있다 — 실제로 쓸 때는 `claim_path` 를 쓴다."""
+    """**production 에서 아무도 안 부른다.** 확인과 쓰기 사이에 틈이 있어서다.
+
+    미리보기의 이름 고르기는 `Context.claim_name`(디스크를 안 만짐)이 하고,
+    실제 쓰기는 `claim_path`(O_CREAT|O_EXCL)가 한다. 이 함수는 그 둘의 차이를
+    설명하는 반례로만 남아 있다 — 새 코드에서 쓰지 말 것. 붙어 있는 테스트는
+    `move_file` 이 **이 함수를 쓰지 않는다**는 사실을 못박는 용도다.
+    """
     if not dst.exists():
         return dst
     stem, suffix = dst.stem, dst.suffix
@@ -67,7 +78,9 @@ def unique_path(dst: Path) -> Path:
 
 
 def same_drive(a: Path, b: Path) -> bool:
-    """두 경로의 드라이브 문자가 같은가. **안전 판정에 쓰지 말 것.**
+    """두 경로의 드라이브 문자가 같은가. **production 에서 아무도 안 부른다.**
+
+    **안전 판정에 쓰지 말 것.**
 
     `Path.drive` 는 윈도우 경로에서만 값이 있다. WSL 마운트 경로
     (`/mnt/c`, `/mnt/d`)는 둘 다 빈 문자열이라 **다른 드라이브인데 같다고
