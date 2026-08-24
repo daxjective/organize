@@ -63,6 +63,32 @@ _META_KEYS = {"to", "default"}          # 조건이 아니라 규칙 자체를 �
 _ANY_OF_KEYS = ("ext", "name_contains")
 
 
+def normalize_ext(value: str, where: str) -> str:
+    """확장자 표기를 하나로 맞춘다. `.pdf` · `pdf` · `PDF` · `*.pdf` · `pdf.` 전부 `.pdf`.
+
+    **레시피·프로파일의 `ext` 와 CLI 의 `--only` 가 같은 함수를 쓴다.** 예전에는
+    `--only pdf` 는 도구가 점을 붙여 받아 주는데 프로파일의 `ext = "pdf"` 는
+    조용히 0건이었다 — 같은 도구가 사용자를 **정반대로 가르쳤다.** 실측한 결함이다.
+
+    `entry.ext` 는 `Path.suffix`(마지막 조각)이므로 `report.pdf` 처럼 이름을
+    통째로 적었을 때도 마지막 조각만 쓴다. 어느 쪽이든 **말없이 0건이 되지만
+    않으면** 된다.
+    """
+    text = value.strip().lower().strip("*")
+    if "/" in text or "\\" in text:
+        raise OrganizeError(
+            f"{where} 에는 확장자만 적어 주세요: {value}",
+            hint='예: pdf · .pdf · "*.pdf"')
+    text = text.strip(".")              # 앞뒤 점을 다 떼고 하나만 다시 붙인다
+    if "." in text:
+        text = text.rsplit(".", 1)[-1]  # "report.pdf" -> "pdf"
+    if not text:
+        raise OrganizeError(
+            f"{where} 값에서 확장자를 찾지 못했습니다: {value!r}",
+            hint='예: pdf · .pdf · "*.pdf"')
+    return "." + text
+
+
 def normalize_conditions(conditions: dict, where: str) -> dict:
     """조건 **값의 타입까지** 검사하고 정규화한다. 파일을 건드리기 전에 부른다.
 
@@ -88,7 +114,10 @@ def normalize_conditions(conditions: dict, where: str) -> dict:
     """
     out: dict = {}
     for key, want in conditions.items():
-        if key in _ANY_OF_KEYS:
+        if key == "ext":
+            out[key] = [normalize_ext(v, f"{where} 의 'ext'")
+                        for v in _as_list(key, want, where)]
+        elif key in _ANY_OF_KEYS:
             out[key] = _as_list(key, want, where)
         elif key == "name_regex":
             if not isinstance(want, str):
@@ -105,11 +134,16 @@ def normalize_conditions(conditions: dict, where: str) -> dict:
                          '단순히 이름에 든 글자를 찾는 것이라면 name_contains = ["찾을말"] '
                          "가 더 안전합니다.") from e
             out[key] = want
-        elif key == "older_than":
-            parse_age(_as_text(key, want, where))       # 표기가 틀리면 여기서 막힌다
-            out[key] = want
-        elif key == "larger_than":
-            parse_size(_as_text(key, want, where))
+        elif key in ("older_than", "larger_than"):
+            # 표기가 틀리면 여기서 막힌다. **어느 규칙인지 붙여서** 다시 던진다 —
+            # 다른 조건 오류에는 붙는 문맥이 여기만 빠져서, 규칙이 열 개인
+            # 프로파일에서 어디를 고쳐야 할지 알 수 없었다.
+            parse = parse_age if key == "older_than" else parse_size
+            try:
+                parse(_as_text(key, want, where))
+            except OrganizeError as e:
+                raise OrganizeError(f"{where} 의 '{key}' — {e.message}",
+                                    hint=e.hint) from e
             out[key] = want
         elif key == "has_exif_camera":
             if not isinstance(want, bool):
@@ -123,14 +157,22 @@ def normalize_conditions(conditions: dict, where: str) -> dict:
 
 
 def _as_list(key: str, want, where: str) -> list[str]:
+    values: list[str] | None = None
     if isinstance(want, str):
-        return [want]                                    # 사용자가 쓴 대로 동작시킨다
-    if isinstance(want, (list, tuple)) and want and all(isinstance(w, str) for w in want):
-        return list(want)
-    if isinstance(want, (list, tuple)) and not want:
+        values = [want]                                  # 사용자가 쓴 대로 동작시킨다
+    elif isinstance(want, (list, tuple)) and all(isinstance(w, str) for w in want):
+        values = list(want)
+    if values is not None and (not values or any(not v.strip() for v in values)):
+        # 빈 **목록**은 거부하면서 빈 **문자열**을 통과시키면 비대칭이다.
+        # `name_contains = ""` 은 감싸져서 `[""]` 가 되고 **모든 파일에 걸린다** —
+        # I1 이 닫으려던 원래 증상("report 가 든 파일만" 이 폴더를 통째로
+        # 옮겼다)이 그대로 되살아난다.
         raise OrganizeError(
-            f"{where} 의 '{key}' 가 비어 있습니다 — 아무 파일도 걸리지 않습니다.",
+            f"{where} 의 '{key}' 가 비어 있습니다 — "
+            + ("모든 파일에 걸립니다." if key == "name_contains" else "아무 파일도 걸리지 않습니다."),
             hint=f'값을 적거나 조건 자체를 지워 주세요. 예: {key} = ["보고서"]')
+    if values is not None:
+        return values
     raise OrganizeError(
         f"{where} 의 '{key}' 값을 이해하지 못했습니다: {want!r}",
         hint=f'글자 하나이거나 글자 목록이어야 합니다. 예: {key} = ["보고서", "리포트"]')

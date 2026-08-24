@@ -626,3 +626,82 @@ def test_a_file_moved_by_two_runs_comes_back_to_its_original_spot(tmp_path):
     assert src.read_bytes() == b"DATA", "원래 자리로 돌아와야 한다"
     left = sorted(p.name for p in tmp_path.iterdir() if p.name != ".organize")
     assert left == ["a.pdf"], f"잔해가 남았다: {left}"
+
+
+# --- 마지막 라운드 — C3 의 "없는 척하지 않는다" 분기가 두 갈래 중 하나에만 달렸다.
+# 끊긴 실행의 뼈대(done: [])는 latest_run_id 가 절대 안 집으므로, `undo` 를
+# **run_id 없이** 치면 "한 번 실행한 뒤에 쓸 수 있습니다" 로 빠졌다. 파일은
+# 옮겨져 있는데 말이다. 이 테스트들의 축은 **run_id 를 주지 않는 경로**다. ---
+
+
+def _skeleton(root: Path, run_id: str = "20260824-200028") -> Path:
+    """실행이 중간에 끊긴 상태 — prepare_runlog 이 남긴 뼈대만 있다."""
+    runs = root / ".organize" / "runs"
+    runs.mkdir(parents=True, exist_ok=True)
+    path = runs / f"{run_id}.json"
+    path.write_text(json.dumps({
+        "run_id": run_id, "trash_id": run_id, "root": str(root),
+        "started_at": "2026-08-24T20:00:28",
+        "done": [], "failed": [], "stale": [], "complete": False,
+    }, ensure_ascii=False), encoding="utf-8")
+    return path
+
+
+def test_list_runs_carries_whether_the_record_is_complete(tmp_path):
+    """`undo` 가 판단하려면 이 정보가 행에 실려야 한다."""
+    _skeleton(tmp_path)
+    rows = list_runs(tmp_path)
+    assert rows[0]["complete"] is False
+
+
+def test_undo_without_a_run_id_reports_the_interrupted_run(tmp_path):
+    """**이 테스트의 축은 run_id 를 주지 않는 것이다.** run_id 를 콕 집으면
+    옛 코드도 올바른 말을 했다 — 사람이 실제로 치는 `undo --root` 만 몰랐다."""
+    log = _skeleton(tmp_path)
+    with pytest.raises(OrganizeError) as ex:
+        undo(tmp_path)                     # run_id 없이 — 이게 핵심이다
+    text = ex.value.message + (ex.value.hint or "")
+    assert "한 번 실행한 뒤에" not in text, "실행한 적 없다고 말하면 안 된다"
+    assert log.name in text, "어느 기록인지 알려줘야 한다"
+    assert "완전하지 않" in text or "끊" in text
+
+
+def test_undo_without_a_run_id_does_not_say_never_ran_when_all_runs_are_undone(tmp_path):
+    """이미 되돌린 기록만 남은 경우도 "한 번 실행한 뒤에" 는 거짓말이다."""
+    src = tmp_path / "a.pdf"
+    src.write_bytes(b"DATA")
+    run_plan(tmp_path, [Action("move", src, tmp_path / "01_Docs" / "a.pdf", "이동", "route")])
+    undo(tmp_path)
+
+    with pytest.raises(OrganizeError) as ex:
+        undo(tmp_path)
+    text = ex.value.message + (ex.value.hint or "")
+    assert "한 번 실행한 뒤에" not in text
+    assert "이미 되돌린" in text
+
+
+def test_undo_still_says_nothing_was_ever_run_when_there_is_no_record(tmp_path):
+    """정말로 기록이 하나도 없을 때만 그 문구를 쓴다 — 그때는 사실이다."""
+    with pytest.raises(OrganizeError) as ex:
+        undo(tmp_path)
+    assert "한 번 실행한 뒤에" in (ex.value.hint or "")
+
+
+def test_an_interrupted_run_does_not_hide_an_older_undoable_run(tmp_path):
+    """반대 방향 축 — 끊긴 기록을 알리게 만들면서, 그것 때문에 **되돌릴 수 있는
+    옛 실행까지 가려지면** 안 된다. 되돌릴 수 있으면 되돌리는 것이 먼저다."""
+    src = tmp_path / "a.pdf"
+    src.write_bytes(b"DATA")
+    good = BuiltPlan(root=tmp_path, run_id="20260824-120000", plan=Plan(actions=[
+        Action("move", src, tmp_path / "01_Docs" / "a.pdf", "이동", "route")]))
+    prepare_runlog(good)
+    write_runlog(good, execute(good))
+    _skeleton(tmp_path, "20260824-130000")          # 그 뒤에 끊긴 실행이 하나 더
+
+    result = undo(tmp_path)                          # run_id 없이
+    assert not result.failed
+    assert src.read_bytes() == b"DATA"
+
+    with pytest.raises(OrganizeError) as ex:         # 이제는 끊긴 것만 남았다
+        undo(tmp_path)
+    assert "완전하지 않" in ex.value.message

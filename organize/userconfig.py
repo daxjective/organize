@@ -27,6 +27,11 @@ class UserConfig:
     # 사용자 취향대로 바꿔 부를 때 쓸 자리다. 지금 여기에 적어도 정리 결과의
     # 폴더 이름은 프로파일의 `to` 그대로다.
     folder_names: dict[str, dict[str, str]] = field(default_factory=dict)
+    # 설정 파일에 적혀 있지만 **아직 만들지 않은** 키. 여기서 던지지 않고
+    # 실어만 보낸다 — 파일을 옮기는 명령은 거부해야 하지만, `undo`·`doctor`·
+    # `paths` 까지 같이 죽으면 안 되기 때문이다. 되돌리기는 사용자의 마지막
+    # 안전줄이고 doctor 는 무엇이 잘못됐는지 알아내는 도구다. 판단은 부르는 쪽이 한다.
+    unsupported: tuple[str, ...] = ()
 
 
 def _read(path: Path) -> dict:
@@ -58,16 +63,38 @@ def load_config(repo_root: Path) -> UserConfig:
     # `pins` 는 "이 파일들은 건드리지 마라" 로 읽힌다. 그런데 그 보호를
     # 실제로 하는 코드가 **한 줄도 없었다** — 적어 둔 파일이 그대로 옮겨졌다.
     # 조용히 무시하는 것이 이 프로젝트가 여덟 번 물린 바로 그 실패다.
-    # 기능을 만들기 전까지는 사실대로 말하고 멈춘다. 빈 목록은 아무것도
-    # 약속하지 않으므로 예전 설정 파일이 깨지지 않게 그냥 통과시킨다.
-    for src in (base, local):
-        if src.get("pins"):
-            raise OrganizeError(
-                "설정의 'pins' 는 아직 만들지 않은 기능입니다 — 적어 두어도 보호되지 않습니다.",
-                hint="config.local.json 에서 'pins' 줄을 지워 주세요. "
-                     "특정 파일을 빼려면 레시피의 'when' 조건으로 대상을 좁히는 방법이 있습니다.")
+    # 빈 목록은 아무것도 약속하지 않으므로 예전 설정 파일이 깨지지 않게 통과시킨다.
+    unsupported = tuple(
+        name for name in _UNSUPPORTED_KEYS
+        if any(src.get(name) for src in (base, local)))
 
-    return UserConfig(paths=paths, folder_names=folder_names)
+    return UserConfig(paths=paths, folder_names=folder_names, unsupported=unsupported)
+
+
+# 설정 파일에 쓸 수는 있지만 아직 동작하지 않는 키.
+_UNSUPPORTED_KEYS = ("pins",)
+
+_UNSUPPORTED_WHY = {
+    "pins": ("설정의 'pins' 는 아직 만들지 않은 기능입니다 — 적어 두어도 보호되지 않습니다.",
+             "config.local.json 에서 'pins' 줄을 지워 주세요. "
+             "특정 파일을 빼려면 레시피의 'when' 조건으로 대상을 좁히는 방법이 있습니다."),
+}
+
+
+def unsupported_notes(cfg: UserConfig) -> list[tuple[str, str]]:
+    """아직 동작하지 않는 설정 키에 대한 (무엇이 문제인가, 무엇을 하면 되는가)."""
+    return [_UNSUPPORTED_WHY[name] for name in cfg.unsupported if name in _UNSUPPORTED_WHY]
+
+
+def refuse_unsupported(cfg: UserConfig) -> None:
+    """**파일을 옮길 수 있는 명령에서만** 부른다.
+
+    조용히 무시하면 보호를 기대하고 적은 파일이 그대로 옮겨진다. 그렇다고
+    `load_config` 에서 던지면 `undo`·`doctor`·`paths` 까지 같이 죽어서,
+    무관한 설정 키 하나가 **되돌리기를 잠근다.** 실측한 결함이다.
+    """
+    for message, hint in unsupported_notes(cfg):
+        raise OrganizeError(message, hint=hint)
 
 
 def _first_existing(candidates: list[str], cfg: "UserConfig",

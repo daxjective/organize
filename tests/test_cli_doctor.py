@@ -337,3 +337,70 @@ def test_doctor_says_folder_missing_not_file_missing(project, tmp_path, capsys, 
     out = capsys.readouterr().out
     assert "폴더 없음" in out
     assert "파일 없음!" not in out
+
+
+# --- 마지막 라운드 — `do --root <폴더>` 로 쓴 폴더를 doctor 가 못 봤다.
+# 실행이 끊기면 사용자가 그 사실을 알 방법이 한 군데도 없었다. ---
+
+
+def test_doctor_sees_a_folder_that_was_only_touched_by_do_root(project, tmp_path, capsys):
+    """레시피에 없는 폴더라도 `--apply` 를 돌렸으면 나중에 doctor 가 봐야 한다.
+
+    **대상 폴더는 어느 별칭도 아니어야 한다** — 픽스처의 `work` 는 `@downloads`
+    라서 doctor 가 원래 보던 폴더다. 그걸로 시험하면 새 동작을 하나도 안 덮는다.
+    """
+    import os, time
+    outside = tmp_path / "레시피에없는폴더"
+    outside.mkdir()
+    f = outside / "a.pdf"
+    f.write_bytes(b"DATA")
+    past = time.time() - 3600
+    os.utime(f, (past, past))
+
+    assert cli.main(["doctor"]) == 0
+    assert str(outside) not in capsys.readouterr().out, \
+        "아직 정리한 적 없는 폴더는 doctor 가 볼 이유가 없다"
+
+    assert cli.main(["do", "route", "--root", str(outside),
+                     "--profile", "desktop", "--apply"]) == 0
+    capsys.readouterr()
+
+    # 그 실행이 중간에 끊긴 것처럼 뼈대만 남긴다
+    (outside / ".organize" / "runs" / "20260101-000000.json").write_text(json.dumps({
+        "run_id": "20260101-000000", "root": str(outside), "done": [], "failed": [],
+        "stale": [], "complete": False,
+    }, ensure_ascii=False), encoding="utf-8")
+
+    assert cli.main(["doctor"]) == 0
+    out = capsys.readouterr().out
+    assert str(outside) in out, "정리를 돌린 폴더는 doctor 가 볼 수 있어야 한다"
+    assert "20260101-000000" in out
+
+
+def test_doctor_accepts_an_explicit_root(project, tmp_path, capsys):
+    """레시피에 없고 기억에도 없는 폴더를 직접 짚어서 점검할 수 있어야 한다."""
+    other = tmp_path / "직접짚은폴더"
+    (other / ".organize" / "runs").mkdir(parents=True)
+    (other / ".organize" / "runs" / "20260101-000000.json").write_text(json.dumps({
+        "run_id": "20260101-000000", "root": str(other), "done": [], "failed": [],
+        "stale": [], "complete": False,
+    }, ensure_ascii=False), encoding="utf-8")
+
+    assert cli.main(["doctor", "--root", str(other)]) == 0
+    out = capsys.readouterr().out
+    assert "20260101-000000" in out
+
+
+def test_doctor_and_paths_still_work_when_the_config_has_pins(
+        project, tmp_path, capsys, monkeypatch):
+    """I-2 — 진단 도구가 진단할 내용을 못 띄우고 자기가 죽으면 안 된다."""
+    repo, work = project
+    # 내장 별칭이 전부 풀리게 해 둔다 — 이 테스트가 보는 것은 pins 뿐이다.
+    monkeypatch.setattr(userconfig, "builtin_path",
+                        lambda name: work if name == "downloads" else tmp_path / name)
+    (repo / "config.local.json").write_text('{"pins": ["세금.pdf"]}', encoding="utf-8")
+
+    assert cli.main(["doctor"]) == 0
+    assert "pins" in capsys.readouterr().out
+    assert cli.main(["paths"]) == 0
+    assert "pins" in capsys.readouterr().out

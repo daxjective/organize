@@ -4,18 +4,22 @@ import argparse
 import json
 import os
 import sys
+import traceback
 from datetime import date, datetime
 from pathlib import Path
 
 from organize import __version__
 from organize.aliases import BUILTIN
-from organize.core.executor import execute, prepare_runlog, write_runlog
+from organize.core.executor import (execute, prepare_runlog, write_json_atomic,
+                                    write_runlog)
 from organize.core.runner import build_plan, make_run_id
 from organize.core.undo import undo as undo_run
 from organize.core.undo import unreadable_runs
 from organize.errors import OrganizeError
+from organize.profiles import normalize_ext
 from organize.recipes import Recipe, find_recipe, list_recipes, load_recipe
-from organize.userconfig import AliasNotDefined, load_config, resolve_alias, save_local_path
+from organize.userconfig import (AliasNotDefined, load_config, refuse_unsupported,
+                                 resolve_alias, save_local_path, unsupported_notes)
 
 _KIND_LABEL = {"mkdir": "폴더 생성", "move": "이동", "quarantine": "격리", "extract": "압축 해제"}
 
@@ -36,6 +40,45 @@ def _count_files(path: Path) -> str:
 
 def repo_root() -> Path:
     return Path(__file__).resolve().parent.parent
+
+
+_RECENT_LIMIT = 20          # 이보다 오래된 것은 잊는다. 목록이 화면을 덮지 않게.
+
+
+def _recent_file() -> Path:
+    return repo_root() / ".organize" / "recent-roots.json"
+
+
+def _recent_roots() -> list[Path]:
+    """`--apply` 를 실제로 돌린 적 있는 폴더들. 최근 것이 앞이다."""
+    try:
+        data = json.loads(_recent_file().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []                      # 없거나 깨졌으면 그냥 비어 있는 것으로 본다
+    if not isinstance(data, list):
+        return []
+    return [Path(s) for s in data if isinstance(s, str)]
+
+
+def _remember_root(root: Path) -> str | None:
+    """`--apply` 대상 폴더를 기억해 둔다. 실패하면 그 사실을 돌려준다(삼키지 않는다).
+
+    `do --root <폴더>` 로 정리한 폴더는 어느 레시피에도 없어서 `doctor` 의
+    점검 대상에 아예 안 들어갔다. 실행이 중간에 끊기면 파일은 옮겨졌는데
+    **사용자가 그 사실을 알 방법이 한 군데도 없었다.** 실측한 결함이다.
+
+    실행 **전에** 기록해야 의미가 있다 — 끊긴 뒤에 기록할 기회는 없다.
+    """
+    path = _recent_file()
+    keep = [root] + [p for p in _recent_roots()
+                     if os.path.realpath(p) != os.path.realpath(root)]
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        write_json_atomic(path, [str(p) for p in keep[:_RECENT_LIMIT]])
+    except OSError:
+        return (f"이 폴더를 doctor 점검 목록에 기억하지 못했습니다({path.parent} 쓰기 실패)."
+                f" 문제가 생기면 organize doctor --root {root} 로 직접 확인해 주세요.")
+    return None
 
 
 def _resolve_roots(recipe, override: str | None) -> list[Path]:
@@ -111,6 +154,9 @@ def _run_recipe(recipe, args, *, apply: bool, label: str) -> int:
     달라지는 조용한 사고이므로, 브리프의 `label=args.block` 보다 넓게 잡았다.
     """
     is_do = getattr(args, "recipe", None) is None
+    # 미리보기도 여기서 막는다 — 사용자가 미리보기 화면을 믿고 --apply 를
+    # 치기 때문이다. `undo`·`doctor`·`paths` 는 이 검사를 하지 않는다.
+    refuse_unsupported(load_config(repo_root()))
     roots = _resolve_roots(recipe, args.root)
     run_id = make_run_id(datetime.now())
 
@@ -148,6 +194,10 @@ def _run_recipe(recipe, args, *, apply: bool, label: str) -> int:
             # execute() 를 부르기 전에 기록 자리를 먼저 마련한다 — 여기서
             # 죽으면 파일이 하나도 안 움직인 상태다(Task 18 리뷰 Critical #1).
             prepare_runlog(built)
+            # 실행 **전에** 기억해 둔다. 도중에 끊기면 기록할 기회가 없다.
+            forgot = _remember_root(root)
+            if forgot:
+                print(f"  {forgot}")      # 삼키지 않는다
             result = execute(built)
 
             try:
@@ -188,7 +238,11 @@ def _run_recipe(recipe, args, *, apply: bool, label: str) -> int:
                 # 계획만 보여줄 뿐 결과는 안 보여준다).
                 print(f"    건너뜀  {Path(row['src']).name} — {row['why']}")
             failed_items += len(result.failed)
-            applied_roots.append(root)
+            if result.done:
+                # **실제로 옮긴 것이 있을 때만** 되돌리기 제안 대상이다.
+                # 항목이 전부 실패한 실행까지 넣으면, 도구가 직접 권한
+                # `organize undo --root ...` 가 "기록이 없습니다" 로 답한다.
+                applied_roots.append(root)
 
         except OrganizeError as e:
             print(f"\n  실패: {e.message}")
@@ -196,13 +250,30 @@ def _run_recipe(recipe, args, *, apply: bool, label: str) -> int:
                 print(f"  {e.hint}")
             failed_roots.append(root)
             continue
-        except Exception:
-            # 순정 파이썬 예외를 그대로 노출하지 않는다(전역 규칙) — 어느
-            # 폴더가 실패했는지만 한국어로 알린다. 삼키지는 않는다:
-            # 화면에 남기고 아래에서 종료 코드 1 로 반영한다.
-            print(f"\n  실패: '{root}' 폴더를 처리하는 동안 예상치 못한 "
-                  "오류가 났습니다. 이 폴더는 건너뜁니다.")
-            print("  디스크 상태나 쓰기 권한을 확인해 주세요.")
+        except Exception as e:
+            # 순정 파이썬 예외를 그대로 노출하지 않는다(전역 규칙). 삼키지도
+            # 않는다: 화면에 남기고 아래에서 종료 코드 1 로 반영한다.
+            #
+            # **`apply` 중이었으면 "건너뜁니다" 라고 말하면 안 된다.** 그
+            # 시점엔 이미 파일을 옮기고 폴더를 만든 뒤일 수 있는데, 사용자는
+            # 안 건드렸다는 뜻으로 읽는다. 실측한 결함이다.
+            if apply:
+                print(f"\n  실패: '{root}' 폴더를 정리하다 도중에 멈췄습니다 "
+                      f"({type(e).__name__}).")
+                print("  이미 옮긴 것이 있을 수 있습니다. 무엇이 옮겨졌는지는")
+                print(f"      {root / '.organize' / 'runs'}")
+                print("  의 실행 기록과, 그 폴더에 새로 생긴 폴더를 확인해 주세요.")
+                print(f"      organize undo --root {root}")
+            else:
+                print(f"\n  실패: '{root}' 폴더를 살펴보다 예상치 못한 오류가 "
+                      f"났습니다 ({type(e).__name__}). 이 폴더는 건너뜁니다.")
+                print("  파일은 하나도 건드리지 않았습니다.")
+            # 예외의 정체를 통째로 지우면 신고가 들어와도 손댈 단서가 0 이다.
+            # 클래스 이름은 위에 남기고, 전체 자취는 요청할 때만 흘린다.
+            if os.environ.get("ORGANIZE_DEBUG"):
+                traceback.print_exc()
+            else:
+                print("  자세한 오류 내용을 보려면 ORGANIZE_DEBUG=1 을 붙여 다시 실행해 주세요.")
             failed_roots.append(root)
             continue
 
@@ -218,9 +289,9 @@ def _run_recipe(recipe, args, *, apply: bool, label: str) -> int:
     if apply:
         if applied_roots:
             print("  되돌리려면:")
-            if len(roots) == 1:
+            if len(applied_roots) == 1:
                 print(f"      organize undo --root {applied_roots[0]}")
-            elif not failed_roots and not is_do:
+            elif len(applied_roots) == len(roots) and not failed_roots and not is_do:
                 # root 가 여러 개면 roots[0] 만 알려주지 않는다(Task 18 리뷰
                 # Important #1) — 전부 성공했을 때는 _cmd_undo 가 --root 없이
                 # 레시피의 roots 를 전부 순회하므로 --recipe 하나로 끝난다.
@@ -239,8 +310,10 @@ def _run_recipe(recipe, args, *, apply: bool, label: str) -> int:
                 # 보인다. 성공한 root 만 하나씩 짚어 주는 쪽이 정직하다.
                 for r in applied_roots:
                     print(f"      organize undo --root {r}")
-                print("      (처리되지 못한 폴더는 되돌릴 것이 없습니다: "
-                      + ", ".join(str(r) for r in failed_roots) + ")")
+                rest = [r for r in roots if r not in applied_roots]
+                if rest:
+                    print("      (되돌릴 것이 없는 폴더: "
+                          + ", ".join(str(r) for r in rest) + ")")
         else:
             print("  되돌릴 수 있는 실행이 없습니다.")
     elif not planned_actions:
@@ -268,7 +341,20 @@ def _run_recipe(recipe, args, *, apply: bool, label: str) -> int:
     return 1 if (failed_roots or failed_items) else 0
 
 
+def _warn_unsupported_config() -> None:
+    """`undo`·`doctor`·`paths` 용 — 알리되 **멈추지 않는다.**
+
+    되돌리기는 사용자의 마지막 안전줄이고 `doctor` 는 무엇이 잘못됐는지
+    알아내는 도구다. 아직 만들지 않은 설정 키 하나 때문에 그 둘이 잠기면,
+    설정이 이상할수록 손쓸 방법이 없어진다. 실측한 결함이다.
+    """
+    for message, hint in unsupported_notes(load_config(repo_root())):
+        print(f"  경고: {message}")
+        print(f"  {hint}")
+
+
 def _cmd_undo(args) -> int:
+    _warn_unsupported_config()
     recipes_dir = repo_root() / "recipes"
     if args.root:
         roots = [resolve_alias(args.root, load_config(repo_root()))]
@@ -420,6 +506,7 @@ def _find_incomplete_runs(folders: list[Path]) -> list[tuple[str, Path]]:
 def _cmd_doctor(args) -> int:
     root = repo_root()
     cfg = load_config(root)
+    _warn_unsupported_config()
 
     print(f"  Python          {sys.version.split()[0]:<18}"
           f"{'OK' if sys.version_info >= (3, 11) else '3.11 이상이 필요합니다'}")
@@ -458,6 +545,21 @@ def _cmd_doctor(args) -> int:
         print(f"    @{name:<9} {str(p):<44} 파일 {_count_files(p)}")
         if p not in checked_folders:
             checked_folders.append(p)
+
+    # `do --root <폴더>` 로 정리한 폴더는 어느 레시피에도 없다. 그걸 안 보면
+    # 실행이 끊겼을 때 사용자가 그 사실을 알 방법이 한 군데도 없다.
+    extra: list[Path] = []
+    if getattr(args, "root", None):
+        extra.append(resolve_alias(args.root, cfg))
+    extra.extend(_recent_roots())
+    shown = 0
+    for p in extra:
+        if p not in checked_folders:
+            checked_folders.append(p)
+            if shown == 0:
+                print("\n  최근에 정리한 폴더")
+            print(f"    {str(p):<54} 파일 {_count_files(p)}")
+            shown += 1
 
     recipes_dir = root / "recipes"
     names = list_recipes(recipes_dir)
@@ -550,6 +652,7 @@ def _cmd_doctor(args) -> int:
 
 def _cmd_paths(args) -> int:
     root = repo_root()
+    _warn_unsupported_config()
     if args.set:
         if "=" not in args.set:
             raise OrganizeError(f"형식이 올바르지 않습니다: {args.set}",
@@ -627,27 +730,6 @@ def _do_label(args) -> str:
     return " ".join(parts)
 
 
-def _normalize_ext(value: str) -> str:
-    """`--only` 값을 확장자 하나로 정규화한다. `*.pdf` · `.pdf` · `pdf` 를 모두 받는다.
-
-    예전에는 `Path(args.only).suffix.lower()` 하나로 뽑았다. 그런데
-    `Path(".pdf").suffix` 도 `Path("pdf").suffix` 도 **빈 문자열**이라
-    `when={"ext": [""]}` 가 되고, 확장자 없는 파일만 걸렸다 — 사용자가 가장
-    먼저 쳐 볼 두 형태가 둘 다 **소리 없이 0건**이었다. 실측했다.
-    """
-    text = value.strip().lstrip("*")
-    if "/" in text or "\\" in text:
-        raise OrganizeError(
-            f"--only 에는 확장자만 적어 주세요: {value}",
-            hint='예: --only pdf · --only .pdf · --only "*.pdf"')
-    ext = Path(text).suffix.lower() or ("." + text.lower().lstrip("."))
-    if ext == "." or not ext.strip("."):
-        raise OrganizeError(
-            f"--only 값에서 확장자를 찾지 못했습니다: {value}",
-            hint='예: --only pdf · --only .pdf · --only "*.pdf"')
-    return ext
-
-
 def _cmd_do(args) -> int:
     step: dict = {"block": args.block}
     if args.profile:
@@ -657,7 +739,10 @@ def _cmd_do(args) -> int:
     if args.dest:
         step["dest"] = args.dest
     if args.only:
-        step["when"] = {"ext": [_normalize_ext(args.only)]}
+        # 레시피·프로파일의 `ext` 와 **같은 함수**를 쓴다. 예전에는 여기만
+        # 점을 붙여 줘서, `--only pdf` 가 되는 걸 본 사용자가 프로파일에
+        # `ext = "pdf"` 를 쓰면 아무 일도 안 일어났다(오류도 없이).
+        step["when"] = {"ext": [normalize_ext(args.only, "--only")]}
 
     recipe = Recipe(name=f"즉석 {args.block}", roots=[args.root], steps=[step])
     fake = argparse.Namespace(recipe=None, root=args.root, verbose=args.verbose,
@@ -692,6 +777,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.set_defaults(func=_cmd_undo)
 
     sp = sub.add_parser("doctor", help="환경 점검")
+    sp.add_argument("--root", help="레시피에 없는 폴더도 함께 점검합니다")
     sp.set_defaults(func=_cmd_doctor)
 
     sp = sub.add_parser("paths", help="폴더 위치 확인·지정")

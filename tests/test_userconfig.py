@@ -5,7 +5,8 @@ import pytest
 
 from organize import aliases, userconfig
 from organize.errors import OrganizeError
-from organize.userconfig import AliasNotDefined, UserConfig, load_config, resolve_alias
+from organize.userconfig import (AliasNotDefined, UserConfig, load_config,
+                                 refuse_unsupported, resolve_alias)
 
 
 def write(p: Path, data: dict) -> None:
@@ -99,14 +100,19 @@ def test_seen_parameter_is_keyword_only():
         resolve_alias("@a", cfg, ("x",))
 
 
-def test_pins_in_a_config_is_rejected_loudly(tmp_path):
+def test_pins_in_a_config_is_reported_not_silently_ignored(tmp_path):
     """Minor #1 — `pins` 는 "건드리지 말 것" 으로 읽히는데 **아무 데서도 안 읽혔다.**
-    보호를 기대하고 적은 파일이 그대로 옮겨진다. 아직 없는 기능이라면
-    조용히 무시하는 것보다 사실대로 말하고 멈추는 쪽이 안전하다."""
+    보호를 기대하고 적은 파일이 그대로 옮겨진다. 조용히 무시하지 않는다.
+
+    다만 `load_config` 는 **던지지 않는다** — 그러면 `undo`·`doctor` 까지 같이
+    죽어 되돌리기가 잠긴다. 실어만 보내고 판단은 부르는 쪽이 한다."""
     (tmp_path / "config.local.json").write_text(
         '{"pins": ["세금.pdf"]}', encoding="utf-8")
+    cfg = load_config(tmp_path)
+    assert cfg.unsupported == ("pins",)
+
     with pytest.raises(OrganizeError) as ex:
-        load_config(tmp_path)
+        refuse_unsupported(cfg)              # 파일을 옮기는 명령에서만 부른다
     assert "pins" in ex.value.message
     assert ex.value.hint
 
@@ -114,4 +120,6 @@ def test_pins_in_a_config_is_rejected_loudly(tmp_path):
 def test_an_empty_pins_list_does_not_break_an_old_config(tmp_path):
     """빈 목록은 아무것도 약속하지 않는다 — 예전 설정 파일이 깨지면 안 된다."""
     (tmp_path / "config.local.json").write_text('{"pins": []}', encoding="utf-8")
-    assert load_config(tmp_path).paths == {}
+    cfg = load_config(tmp_path)
+    assert cfg.paths == {} and cfg.unsupported == ()
+    refuse_unsupported(cfg)                  # 아무것도 안 던진다

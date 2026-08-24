@@ -675,3 +675,116 @@ def test_two_runs_in_the_same_second_undo_in_reverse_order(project, capsys):
 
     left = sorted(p.name for p in work.iterdir() if p.name != ".organize")
     assert left == ["a.pdf", "b.pdf", "c.md"], f"되돌린 뒤 없던 폴더가 남았다: {left}"
+
+
+# ---------------------------------------------------------------------------
+# 마지막 라운드 — 실행이 중간에 끊기면 `undo --root` 가 "한 번 실행한 뒤에
+# 쓸 수 있습니다" 라고 답한다. 파일은 옮겨져 있는데.
+# ---------------------------------------------------------------------------
+
+
+def _crash_after_moving(monkeypatch, keep: int = 2):
+    """앞 `keep` 개 동작만 실제로 수행하고 예상 못 한 예외로 죽는다.
+    진짜 프로그래밍 버그(TypeError)가 실행 도중에 터진 상황을 흉내낸다."""
+    from organize.core.action import Plan
+    from organize.core.runner import BuiltPlan
+    real_execute = cli.execute
+    state = {"done": False}
+
+    def half_then_boom(built):
+        if state["done"]:
+            return real_execute(built)        # 한 번만 터진다 — 뒤 명령은 정상 동작
+        state["done"] = True
+        half = BuiltPlan(root=built.root, run_id=built.run_id,
+                         plan=Plan(actions=built.plan.actions[:keep]),
+                         snapshot=built.snapshot, runlog_path=built.runlog_path)
+        real_execute(half)
+        raise TypeError("코드 버그(시뮬레이션)")
+
+    monkeypatch.setattr(cli, "execute", half_then_boom)
+
+
+def test_an_interrupted_apply_never_says_the_folder_was_skipped(project, capsys, monkeypatch):
+    """C2 의 새 그물이 "이 폴더는 건너뜁니다" 라고 말하는데, 그 시점엔 이미
+    파일을 옮기고 폴더를 만든 뒤다. 안 건드렸다는 뜻으로 읽힌다."""
+    _, work = project
+    old_file(work / "a.pdf")
+    old_file(work / "b.pdf")
+    _crash_after_moving(monkeypatch)
+
+    assert cli.main(["run", "t", "--apply"]) == 1
+    out = capsys.readouterr().out
+
+    assert (work / "01_Docs").is_dir(), "실제로 옮긴 뒤다"
+    assert "건너뜁니다" not in out, "옮긴 뒤에 '건너뜁니다' 는 사실과 다르다"
+    assert ".organize" in out, "무엇을 확인하면 되는지(기록 자리) 짚어 줘야 한다"
+
+
+def test_undo_after_an_interrupted_apply_does_not_claim_you_never_ran_it(
+        project, capsys, monkeypatch):
+    """**축: `undo` 를 run_id 없이 치는 경로.** 사람이 실제로 치는 명령이다."""
+    _, work = project
+    old_file(work / "a.pdf")
+    old_file(work / "b.pdf")
+    _crash_after_moving(monkeypatch)
+    cli.main(["run", "t", "--apply"])
+    capsys.readouterr()
+
+    code = cli.main(["undo", "--root", str(work)])
+    out = capsys.readouterr().out
+    assert code == 1
+    assert "한 번 실행한 뒤에" not in out, "실행했고 파일도 옮겨졌다 — 거짓말이다"
+    assert "완전하지 않" in out or "끊" in out
+
+
+def test_an_apply_that_moved_nothing_does_not_suggest_undo(project, capsys, monkeypatch):
+    """I4 의 apply 쪽 — 항목이 전부 실패해 아무것도 못 옮겼는데도
+    `organize undo --root ...` 를 권했다. 그대로 치면 "기록이 없습니다" 가 나온다."""
+    _, work = project
+    old_file(work / "보고서.pdf")
+
+    from organize.errors import OrganizeError
+
+    def boom(src, dst):
+        raise OrganizeError("파일을 만들 자리를 잡지 못했습니다",
+                            hint="대상 폴더의 쓰기 권한을 확인해 주세요.")
+
+    import organize.core.executor as ex_mod
+    monkeypatch.setattr(ex_mod, "move_file", boom)
+    # 목적지 폴더가 이미 있어야 mkdir 이 done 에 안 들어간다 — "아무것도 못 옮김"
+    (work / "01_Docs").mkdir()
+
+    assert cli.main(["run", "t", "--apply"]) == 1
+    out = capsys.readouterr().out
+    assert "organize undo" not in out, "되돌릴 것이 없는데 undo 를 권하면 안 된다"
+
+
+def test_undo_still_works_when_the_config_has_pins(project, capsys):
+    """I-2 — 미구현 키 하나 때문에 **되돌리기가 잠기면** 안 된다.
+    되돌리기는 사용자의 마지막 안전줄이다. (doctor·paths 쪽은
+    tests/test_cli_doctor.py 에 있다 — 그 픽스처만 홈 폴더를 격리한다.)"""
+    repo, work = project
+    old_file(work / "보고서.pdf")
+    assert cli.main(["run", "t", "--apply"]) == 0
+    capsys.readouterr()
+
+    (repo / "config.local.json").write_text('{"pins": ["세금.pdf"]}', encoding="utf-8")
+
+    assert cli.main(["undo", "--root", str(work)]) == 0, "되돌리기는 돌아야 한다"
+    assert (work / "보고서.pdf").exists()
+    assert "pins" in capsys.readouterr().out, "그래도 경고는 해야 한다"
+
+
+def test_a_run_with_pins_in_the_config_still_refuses(project, capsys):
+    """거부 자체는 유지한다 — 조용히 무시하면 보호를 기대한 파일이 옮겨진다."""
+    repo, work = project
+    old_file(work / "보고서.pdf")
+    (repo / "config.local.json").write_text('{"pins": ["세금.pdf"]}', encoding="utf-8")
+
+    assert cli.main(["run", "t", "--apply"]) == 1
+    assert (work / "보고서.pdf").exists()
+    assert "pins" in capsys.readouterr().out
+
+    # 미리보기도 막는다 — 사용자가 미리보기 화면을 믿고 --apply 를 치기 때문이다.
+    assert cli.main(["preview", "t"]) == 1
+    assert "pins" in capsys.readouterr().out

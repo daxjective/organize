@@ -451,3 +451,48 @@ def test_write_runlog_never_destroys_the_previous_record_when_the_write_fails(
         write_runlog(b, r)
     assert log.read_text(encoding="utf-8") == before, \
         "쓰기가 실패해도 이전 기록이 남아 있어야 한다"
+
+
+# --- 마지막 라운드 — Minor m1·m2 ---
+
+
+def test_two_runs_sharing_a_trash_folder_keep_both_in_the_manifest(tmp_path):
+    """m1 — 같은 초의 두 실행은 격리 폴더(`.organize/trash/<run_id>`)를 공유한다.
+    두 번째 실행이 `_manifest.json` 을 통째로 덮어써서, 파일 3개가 격리돼
+    있는데 장부는 1개만 설명했다. 되돌리기는 실행 기록만 보므로 왕복은
+    정상이지만, 장부는 사람이 보라고 남기는 것이라 사실이어야 한다."""
+    stamp = "20260824-130000"
+    trash = tmp_path / ".organize" / "trash" / stamp
+
+    for name in ("a.pdf", "b.pdf"):
+        src = tmp_path / name
+        src.write_bytes(b"DUP")
+        b = BuiltPlan(root=tmp_path, run_id=stamp, plan=Plan(actions=[
+            Action("quarantine", src, trash / name, "중복", "dedup")]))
+        prepare_runlog(b)
+        write_runlog(b, execute(b))
+
+    manifest = json.loads((trash / "_manifest.json").read_text(encoding="utf-8"))
+    assert sorted(Path(e["to"]).name for e in manifest) == ["a.pdf", "b.pdf"], \
+        "격리 폴더에 있는 파일이 전부 장부에 있어야 한다"
+
+
+def test_prepare_runlog_leaves_no_empty_record_when_the_skeleton_write_fails(
+        tmp_path, monkeypatch):
+    """m2 — 자리를 O_EXCL 로 먼저 잡고 내용을 쓰는데, 그 사이에 실패하면
+    0바이트 `.json` 이 남았다. 그러면 같은 도구가 한쪽에서는 "아무 파일도
+    옮기지 않았습니다", 다른 쪽(undo·doctor)에서는 "무엇을 옮겼는지 알 수
+    없으니 직접 확인해 주세요" 라고 말한다. 그 시점엔 **아무것도 안 옮겼다는
+    것이 확실하므로** 잡아 둔 자리를 치운다."""
+    (tmp_path / "a.pdf").write_bytes(b"A")
+
+    def boom(path, data):
+        raise OSError("디스크가 가득 찼습니다(시뮬레이션)")
+
+    monkeypatch.setattr(executor, "write_json_atomic", boom)
+    b = built_for(tmp_path, [])
+    with pytest.raises(OrganizeError):
+        prepare_runlog(b)
+
+    left = list((tmp_path / ".organize" / "runs").glob("*"))
+    assert left == [], f"잡아 둔 빈 자리가 남았다: {left}"

@@ -173,8 +173,19 @@ def execute(built: BuiltPlan) -> ExecResult:
         trash = built.root / ".organize" / "trash" / built.run_id
         try:
             trash.mkdir(parents=True, exist_ok=True)
-            (trash / "_manifest.json").write_text(
-                json.dumps(quarantined, ensure_ascii=False, indent=2), encoding="utf-8")
+            # **덮어쓰지 않고 이어 붙인다.** 격리 폴더 이름은 계획 때의 run_id
+            # 라서, 같은 초의 두 실행은 이 폴더를 공유한다(기록 파일만 `-2` 로
+            # 비켜 간다). 통째로 쓰면 파일 3개가 격리돼 있는데 장부는 1개만
+            # 설명하게 된다 — 실측했다.
+            manifest = trash / "_manifest.json"
+            before: list = []
+            try:
+                loaded = json.loads(manifest.read_text(encoding="utf-8"))
+                if isinstance(loaded, list):
+                    before = loaded
+            except (OSError, ValueError):
+                before = []          # 없거나 못 읽으면 이번 것만이라도 남긴다
+            write_json_atomic(manifest, before + quarantined)
         except OSError:
             # 삼키지는 않는다 — 무엇이 안 됐는지 화면과 실행 기록에 남긴다.
             result.failed.append({
@@ -212,7 +223,7 @@ def _claim_runlog_path(runs: Path, run_id: str) -> Path:
         return candidate
 
 
-def write_json_atomic(path: Path, data: dict) -> None:
+def write_json_atomic(path: Path, data) -> None:
     """임시 파일에 쓰고 `os.replace` 로 갈아끼운다. **반쯤 쓰인 기록이 안 생긴다.**
 
     예전에는 `path.write_text(...)` 로 통째 덮어썼다. 그건 먼저 파일을 비우고
@@ -252,6 +263,7 @@ def prepare_runlog(built: BuiltPlan) -> Path:
     고치려던 결함이 그대로 남는다.
     """
     runs = built.root / ".organize" / "runs"
+    path: Path | None = None
     try:
         runs.mkdir(parents=True, exist_ok=True)
         path = _claim_runlog_path(runs, built.run_id)
@@ -266,6 +278,16 @@ def prepare_runlog(built: BuiltPlan) -> Path:
             "complete": False,
         })
     except OSError as e:
+        # 잡아 둔 빈 자리를 치운다. **이 시점엔 execute() 가 아직 안 불렸으므로
+        # 아무것도 안 옮겼다는 것이 확실하다.** 안 치우면 0바이트 기록이 남아,
+        # 같은 도구가 여기서는 "아무 파일도 옮기지 않았습니다" 라고 하고
+        # undo·doctor 에서는 "무엇을 옮겼는지 알 수 없으니 직접 확인해 주세요"
+        # 라고 말한다. 지울 방법도 없어 doctor 에 영원히 남는다.
+        if path is not None:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass                 # 정리에 실패해도 원래 오류를 덮지 않는다
         # 파이썬 예외 원문을 그대로 보여주지 않는다(전역 규칙) — 무엇을
         # 확인하면 되는지만 한국어로 알린다.
         raise OrganizeError(

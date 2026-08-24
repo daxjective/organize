@@ -100,6 +100,10 @@ def list_runs(root: Path) -> list[dict]:
             "finished_at": data.get("finished_at"),
             "undone_at": data.get("undone_at"),
             "count": len(data.get("done", [])),
+            # 뼈대(prepare_runlog 이 실행 **전에** 쓴 것)인가. 옛 기록에는 이
+            # 키가 아예 없다 — 그건 write_runlog 이 쓴 완전한 기록이다.
+            # 이 정보가 행에 없어서 `undo` 가 끊긴 실행을 알아보지 못했다.
+            "complete": data.get("complete"),
             "unreadable": False,
             "path": str(path),
         })
@@ -113,30 +117,63 @@ def unreadable_runs(root: Path) -> list[str]:
 
 def latest_run_id(root: Path) -> str | None:
     for row in list_runs(root):
-        if row["unreadable"]:
-            continue                 # 무엇을 옮겼는지 모르는 기록은 되돌릴 수 없다
+        if row["unreadable"] or row["complete"] is False:
+            # 무엇을 옮겼는지 모르는 기록은 되돌릴 수 없다. **없는 척하지도
+            # 않는다** — 부르는 쪽(undo)이 _unusable_runs 로 사실대로 알린다.
+            continue
         if row["undone_at"] is None and row["count"]:
             return row["run_id"]
     return None
 
 
+def _no_run_to_undo(root: Path) -> OrganizeError:
+    """되돌릴 대상을 못 고른 이유를 **사실대로** 말한다.
+
+    예전에는 여기서 무조건 "되돌릴 실행 기록이 없습니다 / organize run --apply 로
+    한 번 실행한 뒤에 쓸 수 있습니다" 가 나왔다. 실행이 중간에 끊긴 뒤라면
+    **새빨간 거짓말이다** — 사용자는 방금 실행했고 파일은 옮겨져 있다.
+    C3 수정이 "못 읽은 기록" 갈래에만 분기를 달아서, 훨씬 흔한
+    "완전하지 않은 기록" 갈래가 그 옆을 그대로 빠져나갔다. 실측한 결함이다.
+
+    `undo <실행ID>` 로 콕 집으면 옛 코드도 올바른 말을 했다 — 사람이 실제로
+    치는 `undo --root` 만 몰랐다. 그래서 이 함수의 자리는
+    **run_id 를 주지 않은 경로**다.
+    """
+    rows = list_runs(root)
+    if not rows:
+        # 정말로 기록이 하나도 없다 — 이때만 "실행한 적 없다" 가 사실이다.
+        return OrganizeError(
+            "되돌릴 실행 기록이 없습니다.",
+            hint="organize run <레시피> --apply 로 한 번 실행한 뒤에 쓸 수 있습니다.")
+
+    unreadable = [r for r in rows if r["unreadable"]]
+    incomplete = [r for r in rows if not r["unreadable"] and r["complete"] is False]
+    if incomplete or unreadable:
+        parts = []
+        if incomplete:
+            parts.append(f"기록이 완전하지 않은 실행 {len(incomplete)}개")
+        if unreadable:
+            parts.append(f"읽지 못한 기록 {len(unreadable)}개")
+        names = ", ".join(Path(r["path"]).name for r in incomplete + unreadable)
+        return OrganizeError(
+            "되돌릴 수 있는 실행 기록이 없습니다 — " + " · ".join(parts) + f": {names}",
+            hint="실행이 중간에 끊겼거나 기록을 남기지 못한 경우입니다. 무엇을 옮겼는지 "
+                 f"알 수 없으니 '{root}' 안에 새로 생긴 폴더와 "
+                 f"'{root / '.organize' / 'trash'}' 를 직접 확인해 주세요.")
+
+    undone = [r for r in rows if r["undone_at"]]
+    empty = [r for r in rows if not r["undone_at"] and not r["count"]]
+    return OrganizeError(
+        f"되돌릴 것이 남아 있지 않습니다 (실행 기록 {len(rows)}개 · "
+        f"이미 되돌린 실행 {len(undone)}개 · 옮긴 것이 없는 실행 {len(empty)}개).",
+        hint=f"'{_runs_dir(root)}' 에서 실행 ID 를 고른 뒤 "
+             "organize undo <실행ID> --root <폴더> 로 특정 실행을 지정할 수 있습니다.")
+
+
 def undo(root: Path, run_id: str | None = None) -> ExecResult:
     resolved_id = run_id or latest_run_id(root)
     if resolved_id is None:
-        broken = unreadable_runs(root)
-        if broken:
-            # "없다" 로 뭉개면 안 된다 — 파일은 옮겨져 있는데 되돌릴 방법이
-            # 없다는 사실 자체가 사용자가 알아야 할 전부다.
-            raise OrganizeError(
-                f"되돌릴 수 있는 실행 기록이 없고, 읽지 못한 기록이 {len(broken)}개 있습니다: "
-                + ", ".join(Path(b).name for b in broken),
-                hint=f"기록이 손상되어 무엇을 옮겼는지 알 수 없습니다. '{root}' 안에 "
-                     f"새로 생긴 폴더와 '{root / '.organize' / 'trash'}' 를 직접 확인해 주세요.",
-            )
-        raise OrganizeError(
-            "되돌릴 실행 기록이 없습니다.",
-            hint="organize run <레시피> --apply 로 한 번 실행한 뒤에 쓸 수 있습니다.",
-        )
+        raise _no_run_to_undo(root)
 
     log_path = _runs_dir(root) / f"{resolved_id}.json"
     if not log_path.is_file():

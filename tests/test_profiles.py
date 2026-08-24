@@ -247,3 +247,55 @@ def test_profile_with_a_broken_regex_is_rejected_before_any_file_is_touched(tmp_
         load_profile(toml)
     assert "name_regex" in ex.value.message
     assert "re.error" not in ex.value.message
+
+
+# --- 마지막 라운드 — Important #1: `ext = "pdf"`(점 없음)가 조용히 0건인데
+# 같은 도구의 `--only pdf` 는 점을 붙여 준다. 사용자를 정반대로 가르친다. ---
+
+
+@pytest.mark.parametrize("written", [".pdf", "pdf", "PDF", ".PDF", "pdf."])
+def test_ext_written_without_a_dot_still_matches(written):
+    assert matches(entry("보고서.pdf"), {"ext": written}, TODAY)
+    assert not matches(entry("사진.jpg"), {"ext": written}, TODAY)
+
+
+def test_ext_in_a_list_is_normalized_the_same_way():
+    assert matches(entry("보고서.pdf"), {"ext": ["pdf", "docx"]}, TODAY)
+
+
+def test_profile_with_a_dotless_ext_actually_routes(tmp_path):
+    """재리뷰가 실제로 돌린 프로파일 그대로 — `ext = "pdf"` 가 아무것도 안 걸렸다."""
+    toml = tmp_path / "zz_ext.toml"
+    toml.write_text('name = "t"\n'
+                    '[[rules]]\n to = "문서"\n ext = "pdf"\n'
+                    '[[rules]]\n to = "그림"\n ext = ".jpg"\n', encoding="utf-8")
+    p = load_profile(toml)
+    assert route_target(entry("보고서.pdf"), p, TODAY) == "문서"
+    assert route_target(entry("사진.jpg"), p, TODAY) == "그림"
+
+
+@pytest.mark.parametrize("bad", ["", ".", "폴더/이름.pdf"])
+def test_ext_that_is_not_an_extension_is_rejected_in_korean(bad):
+    with pytest.raises(OrganizeError) as ex:
+        matches(entry("보고서.pdf"), {"ext": bad}, TODAY)
+    assert "확장자" in ex.value.message or "비어" in ex.value.message
+
+
+def test_empty_name_contains_is_rejected_not_treated_as_match_everything():
+    """m4 — 빈 목록은 거부하면서 빈 문자열은 '전부 일치' 로 통과시키는 것은 비대칭이다.
+    I1 의 원래 증상(폴더를 통째로 옮김)이 빈 문자열에서 살아 있었다."""
+    with pytest.raises(OrganizeError) as ex:
+        matches(entry("가족사진.jpg"), {"name_contains": ""}, TODAY)
+    assert "비어" in ex.value.message
+
+
+def test_bad_age_or_size_says_which_rule_it_came_from(tmp_path):
+    """m6 — 다른 조건 오류에는 붙는 '몇 번째 규칙' 문맥이 여기만 빠졌다."""
+    toml = tmp_path / "t.toml"
+    toml.write_text('name = "t"\n'
+                    '[[rules]]\n to = "a"\n ext = [".pdf"]\n'
+                    '[[rules]]\n to = "b"\n older_than = "30일"\n', encoding="utf-8")
+    with pytest.raises(OrganizeError) as ex:
+        load_profile(toml)
+    assert "2번째 규칙" in ex.value.message
+    assert "older_than" in ex.value.message
