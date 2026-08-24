@@ -50,8 +50,10 @@ class Profile:
     synonyms: dict[str, list[str]] = field(default_factory=dict)
 
 
-_CONDITION_KEYS = {"ext", "name_contains", "name_regex", "older_than",
-                   "larger_than", "has_exif_camera"}
+# 러너도 레시피의 `when` 을 검사할 때 쓰므로 공개 이름으로 둔다.
+CONDITION_KEYS = frozenset({"ext", "name_contains", "name_regex", "older_than",
+                            "larger_than", "has_exif_camera"})
+_CONDITION_KEYS = CONDITION_KEYS        # 기존 내부 사용처(이 파일 안)는 그대로 둔다
 _META_KEYS = {"to", "default"}          # 조건이 아니라 규칙 자체를 기술하는 키
 
 

@@ -6,13 +6,18 @@
 from organize.blocks import BlockConfig, already_there, dest_folder
 from organize.core.action import Action, Plan
 from organize.core.context import Context
+from organize.errors import OrganizeError
 from organize.profiles import matches, route_target
 
 BLOCK = "route"
 
 
 def build(ctx: Context, cfg: BlockConfig) -> Plan:
-    profile = cfg.options["profile"]
+    profile = cfg.options.get("profile")
+    if profile is None:
+        raise OrganizeError(
+            "'route' 작업에 어떤 분류 규칙을 쓸지 적지 않았습니다.",
+            hint="레시피에 profile 을 적어 주세요. 예: {'block': 'route', 'profile': 'desktop'}")
     plan = Plan()
     folders: list[str] = []
     moves: list[Action] = []

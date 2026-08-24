@@ -143,6 +143,15 @@ def test_normal_relative_dest_still_works():
     assert move.dst == ROOT / "보관" / "2023" / "01_Docs" / "보고서.pdf"
 
 
+def test_missing_profile_option_is_a_friendly_error():
+    """options 에 profile 이 아예 없으면 KeyError 가 아니라 한국어 오류여야 한다."""
+    c = ctx(e("보고서.pdf"))
+    with pytest.raises(OrganizeError) as ex:
+        build(c, BlockConfig())
+    assert "route" in ex.value.message
+    assert ex.value.hint and "profile" in ex.value.hint
+
+
 def test_profile_to_with_absolute_path_is_rejected():
     """프로파일의 to='/etc' 도 같은 구멍이다 — dest 뿐 아니라 to 도 사용자가 손으로 쓴다."""
     escape_profile = Profile(name="탈출", rules=[

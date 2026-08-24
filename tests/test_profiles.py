@@ -176,6 +176,14 @@ def test_at_most_one_default_rule(tmp_path):
     assert "하나" in exc.value.message or "하나" in exc.value.hint
 
 
+def test_condition_keys_is_public_and_shared_with_runner():
+    """러너가 when 필터의 오타를 잡을 때 이 공개 이름을 가져다 쓴다."""
+    from organize.profiles import CONDITION_KEYS
+    assert isinstance(CONDITION_KEYS, frozenset)
+    assert CONDITION_KEYS == {"ext", "name_contains", "name_regex", "older_than",
+                              "larger_than", "has_exif_camera"}
+
+
 def test_default_rule_as_the_only_or_last_rule_is_fine(tmp_path):
     """[3] 회귀 방지 — default 가 하나이고 마지막이면 정상적으로 로드되어야 한다."""
     toml = tmp_path / "t.toml"

@@ -31,6 +31,16 @@ class BlockConfig:
 
 BlockFn = Callable[[Context, BlockConfig], Plan]
 
+# 블록마다 받는 옵션 이름. 러너가 레시피의 오타를 잡는 데 쓴다.
+# 여기 없는 키가 레시피에 있으면 거부한다 — 레시피는 사람이 손으로 쓰고,
+# `profil` 같은 오타 하나가 조용히 무시되면 사용자는 왜 안 되는지 알 길이 없다.
+BLOCK_OPTIONS: dict[str, tuple[str, ...]] = {
+    "unzip": ("delete_original",),
+    "dedup": (),
+    "route": ("profile",),
+    "by_date": ("layout",),
+}
+
 
 def dest_folder(ctx: Context, rel: str, *, block: str) -> Path:
     """root 기준 상대 폴더를 실제 경로로 바꾼다. **root 밖으로 나가면 거부한다.**

@@ -9,12 +9,12 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
 
-from organize.blocks import BlockConfig, get_block
+from organize.blocks import BLOCK_OPTIONS, BlockConfig, get_block
 from organize.core.action import Plan
 from organize.core.context import Context
 from organize.core.scanner import scan
 from organize.errors import OrganizeError
-from organize.profiles import load_profile
+from organize.profiles import CONDITION_KEYS, load_profile
 
 _RESERVED = {"block", "target", "dest", "when"}
 
@@ -32,7 +32,33 @@ def make_run_id(now: datetime) -> str:
     return now.strftime("%Y%m%d-%H%M%S")
 
 
-def _to_config(step: dict, profiles_dir: Path) -> BlockConfig:
+def _check_keys(step: dict, block_name: str, order: int) -> None:
+    """레시피에 적힌 이름 중 모르는 것이 있으면 거부한다.
+
+    **조용히 무시하면 안 된다.** `when` 을 `whne` 로 잘못 쓰면 그 값이 무해한
+    옵션으로 흡수되고 필터는 사라진다. 실측했다 — "pdf 만 정리해줘" 라고 쓴
+    레시피가 사진까지 전부 옮겼다. 오류도 안 난다.
+    """
+    allowed = _RESERVED | set(BLOCK_OPTIONS.get(block_name, ()))
+    unknown = sorted(set(step) - allowed)
+    if unknown:
+        raise OrganizeError(
+            f"{order}번째 작업('{block_name}')에 모르는 항목이 있습니다: "
+            + ", ".join(unknown),
+            hint=f"'{block_name}' 에 쓸 수 있는 항목: " + ", ".join(sorted(allowed)),
+        )
+
+    bad = sorted(set(step.get("when") or {}) - CONDITION_KEYS)
+    if bad:
+        raise OrganizeError(
+            f"{order}번째 작업의 'when' 에 모르는 조건이 있습니다: " + ", ".join(bad),
+            hint="쓸 수 있는 조건: " + ", ".join(sorted(CONDITION_KEYS)),
+        )
+
+
+def _to_config(step: dict, profiles_dir: Path, block_name: str,
+               order: int) -> BlockConfig:
+    _check_keys(step, block_name, order)
     options = {k: v for k, v in step.items() if k not in _RESERVED}
     if "profile" in options:
         options["profile"] = load_profile(profiles_dir / f"{options['profile']}.toml")
@@ -68,7 +94,7 @@ def build_plan(root: Path, steps: list[dict], *, today: date, run_id: str,
             )
         block_name = step["block"]
         fn = get_block(block_name)
-        sub = fn(ctx, _to_config(step, profiles_dir))
+        sub = fn(ctx, _to_config(step, profiles_dir, block_name, i))
         ctx.apply(sub)
         built.plan.extend(sub)
         built.per_block.append((block_name, len(sub.actions)))
