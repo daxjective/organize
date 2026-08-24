@@ -2000,8 +2000,10 @@ class Profile:
     synonyms: dict[str, list[str]] = field(default_factory=dict)
 
 
-_CONDITION_KEYS = {"ext", "name_contains", "name_regex", "older_than",
-                   "larger_than", "has_exif_camera"}
+# 러너도 레시피의 `when` 을 검사할 때 쓰므로 공개 이름으로 둔다.
+CONDITION_KEYS = frozenset({"ext", "name_contains", "name_regex", "older_than",
+                            "larger_than", "has_exif_camera"})
+_CONDITION_KEYS = CONDITION_KEYS
 _META_KEYS = {"to", "default"}          # 조건이 아니라 규칙 자체를 기술하는 키
 
 
@@ -2653,6 +2655,16 @@ class BlockConfig:
 
 BlockFn = Callable[[Context, BlockConfig], Plan]
 
+# 블록마다 받는 옵션 이름. 러너가 레시피의 오타를 잡는 데 쓴다.
+# 여기 없는 키가 레시피에 있으면 거부한다 — 레시피는 사람이 손으로 쓰고,
+# `profil` 같은 오타 하나가 조용히 무시되면 사용자는 왜 안 되는지 알 길이 없다.
+BLOCK_OPTIONS: dict[str, tuple[str, ...]] = {
+    "unzip": ("delete_original",),
+    "dedup": (),
+    "route": ("profile",),
+    "by_date": ("layout",),
+}
+
 
 def dest_folder(ctx: Context, rel: str, *, block: str) -> Path:
     """root 기준 상대 폴더를 실제 경로로 바꾼다. **root 밖으로 나가면 거부한다.**
@@ -2734,13 +2746,18 @@ def get_block(name: str) -> BlockFn:
 from organize.blocks import BlockConfig, already_there, dest_folder
 from organize.core.action import Action, Plan
 from organize.core.context import Context
+from organize.errors import OrganizeError
 from organize.profiles import matches, route_target
 
 BLOCK = "route"
 
 
 def build(ctx: Context, cfg: BlockConfig) -> Plan:
-    profile = cfg.options["profile"]
+    profile = cfg.options.get("profile")
+    if profile is None:
+        raise OrganizeError(
+            "'route' 작업에 어떤 분류 규칙을 쓸지 적지 않았습니다.",
+            hint="레시피에 profile 을 적어 주세요. 예: {'block': 'route', 'profile': 'desktop'}")
     plan = Plan()
     folders: list[str] = []
     moves: list[Action] = []
@@ -3967,11 +3984,12 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
 
-from organize.blocks import BlockConfig, get_block
+from organize.blocks import BLOCK_OPTIONS, BlockConfig, get_block
 from organize.core.action import Plan
 from organize.core.context import Context
 from organize.core.scanner import scan
-from organize.profiles import load_profile
+from organize.errors import OrganizeError
+from organize.profiles import CONDITION_KEYS, load_profile
 
 _RESERVED = {"block", "target", "dest", "when"}
 
@@ -3989,7 +4007,33 @@ def make_run_id(now: datetime) -> str:
     return now.strftime("%Y%m%d-%H%M%S")
 
 
-def _to_config(step: dict, profiles_dir: Path) -> BlockConfig:
+def _check_keys(step: dict, block_name: str, order: int) -> None:
+    """레시피에 적힌 이름 중 모르는 것이 있으면 거부한다.
+
+    **조용히 무시하면 안 된다.** `when` 을 `whne` 로 잘못 쓰면 그 값이 무해한
+    옵션으로 흡수되고 필터는 사라진다. 실측했다 — "pdf 만 정리해줘" 라고 쓴
+    레시피가 사진까지 전부 옮겼다. 오류도 안 난다.
+    """
+    allowed = _RESERVED | set(BLOCK_OPTIONS.get(block_name, ()))
+    unknown = sorted(set(step) - allowed)
+    if unknown:
+        raise OrganizeError(
+            f"{order}번째 작업('{block_name}')에 모르는 항목이 있습니다: "
+            + ", ".join(unknown),
+            hint=f"'{block_name}' 에 쓸 수 있는 항목: " + ", ".join(sorted(allowed)),
+        )
+
+    bad = sorted(set(step.get("when") or {}) - CONDITION_KEYS)
+    if bad:
+        raise OrganizeError(
+            f"{order}번째 작업의 'when' 에 모르는 조건이 있습니다: " + ", ".join(bad),
+            hint="쓸 수 있는 조건: " + ", ".join(sorted(CONDITION_KEYS)),
+        )
+
+
+def _to_config(step: dict, profiles_dir: Path, block_name: str,
+               order: int) -> BlockConfig:
+    _check_keys(step, block_name, order)
     options = {k: v for k, v in step.items() if k not in _RESERVED}
     if "profile" in options:
         options["profile"] = load_profile(profiles_dir / f"{options['profile']}.toml")
@@ -4014,7 +4058,7 @@ def build_plan(root: Path, steps: list[dict], *, today: date, run_id: str,
 
     for step in steps:
         fn = get_block(step["block"])
-        sub = fn(ctx, _to_config(step, profiles_dir))
+        sub = fn(ctx, _to_config(step, profiles_dir, block_name, i))
         ctx.apply(sub)
         built.plan.extend(sub)
         built.per_block.append((step["block"], len(sub.actions)))
