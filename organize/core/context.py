@@ -91,8 +91,15 @@ class Context:
         key = os.path.normpath(rel.replace("\\", "/") or ".").casefold()
         if key == ".":
             key = ""
-        taken = self._claimed.setdefault(key, {
-            e.path.name.casefold() for e in self.files_at(rel)})
+        # setdefault 를 쓰면 안 된다 — 파이썬은 키가 이미 있어도 **두 번째 인자를
+        # 항상 평가한다.** 그래서 이름표가 캐시돼 있는데도 files_at() 이 매번 다시
+        # 돌았고, files_at 은 all_files() 로 전체를 정렬하므로 파일 하나당
+        # O(n log n), 합쳐서 **O(n² log n)** 이 됐다. 실측: 1000개 미리보기 41초.
+        # 진짜 다운로드 폴더에서는 미리보기 한 번에 몇 분이다.
+        taken = self._claimed.get(key)
+        if taken is None:
+            taken = {e.path.name.casefold() for e in self.files_at(rel)}
+            self._claimed[key] = taken
         stem, suffix = Path(name).stem, Path(name).suffix
         candidate, n = name, 0
         while candidate.casefold() in taken:

@@ -234,3 +234,34 @@ def test_claim_name_handles_the_root_folder():
     ctx = Context(root=Path("/작업"), entries=[], today=date(2026, 8, 21))
     assert ctx.claim_name("", "a.txt") == "a.txt"
     assert ctx.claim_name(".", "a.txt") == "a_(1).txt"
+
+
+def test_claim_name_does_not_rescan_the_folder_on_every_call():
+    """`claim_name` 이 부를 때마다 폴더 전체를 다시 훑으면 안 된다.
+
+    `dict.setdefault(key, EXPENSIVE)` 는 키가 이미 있어도 **두 번째 인자를 항상
+    평가한다.** 그래서 이름표가 캐시돼 있는데도 `files_at()` 이 매번 다시 돌았고,
+    `files_at` 은 `all_files()` 로 전체를 정렬하므로 파일 하나당 O(n log n) —
+    합쳐서 **O(n² log n)** 이 됐다. 실측: 파일 1000개 미리보기에 41초.
+    진짜 다운로드 폴더에서는 미리보기 한 번에 몇 분이 걸린다.
+
+    폴더 하나당 한 번만 훑으면 된다. 호출 횟수로 못박는다 — 시간으로 재면
+    기계 사정에 따라 들쭉날쭉해진다.
+    """
+    entries = [FileEntry(path=ROOT / f"파일{i:02d}.txt", size=1, mtime=0.0)
+               for i in range(30)]
+    ctx = Context(root=ROOT, entries=entries, today=TODAY, run_id="r1")
+
+    calls = 0
+    real_files_at = ctx.files_at
+
+    def counting(rel):
+        nonlocal calls
+        calls += 1
+        return real_files_at(rel)
+
+    ctx.files_at = counting
+    for i in range(30):
+        ctx.claim_name("01_Docs", f"파일{i:02d}.txt")
+
+    assert calls <= 1, f"같은 폴더를 {calls}번 훑었다 — 한 번이면 된다"
