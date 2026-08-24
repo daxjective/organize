@@ -3,7 +3,6 @@
 import argparse
 import json
 import sys
-import sys as _sys
 from datetime import date, datetime
 from pathlib import Path
 
@@ -185,11 +184,11 @@ def _run_recipe(recipe, args, *, apply: bool, label: str) -> int:
             else:
                 # 일부 root 만 성공했을 때는 --recipe 를 권하지 않는다.
                 # organize undo --recipe 는 레시피의 root 를 전부(실패한
-                # root 포함) 순회하는데, _cmd_undo 의 그 반복문은 root 단위로
-                # 격리돼 있지 않아(Task 19 로 넘긴 범위) 실패한 root 에서
-                # "되돌릴 기록이 없습니다" 로 멈추면 그 뒤 root 는 시도조차
-                # 안 된다 — 실측으로 확인했다. 성공한 root 만 하나씩 짚어
-                # 줘야 전부 안전하게 되돌아간다.
+                # root 포함) 순회한다. 그 반복문은 이제 root 단위로 격리돼
+                # 있어서 중간에 멈추지는 않지만(커밋 bde2f85), 되돌릴 기록이
+                # 없는 root 마다 "되돌리지 못했습니다" 를 찍고 종료 코드가
+                # 1 이 된다 — 실제로는 되돌릴 게 없어서 정상인데 실패처럼
+                # 보인다. 성공한 root 만 하나씩 짚어 주는 쪽이 정직하다.
                 for r in applied_roots:
                     print(f"      organize undo --root {r}")
                 print("      (처리되지 못한 폴더는 되돌릴 것이 없습니다: "
@@ -262,21 +261,44 @@ def _cmd_undo(args) -> int:
     return 0
 
 
+_ZERO_BYTE_SHOWN = 10        # 화면을 덮지 않게 이만큼만 보이고 나머지는 개수로 알린다
+
+
+def organized_before(folder: Path) -> bool:
+    """이 폴더에서 정리를 돌린 적이 있는가.
+
+    `prepare_runlog` 이 `execute()` **전에** `.organize/` 를 만든다. 그리고
+    `claim_path` 가 빈 자리를 잡는 것은 `execute()` **안에서만** 일어난다.
+    그러므로 잔해를 남길 수 있었던 실행은 반드시 `.organize/` 를 먼저 만들었다
+    — 이 폴더만 봐도 **빠뜨리는 것이 없다.**
+    """
+    return (folder / ".organize").is_dir()
+
+
 def _find_zero_byte_files(folders: list[Path]) -> list[Path]:
     """`claim_path`(organize/core/paths.py) 가 이름을 먼저 잡으려고 만든 빈
     파일이, 그 직후 강제 종료로 남았을 수 있다. **찾기만 하고 지우지 않는다**
     — 사용자가 일부러 만든 빈 파일일 수도 있다("파일을 삭제하지 않는다"
-    는 이 프로젝트의 절대 규칙이다). 우리 자신의 장부 폴더(.organize)는
-    대상이 아니므로 뺀다.
+    는 이 프로젝트의 절대 규칙이다).
+
+    **아무 폴더나 뒤지지 않는다.** 실제로 홈 폴더를 통째로 훑게 두었더니
+    1081개가 나왔다 — `LOCK`, `LOG`, `-journal`, 빈 `__init__.py` 처럼 다른
+    프로그램이 정상적으로 만든 것들이었다. 그걸 잔해라고 알리면 소음이고,
+    지우라고 안내하면 남의 프로그램을 망가뜨린다. 실측하고 좁혔다.
+
+    그래서 두 가지로 거른다.
+      - **정리를 돌린 적 있는 폴더만** 본다(`organized_before`).
+      - 숨김 폴더(`.` 로 시작)는 뒤지지 않는다 — 우리 장부 폴더도 여기 걸린다.
     """
     found: list[Path] = []
     for folder in folders:
-        if not folder.is_dir():
+        if not folder.is_dir() or not organized_before(folder):
             continue
         try:
             for p in folder.rglob("*"):
-                if ".organize" in p.parts:
-                    continue
+                rel = p.relative_to(folder).parts
+                if any(part.startswith(".") for part in rel):
+                    continue                       # 숨김 폴더·숨김 파일은 남의 것이다
                 if not p.is_file():
                     continue
                 try:
@@ -315,8 +337,8 @@ def _cmd_doctor(args) -> int:
     root = repo_root()
     cfg = load_config(root)
 
-    print(f"  Python          {_sys.version.split()[0]:<18}"
-          f"{'OK' if _sys.version_info >= (3, 11) else '3.11 이상이 필요합니다'}")
+    print(f"  Python          {sys.version.split()[0]:<18}"
+          f"{'OK' if sys.version_info >= (3, 11) else '3.11 이상이 필요합니다'}")
     try:
         import tkinter
         print(f"  tkinter         {tkinter.TkVersion:<18}OK")
@@ -374,16 +396,24 @@ def _cmd_doctor(args) -> int:
     # 지시). "확인 안 한 것을 됐다고 말하지 않는다" 는 규칙에 따라, 대상
     # 폴더가 하나도 안 잡혔을 때는 "없음"이 아니라 그 사실을 그대로 밝힌다.
     print("\n  0바이트 파일 (강제 종료 후 남은 잔해일 수 있습니다 — 지우지 않았습니다)")
-    if not checked_folders:
-        print("    확인할 폴더가 없어 못 봤습니다.")
+    looked_at = [f for f in checked_folders if f.is_dir() and organized_before(f)]
+    if not looked_at:
+        # "확인 안 한 것을 됐다고 말하지 않는다" — 볼 폴더가 없었다는 사실을
+        # "없음" 으로 뭉개지 않는다.
+        print("    정리를 돌린 적 있는 폴더가 없어 볼 것이 없습니다.")
     else:
-        zero_byte = _find_zero_byte_files(checked_folders)
+        zero_byte = _find_zero_byte_files(looked_at)
         if zero_byte:
-            print(f"    {len(zero_byte)}개 발견 — 직접 열어 보고 필요 없으면 손으로 지워 주세요.")
-            for p in zero_byte:
+            print(f"    {len(zero_byte)}개 발견 (정리를 돌린 적 있는 폴더 {len(looked_at)}곳에서)")
+            for p in zero_byte[:_ZERO_BYTE_SHOWN]:
                 print(f"      {p}")
+            if len(zero_byte) > _ZERO_BYTE_SHOWN:
+                print(f"      … 그 외 {len(zero_byte) - _ZERO_BYTE_SHOWN}개")
+            # 지우라고 말하지 않는다 — 빈 파일을 정상적으로 쓰는 프로그램이 많다.
+            print("      정리가 중간에 끊긴 적이 있는지 확인해 보세요."
+                  " 우리가 남긴 것이 아니면 그대로 두면 됩니다.")
         else:
-            print("    없음 (확인함)")
+            print(f"    없음 (폴더 {len(looked_at)}곳 확인함)")
 
     print("\n  완료되지 않은 실행 기록 (undo 가 거부합니다 — 무엇을 옮겼는지 알 수 없습니다)")
     if not checked_folders:
