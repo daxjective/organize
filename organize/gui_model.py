@@ -9,6 +9,7 @@ tkinter 가 없는 환경에서도 로직을 테스트할 수 있고, "미리보
 맞는지 아무도 모르게 된다.
 """
 
+import copy
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
@@ -107,9 +108,14 @@ class Session:
             self._invalidate()
             return
         recipe = load_recipe(find_recipe(self.repo_root / "recipes", name))
-        if name != self._recipe_name:
+        new_steps = list(recipe.steps)
+        # 이름이 같아도 파일 내용이 바뀌었으면 무효화한다 — 그래야 같은 이름을
+        # 다시 골랐을 때 옛 미리보기(_built)가 화면에 안 보이는 계획을 실행하게
+        # 두지 않는다. 반대로 진짜 아무것도 안 바뀐 재선택까지 지우면 다음
+        # Task 에서 드롭다운을 새로고침할 때마다 미리보기가 날아간다.
+        if name != self._recipe_name or new_steps != self._steps:
             self._invalidate()
-        self._recipe_name, self._steps = name, list(recipe.steps)
+        self._recipe_name, self._steps = name, new_steps
 
     def set_steps(self, ids: list[str]) -> None:
         """켠 작업들을 **보이는 순서 그대로** steps 로 만든다.
@@ -144,7 +150,10 @@ class Session:
         물린 병이다 — 화면은 이 목록이 비어 있지 않으면 사용자에게 알려야 한다.
         """
         catalog_steps = [e.step for e in catalog.catalog()]
-        return [step for step in self._steps if step not in catalog_steps]
+        # deepcopy 해서 돌려준다 — catalog._copy() 와 같은 이유다: 받은 쪽이
+        # 이 dict 를 고치면 _invalidate() 를 안 지나고 _steps 안의 같은 객체가
+        # 조용히 오염된다.
+        return [copy.deepcopy(step) for step in self._steps if step not in catalog_steps]
 
     def save_recipe(self, name: str, *, overwrite: bool = False) -> Path:
         """지금 steps 를 레시피 JSON 으로 저장하고 저장한 경로를 돌려준다.
@@ -154,6 +163,10 @@ class Session:
         if not name or not name.strip():
             raise OrganizeError("레시피 이름을 입력해 주세요.",
                                 hint="예: 내조합")
+        # 앞뒤 공백을 뗀 이름을 끝까지 쓴다 — 검사도, 경로도, _recipe_name 도.
+        # 안 그러면 "  desktop  " 이 진짜 desktop.json 과의 겹침 검사를 피해
+        # "  desktop  .json" 이라는 다른 파일을 만든다.
+        name = name.strip()
         # 사용자가 타이핑하는 값을 그대로 경로에 붙이므로, 손으로 쓴 경로로는
         # 저장소 밖으로 못 나간다는 전역 규칙을 여기서도 지킨다.
         if "/" in name or "\\" in name or ".." in name:
@@ -170,7 +183,15 @@ class Session:
                 f"'{name}' 레시피가 이미 있습니다.",
                 hint="덮어쓰려면 같은 이름으로 다시 저장을 눌러 주세요.")
 
-        write_recipe_file(path, Recipe(name=name, roots=[], steps=list(self._steps)))
+        try:
+            write_recipe_file(path, Recipe(name=name, roots=[], steps=list(self._steps)))
+        except OSError as e:
+            # 파이썬 예외 원문을 그대로 보여주지 않는다 — 윈도우 예약어(con,
+            # nul), 너무 긴 이름, 권한 없음을 한꺼번에 덮는 한국어 메시지로 바꾼다.
+            raise OrganizeError(
+                f"'{name}' 레시피를 저장하지 못했습니다.",
+                hint="이름에 시스템 예약어를 쓰지 않았는지, 너무 길지 않은지, "
+                     "폴더에 쓸 권한이 있는지 확인해 주세요.") from e
         self._recipe_name = name          # 드롭다운이 방금 저장한 것을 가리켜야 한다
         return path
 

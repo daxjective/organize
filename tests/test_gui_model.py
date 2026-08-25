@@ -170,6 +170,45 @@ def test_changing_the_recipe_invalidates_the_preview(repo, work):
     assert not s.can_apply
 
 
+def test_reselecting_the_same_recipe_after_its_file_changed_invalidates_the_preview(repo, work):
+    """이름이 같아도 파일 **내용**이 바뀌었으면 무효화해야 한다.
+
+    안 그러면 desktop 을 미리보고, 그 사이 recipes/desktop.json 이 바뀐 뒤
+    같은 이름을 다시 골라도 can_apply 가 True 로 남아 옛 미리보기(_built)가
+    화면에 없는 계획을 실행하게 된다 — 이 도구의 핵심 불변식(미리보기에서
+    본 것만 실행) 위반이다.
+    """
+    s = Session(repo_root=repo)
+    s.set_root(work)
+    s.set_recipe("정리")
+    s.preview()
+    assert s.can_apply
+
+    (repo / "recipes" / "정리.json").write_text(json.dumps({
+        "name": "정리", "roots": ["@downloads"],
+        "steps": [{"block": "dedup"}],
+    }, ensure_ascii=False), encoding="utf-8")
+
+    s.set_recipe("정리")          # 이름은 같다 — 옛 로직은 여기서 안 지나쳤다
+    assert not s.can_apply, "레시피 파일 내용이 바뀌었으면 미리보기를 다시 봐야 한다"
+
+
+def test_reselecting_the_exact_same_recipe_keeps_the_preview(repo, work):
+    """진짜 아무것도 안 바뀐 재선택까지 미리보기를 지우면 안 된다.
+
+    다음 Task 에서 화면이 드롭다운을 새로고침할 때마다 미리보기가 날아가면
+    안 되기 때문이다.
+    """
+    s = Session(repo_root=repo)
+    s.set_root(work)
+    s.set_recipe("정리")
+    s.preview()
+    assert s.can_apply
+
+    s.set_recipe("정리")          # 이름도 내용도 안 바뀜
+    assert s.can_apply, "아무것도 안 바뀐 재선택은 미리보기를 지우면 안 된다"
+
+
 # ── 밖으로 내보내기 (백업) ────────────────────────────────────────
 
 def test_preview_marks_rows_that_leave_the_folder(repo, work, tmp_path):
@@ -349,6 +388,31 @@ def test_set_recipe_photos_does_not_match_the_catalog_but_previews_as_written(
         "카탈로그 값이 아니라 레시피에 적힌 값을 그대로 써야 한다"
 
 
+def test_unmatched_steps_returns_a_copy_not_the_live_dict(repo):
+    """받은 쪽이 돌려받은 dict/list 를 고쳐도 _steps 는 오염되면 안 된다.
+
+    catalog.py 의 _copy() 가 copy.deepcopy 를 쓰는 것과 같은 이유다 —
+    안 그러면 _invalidate() 를 안 지나고 조용히 오염된다.
+    """
+    (repo / "recipes" / "이상한것.json").write_text(json.dumps({
+        "name": "이상한것", "roots": [],
+        "steps": [{"block": "이상한블록", "x": 1}],
+    }, ensure_ascii=False), encoding="utf-8")
+
+    s = Session(repo_root=repo)
+    s.set_recipe("이상한것")
+
+    got = s.unmatched_steps()
+    assert got == [{"block": "이상한블록", "x": 1}]
+
+    got[0]["x"] = 999          # 돌려받은 dict 를 고쳐본다
+    got.append({"block": "다른것"})  # 돌려받은 list 도 고쳐본다
+
+    again = s.unmatched_steps()
+    assert again == [{"block": "이상한블록", "x": 1}], \
+        "돌려받은 것을 고쳐도 _steps 는 그대로여야 한다"
+
+
 def test_save_recipe_writes_a_recipe_that_loads_back_the_same_steps(repo):
     s = Session(repo_root=repo)
     s.set_steps(["dedup", "route_kind"])
@@ -394,3 +458,53 @@ def test_save_recipe_refuses_when_there_is_nothing_to_save(repo):
     s = Session(repo_root=repo)
     with pytest.raises(OrganizeError):
         s.save_recipe("x")
+
+
+def test_save_recipe_trims_the_name_before_writing(repo):
+    """`save_recipe("  x  ")` 가 `recipes/  x  .json` 이 아니라
+    `recipes/x.json` 을 만들어야 한다."""
+    s = Session(repo_root=repo)
+    s.set_steps(["dedup"])
+
+    path = s.save_recipe("  x  ")
+
+    assert path == repo / "recipes" / "x.json"
+    assert path.is_file()
+    assert not (repo / "recipes" / "  x  .json").exists()
+    assert s.recipe_name == "x", "_recipe_name 도 뗀 이름을 써야 한다"
+
+
+def test_save_recipe_trims_before_checking_for_an_existing_recipe(repo):
+    """이미 있는 이름 앞뒤에 공백을 붙여도 overwrite 없이는 거부돼야 한다.
+
+    옛 코드는 떼지 않은 이름으로 경로를 만들어 진짜 desktop.json 과의
+    겹침 검사를 피해 갔다.
+    """
+    s = Session(repo_root=repo)
+    s.set_steps(["dedup"])
+    s.save_recipe("desktop")           # 진짜 desktop.json 을 만든다
+
+    s2 = Session(repo_root=repo)
+    s2.set_steps(["route_kind"])
+    with pytest.raises(OrganizeError):
+        s2.save_recipe("  desktop  ")  # 공백을 떼면 같은 이름이다
+
+    # 거부됐으니 원래 desktop.json 내용이 그대로여야 한다
+    assert load_recipe(repo / "recipes" / "desktop.json").steps == [{"block": "dedup"}]
+
+
+def test_save_recipe_write_failure_is_a_korean_message_not_the_raw_exception(repo, monkeypatch):
+    """파일 쓰기가 실패하면(윈도우 예약어, 권한 없음 등) 파이썬 예외 원문을
+    그대로 보여주지 않고 한국어 OrganizeError 로 바꿔야 한다."""
+    import organize.gui_model as gui_model
+
+    def boom(path, recipe):
+        raise OSError("some very specific os-level error text")
+
+    monkeypatch.setattr(gui_model, "write_recipe_file", boom)
+
+    s = Session(repo_root=repo)
+    s.set_steps(["dedup"])
+    with pytest.raises(OrganizeError) as ex:
+        s.save_recipe("x")
+    assert "some very specific os-level error text" not in ex.value.message
