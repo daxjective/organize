@@ -7,13 +7,16 @@
 
 import json
 import os
+import shutil
 import time
 from pathlib import Path
 
 import pytest
 
+from organize import profiles
 from organize.errors import OrganizeError
 from organize.gui_model import Session
+from organize.recipes import load_recipe
 
 
 def old_file(path: Path, data: bytes = b"DATA") -> Path:
@@ -48,6 +51,27 @@ def work(tmp_path):
     w.mkdir()
     old_file(w / "보고서.pdf")
     return w
+
+
+@pytest.fixture
+def real_recipes_repo(tmp_path):
+    """저장소의 진짜 recipes/desktop.json · photos.json 과 그에 필요한
+    profiles 를 tmp_path 로 복사해 넣는다.
+
+    카탈로그가 진짜 레시피 파일과 알아보는지(또는 일부러 못 알아보는지) 보는
+    테스트 전용 — 읽기만 하므로 원본을 복사해 와도 안전하지만, 이 fixture
+    자체는 tmp_path 안에서만 쓴다(브리프 8번 규칙과 같은 이유: 실수로 진짜
+    파일을 건드리면 안 된다).
+    """
+    src = Path(__file__).resolve().parent.parent
+    r = tmp_path / "repo"
+    (r / "recipes").mkdir(parents=True)
+    (r / "profiles").mkdir()
+    for name in ("desktop.json", "photos.json"):
+        shutil.copy(src / "recipes" / name, r / "recipes" / name)
+    for name in ("desktop.toml", "photos.toml"):
+        shutil.copy(src / "profiles" / name, r / "profiles" / name)
+    return r
 
 
 # ── 고를 수 있는 것들 ──────────────────────────────────────────────
@@ -244,3 +268,129 @@ def test_an_unknown_recipe_is_a_korean_message(repo, work):
     s.set_root(work)
     with pytest.raises(OrganizeError):
         s.set_recipe("없는레시피")
+
+
+# ── 체크박스로 steps 조립 (Task 9) ─────────────────────────────────
+
+def test_set_steps_keeps_the_checked_order(repo):
+    """dedup 을 먼저 켜고 unzip 을 켜면, 순서를 바꿔 켠 것과 결과가 달라야 한다."""
+    s = Session(repo_root=repo)
+    s.set_steps(["dedup", "unzip"])
+    assert s.checked_ids() == ["dedup", "unzip"]
+
+    s2 = Session(repo_root=repo)
+    s2.set_steps(["unzip", "dedup"])
+    assert s2.checked_ids() == ["unzip", "dedup"]
+
+
+def test_set_steps_enables_preview_once_a_root_is_chosen(repo, work):
+    s = Session(repo_root=repo)
+    s.set_root(work)
+    s.set_steps(["dedup"])
+    assert s.can_preview
+
+
+def test_set_steps_after_a_preview_invalidates_apply(repo, work):
+    """미리보기 뒤 체크박스 조합을 바꾸면 실행 버튼이 다시 꺼져야 한다.
+
+    안 그러면 A 조합을 미리보고 B 조합으로 바꾼 뒤 그대로 실행해 본 적 없는
+    결과가 벌어진다 — 레시피를 바꿀 때와 같은 부류의 사고다.
+    """
+    s = Session(repo_root=repo)
+    s.set_root(work)
+    s.set_steps(["route_kind"])        # profiles/desktop.toml 로 미리보기 가능
+    s.preview()
+    assert s.can_apply
+
+    s.set_steps(["dedup"])
+    assert not s.can_apply, "체크박스 조합을 바꿨으면 미리보기를 다시 봐야 한다"
+
+
+def test_set_steps_with_an_unknown_id_is_a_korean_error_not_a_keyerror(repo):
+    s = Session(repo_root=repo)
+    with pytest.raises(OrganizeError):
+        s.set_steps(["없는id"])
+
+
+def test_set_recipe_desktop_matches_the_catalog_exactly(real_recipes_repo):
+    """recipes/desktop.json 은 dedup + route(profile=desktop) 이라 카탈로그와
+    dict 완전 일치한다 — 못 알아본 step 이 없어야 한다."""
+    s = Session(repo_root=real_recipes_repo)
+    s.set_recipe("desktop")
+    assert s.checked_ids() == ["dedup", "route_kind"]
+    assert s.unmatched_steps() == []
+
+
+def test_set_recipe_photos_does_not_match_the_catalog_but_previews_as_written(
+        real_recipes_repo, tmp_path, monkeypatch):
+    """recipes/photos.json 의 step 은 카탈로그와 target 이 달라 알아보면 안 된다.
+
+    그리고 못 알아봤다고 버리면 안 된다 — 미리보기는 레시피에 적힌 target
+    ("사진") 그대로 계획을 세워야 한다. 카탈로그 값("02_Media/사진")을 대신
+    쓰면 화면과 실제가 갈라진다.
+    """
+    monkeypatch.setattr(profiles, "has_exif_camera", lambda p: True)
+
+    work = tmp_path / "사진작업"
+    work.mkdir()
+    old_file(work / "고양이.jpg")
+
+    s = Session(repo_root=real_recipes_repo)
+    s.set_recipe("photos")
+    assert s.unmatched_steps(), "target 이 다르므로 알아보면 안 된다"
+
+    s.set_root(work)
+    view = s.preview()
+
+    dests = [r.dest.replace("\\", "/") for r in view.rows if r.dest]
+    assert any("/사진" in d or d.endswith("사진") for d in dests), \
+        "레시피에 적힌 target('사진') 그대로 움직여야 한다"
+    assert not any("02_Media" in d for d in dests), \
+        "카탈로그 값이 아니라 레시피에 적힌 값을 그대로 써야 한다"
+
+
+def test_save_recipe_writes_a_recipe_that_loads_back_the_same_steps(repo):
+    s = Session(repo_root=repo)
+    s.set_steps(["dedup", "route_kind"])
+
+    path = s.save_recipe("내조합")
+
+    assert path == repo / "recipes" / "내조합.json"
+    assert path.is_file()
+    loaded = load_recipe(path)
+    assert loaded.roots == []
+    assert loaded.steps == [{"block": "dedup"},
+                            {"block": "route", "profile": "desktop"}]
+    assert "내조합" in s.recipe_names()
+    assert s.recipe_name == "내조합", "저장한 레시피를 드롭다운이 가리켜야 한다"
+
+
+def test_save_recipe_refuses_to_silently_replace_an_existing_recipe(repo):
+    """`desktop` 이라고 치면 기본 제공 레시피가 말없이 사라지면 안 된다."""
+    (repo / "recipes" / "desktop.json").write_text(json.dumps({
+        "name": "바탕화면 정리", "roots": [], "steps": [{"block": "dedup"}],
+    }, ensure_ascii=False), encoding="utf-8")
+
+    s = Session(repo_root=repo)
+    s.set_steps(["route_kind"])
+
+    with pytest.raises(OrganizeError):
+        s.save_recipe("desktop")
+
+    path = s.save_recipe("desktop", overwrite=True)
+    assert path.is_file()
+    assert load_recipe(path).steps == [{"block": "route", "profile": "desktop"}]
+
+
+def test_save_recipe_rejects_names_that_could_escape_the_recipes_folder(repo):
+    s = Session(repo_root=repo)
+    s.set_steps(["dedup"])
+    for bad in ("../밖", "a/b", "  ", ""):
+        with pytest.raises(OrganizeError):
+            s.save_recipe(bad)
+
+
+def test_save_recipe_refuses_when_there_is_nothing_to_save(repo):
+    s = Session(repo_root=repo)
+    with pytest.raises(OrganizeError):
+        s.save_recipe("x")

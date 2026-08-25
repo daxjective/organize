@@ -13,11 +13,13 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
 
+from organize import catalog
 from organize.core.executor import execute, prepare_runlog, write_runlog
 from organize.core.runner import BuiltPlan, build_plan, external_names, make_run_id
 from organize.core.undo import latest_run_id, undo as undo_run
 from organize.errors import OrganizeError
-from organize.recipes import find_recipe, list_recipes, load_recipe
+from organize.recipes import (Recipe, find_recipe, list_recipes, load_recipe,
+                              save_recipe as write_recipe_file)
 from organize.userconfig import (AliasNotDefined, load_config, refuse_unsupported,
                                  resolve_alias)
 
@@ -77,7 +79,9 @@ class Session:
         self.repo_root = Path(repo_root)
         self._root: Path | None = None
         self._recipe_name: str | None = None
-        self._recipe = None
+        # 레시피 드롭다운과 체크박스는 둘 다 이 steps 를 채우는 두 가지 방법일
+        # 뿐이다 — Recipe 객체를 따로 들고 있으면 체크박스가 끼어들 자리가 없다.
+        self._steps: list[dict] = []
         # 미리보기 결과. **이것이 있어야만 실행할 수 있다.**
         self._built: dict[Path, BuiltPlan] | None = None
         self._applied_root: Path | None = None
@@ -93,14 +97,82 @@ class Session:
         self._root = new
 
     def set_recipe(self, name: str | None) -> None:
+        """레시피 파일에서 steps 를 채운다.
+
+        레시피의 step 은 **그대로 쓴다** — 카탈로그로 못 알아보는 것도
+        버리지 않는다. `unmatched_steps()` 가 그걸 화면에 드러낸다.
+        """
         if not name:
-            self._recipe_name, self._recipe = None, None
+            self._recipe_name, self._steps = None, []
             self._invalidate()
             return
         recipe = load_recipe(find_recipe(self.repo_root / "recipes", name))
         if name != self._recipe_name:
             self._invalidate()
-        self._recipe_name, self._recipe = name, recipe
+        self._recipe_name, self._steps = name, list(recipe.steps)
+
+    def set_steps(self, ids: list[str]) -> None:
+        """켠 작업들을 **보이는 순서 그대로** steps 로 만든다.
+
+        catalog.by_id 로 푼다 — 모르는 id 면 OrganizeError(파이썬 KeyError
+        가 아니다). 체크박스로 조립했으니 이제 어떤 레시피도 아니다.
+        """
+        steps = [catalog.by_id(entry_id).step for entry_id in ids]
+        self._recipe_name = None
+        self._steps = steps
+        self._invalidate()
+
+    def checked_ids(self) -> list[str]:
+        """지금 steps 중 카탈로그로 알아볼 수 있는 것들의 id, steps 순서대로.
+
+        알아보기는 dict 완전 일치다. block 이름만 같은 것은 알아본 것이
+        아니다 — target 이 다르면 실제로 다른 폴더가 만들어진다.
+        """
+        entries = catalog.catalog()
+        ids: list[str] = []
+        for step in self._steps:
+            for e in entries:
+                if e.step == step:
+                    ids.append(e.id)
+                    break
+        return ids
+
+    def unmatched_steps(self) -> list[dict]:
+        """카탈로그에 없는 step 들(원본 dict), steps 순서대로.
+
+        **버리지 않는다.** 조용히 사라지는 step 이 이 프로젝트가 여러 번
+        물린 병이다 — 화면은 이 목록이 비어 있지 않으면 사용자에게 알려야 한다.
+        """
+        catalog_steps = [e.step for e in catalog.catalog()]
+        return [step for step in self._steps if step not in catalog_steps]
+
+    def save_recipe(self, name: str, *, overwrite: bool = False) -> Path:
+        """지금 steps 를 레시피 JSON 으로 저장하고 저장한 경로를 돌려준다.
+
+        roots 는 빈 리스트로 저장한다 — 대상 폴더는 화면에서 따로 고른다.
+        """
+        if not name or not name.strip():
+            raise OrganizeError("레시피 이름을 입력해 주세요.",
+                                hint="예: 내조합")
+        # 사용자가 타이핑하는 값을 그대로 경로에 붙이므로, 손으로 쓴 경로로는
+        # 저장소 밖으로 못 나간다는 전역 규칙을 여기서도 지킨다.
+        if "/" in name or "\\" in name or ".." in name:
+            raise OrganizeError(
+                f"레시피 이름에 쓸 수 없는 문자가 있습니다: {name}",
+                hint="폴더 구분자(/, \\)나 '..' 없이 이름만 입력해 주세요.")
+        if not self._steps:
+            raise OrganizeError("저장할 작업이 없습니다.",
+                                hint="체크박스를 하나 이상 켜 주세요.")
+
+        path = self.repo_root / "recipes" / f"{name}.json"
+        if path.exists() and not overwrite:
+            raise OrganizeError(
+                f"'{name}' 레시피가 이미 있습니다.",
+                hint="덮어쓰려면 같은 이름으로 다시 저장을 눌러 주세요.")
+
+        write_recipe_file(path, Recipe(name=name, roots=[], steps=list(self._steps)))
+        self._recipe_name = name          # 드롭다운이 방금 저장한 것을 가리켜야 한다
+        return path
 
     def _invalidate(self) -> None:
         """미리보기 결과를 버린다.
@@ -122,7 +194,7 @@ class Session:
 
     @property
     def can_preview(self) -> bool:
-        return self._root is not None and self._recipe is not None
+        return self._root is not None and bool(self._steps)
 
     @property
     def can_apply(self) -> bool:
@@ -140,7 +212,7 @@ class Session:
     # ── 미리보기 ─────────────────────────────────────────────────
     def preview(self) -> PreviewView:
         """계획을 세워 표로 만든다. **파일을 건드리지 않는다.**"""
-        root, recipe = self._require_choices()
+        root, steps = self._require_choices()
         if not root.is_dir():
             raise OrganizeError(
                 f"정리할 폴더를 찾을 수 없습니다: {root}",
@@ -148,7 +220,7 @@ class Session:
         refuse_unsupported(load_config(self.repo_root))
 
         external = self._resolve_external(apply=False)
-        built = build_plan(root, recipe.steps, today=date.today(),
+        built = build_plan(root, steps, today=date.today(),
                            run_id=make_run_id(datetime.now()),
                            profiles_dir=self.repo_root / "profiles",
                            external=external)
@@ -237,19 +309,19 @@ class Session:
         if self._root is None:
             raise OrganizeError("정리할 폴더를 골라 주세요.",
                                 hint="[찾아보기] 를 눌러 폴더를 고릅니다.")
-        if self._recipe is None:
+        if not self._steps:
             raise OrganizeError("무엇을 할지 골라 주세요.",
-                                hint="목록에서 정리 방식을 고릅니다.")
-        return self._root, self._recipe
+                                hint="목록에서 정리 방식을 고르거나 체크박스를 켜 주세요.")
+        return self._root, self._steps
 
     def _resolve_external(self, *, apply: bool) -> dict[str, Path]:
-        """레시피가 밖으로 내보내려는 이름들을 실제 경로로 푼다.
+        """steps 가 밖으로 내보내려는 이름들을 실제 경로로 푼다.
 
         CLI 와 같은 규칙이다: 등록 안 된 이름이면 거부하고, 실행할 때는 그
         위치가 실제로 있는지도 본다(USB 가 안 꽂혔을 수 있다). 미리보기는
         꽂지 않은 채로도 무엇이 어디로 갈지 볼 수 있어야 하므로 따지지 않는다.
         """
-        names = external_names(self._recipe.steps) if self._recipe else []
+        names = external_names(self._steps) if self._steps else []
         if not names:
             return {}
         cfg = load_config(self.repo_root)
