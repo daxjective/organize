@@ -8,9 +8,9 @@
 
 from pathlib import Path
 
-from organize.gui import (arrange_steps, dest_text, foot_text, keeps_preview,
-                          kind_tabs, move_item, row_checks, toggle_file_key,
-                          _raw_kind)
+from organize.gui import (arrange_steps, control_locks, dest_text, foot_text,
+                          keeps_preview, kind_tabs, move_item, row_checks,
+                          toggle_file_key, undo_label, undo_prompt, _raw_kind)
 from organize.gui_model import Row, _KIND_LABEL
 
 
@@ -184,3 +184,75 @@ def test_foot_text_잘렸어도_손대지_않음_설명은_그대로_남는다()
     assert "손대지 않음 5개" in 말
     assert "압축 안에서 나올 파일" in 말
     assert "폴더 생성은 파일이 아니라" in 말
+
+
+# ── 일이 도는 동안 무엇이 잠기는가 ───────────────────────────────
+# 실측 결함: 버튼 셋만 잠그고 대상 드롭다운을 열어 둔 탓에, 실행이 도는 3초
+# 사이에 대상을 바꾸면 끝난 뒤 화면은 다운로드를 가리키는데 되돌아가는 것은
+# 바탕화면이었다. 그래서 잠금 판단을 여기 한 곳으로 모았다.
+
+def _locks(**바꿀것):
+    기본 = dict(busy=False, can_preview=True, can_apply=True, can_undo=True,
+              has_recipes=True, has_targets=True)
+    기본.update(바꿀것)
+    return control_locks(**기본)
+
+
+def test_도는_동안에는_하나도_안_눌린다():
+    on = _locks(busy=True)
+    assert on == {k: False for k in on}, on
+
+
+def test_잠기는_것에_대상_레시피_체크박스_순서바꾸기가_모두_들어간다():
+    # 하나라도 빠지면 그 조작만 결함으로 남는다 — 이번 결함이 정확히 그 모양이었다.
+    assert set(_locks()) >= {"preview", "apply", "undo", "save",
+                             "recipe", "target", "steps", "order"}
+
+
+def test_일이_끝나면_전부_다시_켜진다():
+    # 잠근 채로 남으면 창이 영영 굳는다.
+    on = _locks(busy=False)
+    assert all(on.values()), on
+
+
+def test_도는_중이_아니면_버튼은_오직_세션이_정한다():
+    on = _locks(can_preview=True, can_apply=False, can_undo=False)
+    assert (on["preview"], on["apply"], on["undo"]) == (True, False, False)
+
+
+def test_고를_것이_없는_드롭다운은_도는_중이_아니어도_꺼진다():
+    on = _locks(has_recipes=False, has_targets=False)
+    assert on["recipe"] is False and on["target"] is False
+    # 그렇다고 나머지까지 꺼지지는 않는다.
+    assert on["steps"] is True and on["order"] is True
+
+
+# ── 되돌리기 확인 대화상자 ───────────────────────────────────────
+class _가짜폴더:
+    def __init__(self, label, path):
+        self.label, self.path = label, path
+
+
+def test_undo_label_은_드롭다운에_보이던_이름을_쓴다():
+    바탕 = Path("/home/나/Desktop")
+    targets = {"바탕화면": _가짜폴더("바탕화면", 바탕),
+               "다운로드": _가짜폴더("다운로드", Path("/home/나/Downloads"))}
+    assert undo_label(바탕, targets) == "바탕화면"
+
+
+def test_undo_label_등록_안_된_폴더는_폴더_이름으로():
+    assert undo_label(Path("/mnt/d/보관함"), {}) == "보관함"
+
+
+def test_undo_prompt_에_폴더_이름과_경로가_둘_다_나온다():
+    # 되돌릴 대상이 무엇인지 **글자로** 보이는 것이 이 대화상자의 목적이다.
+    말 = undo_prompt("바탕화면", Path("/home/나/Desktop"))
+    assert "「바탕화면」" in 말
+    assert "Desktop" in 말
+    assert "계속할까요?" in 말
+
+
+def test_undo_prompt_이름을_모를_때도_말이_되게_적는다():
+    말 = undo_prompt("", Path("/home/나/Desktop"))
+    assert "「" not in 말 and "이 폴더의" in 말
+    assert "Desktop" in 말

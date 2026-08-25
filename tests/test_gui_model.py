@@ -284,6 +284,52 @@ def test_apply_needs_a_preview_first(repo, work):
     assert (work / "보고서.pdf").exists()
 
 
+def test_실행을_마친_뒤_대상을_바꾸면_can_undo_와_undo_가_같은_폴더를_본다(repo, tmp_path):
+    """화면의 대상 드롭다운이 진실이다.
+
+    실측 결함: `can_undo` 는 `_root` 를 보는데 `undo()` 는 `_applied_root` 를
+    되돌렸다. 실행을 마치고 대상만 바꾸면 화면은 새 폴더를 가리키는데 옛
+    폴더의 파일이 움직였다 — 동시성이 없어도 나는 갈라짐이다.
+    """
+    바탕 = tmp_path / "바탕화면"
+    다운 = tmp_path / "다운로드"
+    old_file(바탕 / "바탕.pdf")
+    old_file(다운 / "다운.pdf")
+
+    s = Session(repo_root=repo)
+    s.set_root(바탕)
+    s.set_recipe("정리")
+    s.preview()
+    s.apply()
+    assert (바탕 / "01_Docs" / "바탕.pdf").exists()
+
+    s.set_root(다운)                      # 실행만 끝내고 대상을 바꾼다
+    assert not s.can_undo, "다운로드에는 되돌릴 기록이 없다"
+
+    with pytest.raises(OrganizeError):    # 켜지지 않는 버튼은 아무 일도 못 한다
+        s.undo()
+    assert (바탕 / "01_Docs" / "바탕.pdf").exists(), \
+        "화면이 가리키지 않는 폴더를 되돌리면 안 된다"
+
+
+def test_대상을_되돌릴_폴더로_다시_고르면_그_폴더가_되돌아온다(repo, tmp_path):
+    """`can_undo` 가 켜진다고 말한 폴더가 실제로 되돌아가는 폴더다."""
+    바탕 = tmp_path / "바탕화면"
+    old_file(바탕 / "바탕.pdf")
+
+    s = Session(repo_root=repo)
+    s.set_root(바탕)
+    s.set_recipe("정리")
+    s.preview()
+    s.apply()
+
+    s.set_root(tmp_path / "딴데")         # 잠깐 딴 데를 봤다가
+    s.set_root(바탕)                      # 다시 돌아온다
+    assert s.can_undo
+    s.undo()
+    assert (바탕 / "바탕.pdf").exists()
+
+
 def test_undo_is_off_until_something_was_applied(repo, work):
     s = Session(repo_root=repo)
     s.set_root(work)

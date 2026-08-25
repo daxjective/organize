@@ -391,7 +391,18 @@ class Session:
 
     # ── 되돌리기 ─────────────────────────────────────────────────
     def undo(self) -> UndoResult:
-        root = self._applied_root or self._root
+        """지금 고른 폴더의 **마지막 기록**을 되돌린다.
+
+        **`_root` 를 먼저 본다.** `can_undo` 도 `_root` 를 보기 때문이다 —
+        순서가 반대면 [되돌리기] 가 켜지는 근거와 실제로 되돌아가는 폴더가
+        갈라진다. 실행을 마친 뒤 대상만 바꾸면 화면은 새 폴더를 가리키는데
+        `_applied_root`(옛 폴더)의 파일이 움직인다. 화면의 대상 드롭다운이
+        진실이다 — 사용자가 보는 것과 일어나는 일이 같아야 한다.
+
+        `_applied_root` 는 대상을 아직 아무것도 안 고른 상태(_root is None)에서만
+        쓰이는 마지막 보루다.
+        """
+        root = self._root or self._applied_root
         if root is None:
             raise OrganizeError("되돌릴 폴더를 알 수 없습니다.",
                                 hint="정리할 폴더를 먼저 골라 주세요.")

@@ -127,6 +127,61 @@ def kind_tabs(counts: dict) -> list[tuple[str, str, int]]:
             for kind in _KIND_TABS if counts.get(kind, 0)]
 
 
+def control_locks(*, busy: bool, can_preview: bool, can_apply: bool, can_undo: bool,
+                  has_recipes: bool, has_targets: bool) -> dict[str, bool]:
+    """지금 **무엇을 누를 수 있는가**. 켜짐/꺼짐을 정하는 곳은 여기 하나다.
+
+    창의 `_sync_buttons` 는 이 표를 위젯에 바르기만 한다. 잠그는 판단이 여러
+    곳에 흩어지면 하나를 빠뜨리는 순간 그 조작만 결함으로 남는다 — 실제로
+    버튼 셋만 잠그고 대상 드롭다운을 열어 둔 탓에, 실행이 도는 3초 사이에
+    대상을 바꾸면 화면은 다운로드를 가리키는데 되돌아가는 것은 바탕화면이었다.
+
+    **일이 도는 동안(`busy`)은 전부 꺼진다.** 세 버튼만이 아니라 대상·레시피·
+    작업 체크박스·▲▼·[저장] 까지다. 도는 동안 바뀔 수 있는 것이 하나라도
+    남으면, 끝난 뒤 화면이 말하는 것과 실제로 벌어진 일이 갈라진다.
+
+    `busy` 가 아닐 때 켜지는 근거는 **오직 세션의 `can_*`** 와 "고를 것이
+    있는가" 다. 드롭다운은 항목이 없으면 눌러도 빈 메뉴가 뜰 뿐이다.
+    """
+    살아있음 = not busy
+    return {
+        "preview": 살아있음 and can_preview,
+        "apply": 살아있음 and can_apply,
+        "undo": 살아있음 and can_undo,
+        "save": 살아있음,
+        "recipe": 살아있음 and has_recipes,
+        "target": 살아있음 and has_targets,
+        "steps": 살아있음,        # 작업 체크박스
+        "order": 살아있음,        # ▲▼
+    }
+
+
+def undo_label(root, targets: dict) -> str:
+    """되돌릴 폴더를 **사람이 부르는 이름**으로. 등록된 이름이 있으면 그것.
+
+    확인 대화상자에 경로만 적으면 `C:\\Users\\...\\Desktop` 이 무엇인지 한 번 더
+    읽어야 한다. 드롭다운에 보이던 그 이름("바탕화면")을 그대로 쓴다.
+    """
+    if root is None:
+        return ""
+    for info in targets.values():
+        if getattr(info, "path", None) == root:
+            return info.label
+    return Path(root).name or str(root)
+
+
+def undo_prompt(label: str, root) -> str:
+    """[되돌리기] 확인 대화상자에 적을 말.
+
+    **되돌릴 대상이 무엇인지 글자로 보이는 것이 목적이다.** 되돌리기는
+    사용자의 마지막 안전줄이라 어렵게 만들지 않는다 — 확인 한 번이면 된다.
+    """
+    이름 = f"「{label}」의" if label else "이 폴더의"
+    return (f"{이름} 마지막 정리를 되돌립니다.\n\n"
+            f"  {_short(Path(root))}\n\n"
+            "계속할까요?")
+
+
 def keeps_preview(before, after, can_apply: bool) -> bool:
     """설정을 바꾼 **뒤** — 지금 표와 [실행] 을 그대로 둘 수 있는가.
 
@@ -464,10 +519,14 @@ class App:
         순서줄.pack(fill="x", padx=12, pady=(0, 10))
         tk.Label(순서줄, text="선택한 작업 ▲▼ 순서 변경", bg=theme.SURFACE,
                  fg=theme.MUTED, font=theme.body_font(9)).pack(side="left")
-        ttk.Button(순서줄, text="▼", style="Tiny.Ghost.TButton", width=3,
-                   command=lambda: self._move_step(1)).pack(side="right")
-        ttk.Button(순서줄, text="▲", style="Tiny.Ghost.TButton", width=3,
-                   command=lambda: self._move_step(-1)).pack(side="right", padx=(0, 6))
+        # **변수로 들고 있는다.** `_sync_buttons` 가 도는 동안 이 둘도 꺼야 하는데,
+        # 붙잡아 두지 않으면 끌 방법이 없다(이것이 이번 결함이 남은 이유다).
+        self.btn_down = ttk.Button(순서줄, text="▼", style="Tiny.Ghost.TButton", width=3,
+                                   command=lambda: self._move_step(1))
+        self.btn_down.pack(side="right")
+        self.btn_up = ttk.Button(순서줄, text="▲", style="Tiny.Ghost.TButton", width=3,
+                                 command=lambda: self._move_step(-1))
+        self.btn_up.pack(side="right", padx=(0, 6))
 
         # ── 세 버튼 ───────────────────────────────────────────
         줄 = ttk.Frame(parent)
@@ -561,17 +620,25 @@ class App:
                               activeforeground=theme.TEXT, bd=0,
                               font=theme.body_font())
         mb.configure(menu=mb.dropdown)
+        mb.has_items = False        # `_sync_buttons` 가 읽는다. 아직 못 채웠다
         return mb
 
     def _fill_dropdown(self, mb, items) -> None:
-        """(글자, 누르면 할 일, 회색인가) 목록으로 메뉴를 다시 만든다."""
+        """(글자, 누르면 할 일, 회색인가) 목록으로 메뉴를 다시 만든다.
+
+        **여기서 켜고 끄지 않는다.** 고를 것이 있는지만 적어 두고, 실제로
+        누를 수 있는지는 `_sync_buttons` 한 곳이 정한다 — 잠그는 판단이 두
+        곳이면 일이 도는 중에 이 함수가 불리는 순간 잠금이 풀린다(대상 목록은
+        폴더를 다 센 뒤 이렇게 채워진다).
+        """
         menu = mb.dropdown
         menu.delete(0, "end")
         for i, (text, action, faint) in enumerate(items):
             menu.add_command(label=text, command=action)
             if faint:
                 menu.entryconfigure(i, foreground=theme.FAINT)
-        mb.configure(state="normal" if items else "disabled")
+        mb.has_items = bool(items)
+        self._sync_buttons()
 
     # ── 레시피 ───────────────────────────────────────────────────
     def _refresh_recipes(self, select: str | None = None) -> None:
@@ -730,7 +797,9 @@ class App:
                                 bg=theme.SURFACE, fg=theme.TEXT, selectcolor=theme.SURFACE,
                                 activebackground=theme.SURFACE, activeforeground=theme.TEXT,
                                 highlightthickness=0, bd=0, anchor="w", width=16,
-                                font=theme.body_font(), takefocus=0)
+                                font=theme.body_font(), takefocus=0,
+                                # 꺼졌을 때 눈으로 보여야 한다 — 색은 theme 만 안다.
+                                disabledforeground=theme.FAINT)
             cb.pack(side="left", pady=1)
             요약 = tk.Label(줄, text=entry.summary, bg=theme.SURFACE, fg=theme.MUTED,
                            font=theme.body_font(9), anchor="w")
@@ -741,6 +810,9 @@ class App:
             for w in (줄, 요약):
                 w.bind("<Button-1>", lambda _e, i=entry_id: self._select_step(i))
         self._paint_steps()
+        # 줄을 통째로 새로 만들었으니 잠금도 다시 발라야 한다. 새 체크박스는
+        # 기본이 켜짐이라, 이걸 빼면 도는 중에 다시 그려진 줄만 눌린다.
+        self._sync_buttons()
 
     def _select_step(self, entry_id: str) -> None:
         self.step_selected = entry_id
@@ -789,19 +861,31 @@ class App:
         self._draw_steps()
         self._push_steps()
 
-    # ── 세 버튼 ──────────────────────────────────────────────────
+    # ── 누를 수 있는 것 / 없는 것 ────────────────────────────────
     def _sync_buttons(self) -> None:
-        """켜짐/꺼짐은 **오직 세션**이 정한다.
+        """켜짐/꺼짐을 **화면 전체에 한 번에** 바른다. 판단은 `control_locks` 가 한다.
 
         여기서 따로 판단하면 규칙이 두 곳이 되고, 어긋나는 순간 미리보기를 안 본
-        채로 실행이 눌린다. 일이 도는 동안(`_busy`)은 전부 끈다 — 두 번 눌려
-        두 번 실행되면 안 된다.
+        채로 실행이 눌린다. 일이 도는 동안(`_busy`)은 세 버튼뿐 아니라 대상·
+        레시피·작업 체크박스·▲▼·[저장] 까지 **전부** 끈다 — 하나라도 열어 두면
+        도는 사이에 그것만 바뀌어, 끝난 뒤 화면이 가리키는 폴더와 실제로
+        손댄 폴더가 갈라진다.
         """
-        for btn, 켤까 in ((self.btn_preview, self.session.can_preview),
-                         (self.btn_apply, self.session.can_apply),
-                         (self.btn_undo, self.session.can_undo)):
-            btn.state(["!disabled"] if (켤까 and not self._busy) else ["disabled"])
-        self.btn_save.state(["disabled"] if self._busy else ["!disabled"])
+        on = control_locks(busy=self._busy,
+                           can_preview=self.session.can_preview,
+                           can_apply=self.session.can_apply,
+                           can_undo=self.session.can_undo,
+                           has_recipes=getattr(self.recipe_menu, "has_items", False),
+                           has_targets=getattr(self.target_menu, "has_items", False))
+        for btn, key in ((self.btn_preview, "preview"), (self.btn_apply, "apply"),
+                         (self.btn_undo, "undo"), (self.btn_save, "save"),
+                         (self.btn_up, "order"), (self.btn_down, "order")):
+            btn.state(["!disabled"] if on[key] else ["disabled"])
+        for mb, key in ((self.recipe_menu, "recipe"), (self.target_menu, "target")):
+            mb.configure(state="normal" if on[key] else "disabled")
+        상태 = "normal" if on["steps"] else "disabled"
+        for _줄, cb, _요약 in self.step_rows.values():
+            cb.configure(state=상태)
 
     def _do_preview(self) -> None:
         self._run_job("미리보기", self.session.preview, self._preview_done,
@@ -822,11 +906,37 @@ class App:
         self._run_job("실행", self.session.apply, self._apply_done)
 
     def _do_undo(self) -> None:
+        """되돌리기 전에 **어느 폴더인지 글자로** 보여주고 한 번만 묻는다.
+
+        [실행] 과 같은 모양이다. 되돌리기는 사용자의 마지막 안전줄이라 더
+        어렵게 만들지 않는다 — 확인 한 번이면 된다.
+        """
+        from tkinter import messagebox
+
+        # [실행] 과 같은 순서: 빗장을 먼저. 대화상자를 먼저 띄우면 여러 번 눌렸을 때
+        # 되돌리기는 한 번만 돌아도 대화상자가 그만큼 떴다 사라진다.
+        if self._busy:
+            return
+        root = self.session.root
+        if root is None:
+            # 세션과 같은 말을 쓴다(`Session.undo` 도 이렇게 거절한다).
+            self._report("되돌리기", OrganizeError(
+                "되돌릴 폴더를 알 수 없습니다.", hint="정리할 폴더를 먼저 골라 주세요."))
+            return
+        if not messagebox.askyesno(
+                "되돌리기", undo_prompt(undo_label(root, self.targets), root),
+                parent=self.window):
+            # 알리지 않으면 상태줄에 직전 말이 남아 무슨 일이 있었는지 헷갈린다.
+            self.status_var.set("되돌리기를 취소했습니다 — 아무것도 바뀌지 않았습니다.")
+            return
         self._run_job("되돌리기", self.session.undo, self._undo_done)
 
     def _run_job(self, what: str, work, done, *,
                  discard_if_stale: bool = False) -> None:
-        """오래 걸리는 일을 딴 스레드에서. 도는 동안 버튼을 전부 끈다.
+        """오래 걸리는 일을 딴 스레드에서. 도는 동안 **화면의 조작을 전부 끈다.**
+
+        버튼만이 아니다 — 대상·레시피·작업 체크박스·▲▼ 까지다. 하나라도 열어
+        두면 도는 사이에 그것만 바뀌어, 끝난 뒤 화면과 실제가 갈라진다.
 
         `discard_if_stale` 은 **미리보기에만** 붙인다. 도는 동안 설정이 바뀌면
         그 결과는 화면이 말하는 것과 다르므로 버린다.
@@ -839,7 +949,10 @@ class App:
             return
         self._busy = True
         self._sync_buttons()
-        self.status_var.set(f"{what} 중…  (파일이 많으면 시간이 걸립니다)")
+        # 잠근 이유가 화면에 보여야 한다 — 회색이 된 대상·체크박스를 보고
+        # 고장으로 읽지 않도록, 무엇을 하는 중이고 언제 풀리는지 적는다.
+        self.status_var.set(f"{what} 중…  끝날 때까지 다른 조작은 잠깁니다."
+                            "  (파일이 많으면 시간이 걸립니다)")
         세대 = self._generation if discard_if_stale else None
 
         def 일하기():
@@ -848,7 +961,17 @@ class App:
             except Exception as e:               # noqa: BLE001 — 창은 살아 있어야 한다
                 self._jobs.put((what, done, 세대, "fail", e))
 
-        threading.Thread(target=일하기, daemon=True).start()
+        try:
+            threading.Thread(target=일하기, daemon=True).start()
+        except RuntimeError:
+            # 스레드를 못 띄웠는데 `_busy` 를 켠 채로 두면 **창이 영영 굳는다**
+            # (아무도 `_drain_jobs` 를 부르지 않는다). 반드시 되돌려 놓고 알린다.
+            self._busy = False
+            self._sync_buttons()
+            self._report(what, OrganizeError(
+                f"{what} 를 시작하지 못했습니다.",
+                hint="다른 프로그램을 닫고 잠시 뒤에 다시 눌러 주세요."))
+            return
         self.window.after(60, self._drain_jobs)
 
     def _drain_jobs(self) -> None:
@@ -869,12 +992,16 @@ class App:
                                 " — [미리보기] 를 다시 눌러 주세요.")
             self._sync_buttons()
             return
-        if kind == "ok":
-            with self._reporting(what):
-                done(payload)
-        else:
-            self._report(what, payload)
-        self._sync_buttons()
+        # **끝났으면 무슨 일이 있었든 다시 켠다.** `done` 이나 오류 알림이
+        # 터져도 잠긴 채로 남으면 창이 영영 굳는다 — 그래서 finally 다.
+        try:
+            if kind == "ok":
+                with self._reporting(what):
+                    done(payload)
+            else:
+                self._report(what, payload)
+        finally:
+            self._sync_buttons()
 
     def _preview_done(self, view) -> None:
         self.view = view
