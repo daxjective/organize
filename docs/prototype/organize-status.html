@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>organize 진행 상황</title>
+<style>
+  :root{
+    --bg:#f6f6f4; --card:#fff; --ink:#1c1c1a; --dim:#6b6b66; --line:#e2e2dd;
+    --ok:#2f7d4f; --okbg:#e8f4ec; --no:#b3402f; --nobg:#fbeae7;
+    --warn:#8a6218; --warnbg:#fdf3e0; --accent:#2b5c8a; --accentbg:#e9f0f7;
+  }
+  @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+    --bg:#17171a; --card:#202024; --ink:#ececea; --dim:#9a9a94; --line:#33333a;
+    --ok:#7fc79b; --okbg:#1d2f25; --no:#e8897a; --nobg:#33201d;
+    --warn:#e0b563; --warnbg:#332a17; --accent:#8fbde8; --accentbg:#1b2733;
+  }}
+  *{box-sizing:border-box}
+  body{margin:0;padding:32px 20px 80px;background:var(--bg);color:var(--ink);
+    font-family:"Malgun Gothic","Apple SD Gothic Neo",system-ui,sans-serif;
+    line-height:1.75;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:900px;margin:0 auto}
+  header{margin-bottom:34px}
+  h1{font-size:28px;margin:0 0 6px;letter-spacing:-.02em}
+  .sub{color:var(--dim);font-size:14px;margin:0}
+  h2{font-size:19px;margin:44px 0 14px;padding-bottom:8px;border-bottom:2px solid var(--line);
+    letter-spacing:-.01em}
+  h3{font-size:15px;margin:26px 0 10px;color:var(--dim);font-weight:600}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;
+    padding:18px 20px;margin:14px 0}
+  table{width:100%;border-collapse:collapse;font-size:14px;margin:12px 0}
+  th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--dim);font-weight:600;font-size:12.5px;letter-spacing:.02em}
+  tr:last-child td{border-bottom:none}
+  .tag{display:inline-block;padding:2px 9px;border-radius:20px;font-size:12px;
+    font-weight:600;white-space:nowrap}
+  .t-ok{background:var(--okbg);color:var(--ok)}
+  .t-no{background:var(--nobg);color:var(--no)}
+  .t-warn{background:var(--warnbg);color:var(--warn)}
+  .t-acc{background:var(--accentbg);color:var(--accent)}
+  .big{display:flex;gap:12px;flex-wrap:wrap;margin:18px 0}
+  .stat{flex:1 1 150px;background:var(--card);border:1px solid var(--line);
+    border-radius:10px;padding:14px 16px}
+  .stat b{display:block;font-size:26px;letter-spacing:-.02em;line-height:1.2}
+  .stat span{font-size:12.5px;color:var(--dim)}
+  pre{background:var(--card);border:1px solid var(--line);border-radius:8px;
+    padding:13px 15px;overflow-x:auto;font-size:13px;line-height:1.6;
+    font-family:"Cascadia Mono",Consolas,"D2Coding",monospace;margin:12px 0}
+  code{font-family:"Cascadia Mono",Consolas,"D2Coding",monospace;font-size:13px;
+    background:var(--accentbg);color:var(--accent);padding:1px 6px;border-radius:4px}
+  pre code{background:none;color:inherit;padding:0}
+  .lead{font-size:15.5px;border-left:3px solid var(--accent);padding-left:14px;
+    margin:16px 0;color:var(--ink)}
+  .warnbox{background:var(--warnbg);border:1px solid var(--warn);border-radius:10px;
+    padding:16px 18px;margin:16px 0}
+  .warnbox strong{color:var(--warn)}
+  ol,ul{padding-left:22px;margin:10px 0}
+  li{margin:6px 0}
+  .flow{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:13.5px;margin:14px 0}
+  .box{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:9px 13px}
+  .box.hl{border-color:var(--accent);background:var(--accentbg);color:var(--accent);font-weight:600}
+  .arrow{color:var(--dim)}
+  footer{margin-top:56px;padding-top:18px;border-top:1px solid var(--line);
+    color:var(--dim);font-size:13px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>organize — 지금 어디까지 왔나</h1>
+  <p class="sub">2026-08-25 · 브랜치 <code>feat/organize-engine-cli</code></p>
+</header>
+
+<p class="lead">
+  <strong>도구는 동작한다.</strong> 미리보기 → 실행 → 되돌리기가 실제 파일에서 확인됐다.
+  <strong>다만 백업의 핵심인 “다른 드라이브로 보내기”가 아직 없다.</strong>
+</p>
+
+<div class="big">
+  <div class="stat"><b>19<span style="font-size:15px;color:var(--dim)">/20</span></b><span>작업 완료 · 전부 리뷰 통과</span></div>
+  <div class="stat"><b>439</b><span>테스트 통과</span></div>
+  <div class="stat"><b>0.48초</b><span>파일 1,000개 미리보기</span></div>
+  <div class="stat"><b>0</b><span>남은 Critical 결함</span></div>
+</div>
+
+<h2>1. 실제 파일로 확인한 것</h2>
+
+<p>진짜 다운로드 폴더(125개)에 <strong>미리보기만</strong> 돌린 결과다. 파일은 하나도 바뀌지 않았다.</p>
+
+<pre><code>[1/2] dedup     2건        ← 중복 2개를 실제로 찾아냄
+[2/2] route   119건
+총계  이동 116 · 격리 2 · 폴더 생성 3 · 손대지 않음 10
+
+확인: 파일 125개 그대로, 새 폴더 안 생김</code></pre>
+
+<table>
+  <tr><th>실제 확장자</th><th>개수</th><th>어디로</th><th>맞나</th></tr>
+  <tr><td><code>.png</code></td><td>104</td><td>02_Media</td><td><span class="tag t-ok">맞음</span></td></tr>
+  <tr><td><code>.exe</code> <code>.msix</code></td><td>8</td><td>04_Apps</td><td><span class="tag t-ok">맞음</span></td></tr>
+  <tr><td><code>.md</code> <code>.html</code></td><td>6</td><td>01_Docs</td><td><span class="tag t-ok">맞음</span></td></tr>
+</table>
+
+<h3>손대지 않은 10개도 제대로 골랐다</h3>
+<p><code>desktop.ini</code> · <code>.DS_Store</code> · <code>~$…doc</code>(워드 임시) ·
+<code>.part</code>(받는 중) · <code>.tmp</code> 4개 — 옮기면 안 되는 것들이다.</p>
+
+<h2>2. 지금 되는 것 / 안 되는 것</h2>
+
+<table>
+  <tr><th>기능</th><th>상태</th><th>비고</th></tr>
+  <tr><td>미리보기 (파일 안 건드림)</td><td><span class="tag t-ok">됨</span></td><td>기본 동작. <code>--apply</code> 없으면 아무것도 안 바뀐다</td></tr>
+  <tr><td>압축 풀기 · 중복 치우기</td><td><span class="tag t-ok">됨</span></td><td>이름 아닌 <strong>내용</strong>으로 중복 판정</td></tr>
+  <tr><td>종류별 · 연도별 분류</td><td><span class="tag t-ok">됨</span></td><td>사진은 EXIF 촬영일 기준</td></tr>
+  <tr><td>되돌리기</td><td><span class="tag t-ok">됨</span></td><td>부분 실패해도 재시도 가능</td></tr>
+  <tr><td>SD카드 · USB를 <strong>대상</strong>으로 정리</td><td><span class="tag t-ok">됨</span></td><td><code>--root E:\DCIM</code> 처럼 잡으면 그 안에서 정리</td></tr>
+  <tr><td><strong>다른 드라이브로 보내기</strong></td><td><span class="tag t-no">없음</span></td><td>백업의 핵심. 아래 3번</td></tr>
+  <tr><td>윈도우 실사용 검증</td><td><span class="tag t-warn">남음</span></td><td>실행·되돌리기를 윈도우에서 직접</td></tr>
+  <tr><td>GUI</td><td><span class="tag t-warn">다음</span></td><td>—</td></tr>
+</table>
+
+<h2>3. 빠진 핵심 — 다른 드라이브로 보내기</h2>
+
+<div class="warnbox">
+  <p style="margin:0 0 8px"><strong>지금은 정리 대상 폴더 밖으로 파일을 못 내보낸다.</strong></p>
+  <pre style="margin:8px 0 0"><code>$ organize do route --dest E:\백업 --root C:\Users\...\Downloads
+  실패: 'route' 작업의 목적지가 정리 대상 폴더 밖을 가리킵니다</code></pre>
+  <p style="margin:10px 0 0;font-size:14px">
+    옛 <code>legacy/result.py</code> 는 <code>F:\day</code> 로 옮겼다.
+    <strong>예전엔 되던 것이 지금은 없다.</strong>
+  </p>
+</div>
+
+<h3>왜 막아 뒀나</h3>
+<p>오타 하나(<code>..</code>, 절대경로)로 파일이 엉뚱한 곳에 흩어지는 것을 막기 위해서다.
+그 걱정 자체는 옳다. <strong>문제는 “막는 것”과 “못 하게 하는 것”을 구분하지 않은 것이다.</strong></p>
+
+<h3>제안하는 구조 — 이름을 붙인 곳으로만 내보낸다</h3>
+
+<div class="flow">
+  <span class="box">손으로 쓴 경로<br><code>--dest E:\백업</code></span>
+  <span class="arrow">→</span>
+  <span class="box" style="border-color:var(--no);color:var(--no)">계속 거부</span>
+</div>
+<div class="flow">
+  <span class="box">먼저 이름을 붙이고<br><code>paths --set 백업=E:\정리</code></span>
+  <span class="arrow">→</span>
+  <span class="box hl">그 이름으로만<br><code>--dest @백업</code></span>
+  <span class="arrow">→</span>
+  <span class="box" style="border-color:var(--ok);color:var(--ok)">허용</span>
+</div>
+
+<p>한 번 등록하는 수고가 오타 사고를 막는 장치가 된다. 등록된 곳은
+<code>config.local.json</code> 에 남아 <strong>손으로 열어 고칠 수 있다.</strong></p>
+
+<h3>같이 처리해야 하는 것들</h3>
+<table>
+  <tr><th>상황</th><th>어떻게</th></tr>
+  <tr><td>SD카드·USB가 안 꽂혀 있음</td><td>실행 <strong>전에</strong> 멈춘다 — 파일이 한 개도 안 움직인 상태로</td></tr>
+  <tr><td>옮기는 도중 빠짐</td><td>복사 → <strong>크기 확인</strong> → 삭제 순서라 원본이 살아남는다</td></tr>
+  <tr><td>드라이브가 다름</td><td>복사 후 검증. 이미 만들어져 있다(<code>EXDEV</code> 처리)</td></tr>
+  <tr><td>되돌리기</td><td>실행 기록에 <strong>절대경로</strong>가 남으므로 드라이브를 넘어도 되돌아온다</td></tr>
+  <tr><td>미리보기 화면</td><td>“<strong>다른 드라이브로 나갑니다</strong>” 를 눈에 띄게 표시</td></tr>
+</table>
+
+<h2>4. 경로 — 기억하되 언제든 고칠 수 있게</h2>
+
+<table>
+  <tr><th>무엇</th><th>어디에</th><th>고치는 법</th></tr>
+  <tr><td>내가 등록한 위치</td><td><code>config.local.json</code></td><td><code>organize paths --set 백업=E:\정리</code> 또는 파일을 직접 편집</td></tr>
+  <tr><td>최근 정리한 폴더</td><td><code>.organize/recent-roots.json</code></td><td>자동 기억(최근 20개). 지워도 됨</td></tr>
+  <tr><td>옛 스크립트 경로</td><td><code>legacy/*.py</code> 맨 위</td><td>표시된 한 줄만 바꾸면 됨</td></tr>
+</table>
+
+<p><code>config.local.json</code> 은 <strong>저장소에 올라가지 않는다.</strong>
+PC 를 옮기면 새로 등록하면 되고, 없어도 도구는 그냥 돈다.</p>
+
+<pre><code>// config.local.json — 손으로 열어 고쳐도 된다
+{
+  "paths": {
+    "백업":   "E:/정리",
+    "사진보관": ["E:/사진", "D:/사진"]     // 위에서부터 실제로 있는 것을 쓴다
+  }
+}</code></pre>
+
+<p style="font-size:14px;color:var(--dim)">
+목록으로 적으면 <strong>외장하드를 안 꽂아도 레시피가 죽지 않는다</strong> — 있는 것을 골라 쓴다.
+</p>
+
+<h2>5. 남은 일</h2>
+<ol>
+  <li><strong>다른 드라이브로 보내기</strong> — 위 3번. 지금 가장 중요한 것</li>
+  <li><strong>윈도우에서 실행·되돌리기 확인</strong> — 미리보기 정확도는 이미 확인됨</li>
+  <li>GUI</li>
+</ol>
+
+<footer>
+  이 문서는 로컬 파일이다. 웹에 올라가지 않는다.<br>
+  <code>docs/prototype/organize-status.html</code>
+</footer>
+
+</div>
+</body>
+</html>
