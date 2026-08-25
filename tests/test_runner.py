@@ -488,3 +488,103 @@ def test_a_file_the_plan_will_create_has_no_origin(tmp_path, profiles_dir):
     같음 = build_plan(root, [{"block": "unzip"}, ROUTE], today=TODAY, run_id="r1",
                      profiles_dir=profiles_dir, now=NOW, exclude={root / "안.md"})
     assert 같음.plan.actions == built.plan.actions
+
+
+# ── 리뷰 1건(Major): 뺀 파일도, 스캐너가 거른 파일도 **이름은 차지하고 있다** ──
+#
+# 그 파일들은 계획에서 빠질 뿐 디스크에서 사라지지 않는다. 이름표에서까지
+# 빼 버리면 미리보기가 "사진.png 로 간다" 고 약속하고 실행기는 덮어쓰지
+# 않으려고 `사진_(1).png` 에 놓는다 — 데이터는 안전하지만 화면이 거짓말한다.
+
+
+def test_an_excluded_file_still_holds_its_name_at_the_destination(
+        tmp_path, profiles_dir):
+    """미리보기에서 뺀 파일이 목적지에 앉아 있으면 그 이름은 차 있는 것이다."""
+    root = work(tmp_path)
+    옛것 = new_file(root / "02_Media" / "사진.png", b"OLD")
+    new_file(root / "사진.png", b"NEW")
+
+    안뺐을때 = build_plan(root, [ROUTE], today=TODAY, run_id="r1",
+                          profiles_dir=profiles_dir, now=NOW)
+    뺐을때 = build_plan(root, [ROUTE], today=TODAY, run_id="r1",
+                        profiles_dir=profiles_dir, now=NOW, exclude={옛것})
+
+    옮김 = [a for a in 뺐을때.plan.actions if a.kind == "move"]
+    assert [a.src for a in 옮김] == [root / "사진.png"], \
+        "계획이 비면 확인한 것이 없다"
+    assert 옮김[0].dst == root / "02_Media" / "사진_(1).png"
+    assert [a.dst for a in 옮김] == \
+        [a.dst for a in 안뺐을때.plan.actions if a.kind == "move"
+         and a.src == root / "사진.png"], "빼도 목적지 이름이 달라지면 안 된다"
+
+
+def test_a_file_the_scanner_filtered_still_holds_its_name(tmp_path, profiles_dir):
+    """exclude 를 안 써도 같은 병이다 — 스캐너가 거른 파일도 디스크에 있다.
+
+    여기서만 `now` 가 NOW(1e12)가 아니다. 이 테스트는 스캐너가 **정말로 거르는**
+    파일이 필요한데, 파일 시각을 1e12 로 밀어 넣을 수는 없다(파일 시스템이
+    그 값을 못 담는다 — 실측했다). 그래서 목적지 파일의 진짜 시각에 10초를
+    더한 값을 가짜 현재 시각으로 쓴다. 목적지 파일만 '1분 안' 에 들어오고,
+    한 시간 전으로 돌린 원본은 정상적으로 스캔된다. 계획이 통째로 비는
+    사고는 아래 두 assert 가 막는다.
+    """
+    root = work(tmp_path)
+    방금 = new_file(root / "02_Media" / "사진.png", b"OLD")   # 시각 = 진짜 지금
+    old_file(root / "사진.png", b"NEW")                        # 시각 = 한 시간 전
+    지금 = 방금.stat().st_mtime + 10
+
+    built = build_plan(root, [ROUTE], today=TODAY, run_id="r1",
+                       profiles_dir=profiles_dir, now=지금)
+
+    assert any(p == 방금 for p, _ in built.plan.skipped), \
+        "스캐너가 정말로 거르는 파일이어야 이 테스트가 뭔가를 확인한다"
+    옮김 = [a for a in built.plan.actions if a.kind == "move"]
+    assert [a.src for a in 옮김] == [root / "사진.png"]
+    assert 옮김[0].dst == root / "02_Media" / "사진_(1).png"
+
+
+# ── 리뷰 3건(Minor): 스캔에 없는 제외 경로를 **드러낸다** ────────────────────
+#
+# 계획도 안 바뀌고 skipped 에도 안 남는 조용한 무작동이 이 프로젝트의 금기다.
+# 거부하지는 않는다 — 파일은 두 미리보기 사이에 진짜로 사라질 수 있다.
+
+
+def test_an_exclude_path_that_is_not_in_the_scan_is_carried_out(
+        tmp_path, profiles_dir):
+    root = work(tmp_path)
+    new_file(root / "보고서.pdf")
+    사라진것 = root / "이미지워짐.pdf"
+
+    built = build_plan(root, [ROUTE], today=TODAY, run_id="r1",
+                       profiles_dir=profiles_dir, now=NOW, exclude={사라진것})
+
+    assert len(built.plan.actions) == 2, "계획이 비면 확인한 것이 없다(mkdir+move)"
+    assert built.missing_excluded == [사라진것]
+
+
+def test_exclude_paths_that_were_found_are_not_reported_as_missing(
+        tmp_path, profiles_dir):
+    root = work(tmp_path)
+    빼기 = new_file(root / "가이드.pdf")
+    new_file(root / "보고서.pdf")
+
+    built = build_plan(root, [ROUTE], today=TODAY, run_id="r1",
+                       profiles_dir=profiles_dir, now=NOW, exclude={빼기})
+
+    assert (빼기, "제외함") in built.plan.skipped, "정말 빠진 것이어야 한다"
+    assert built.missing_excluded == []
+
+
+def test_not_excluding_anything_reports_nothing_missing(tmp_path, profiles_dir):
+    root = work(tmp_path)
+    new_file(root / "보고서.pdf")
+    kw = dict(today=TODAY, run_id="r1", profiles_dir=profiles_dir, now=NOW)
+
+    셋 = [build_plan(root, [ROUTE], **kw),
+          build_plan(root, [ROUTE], **kw, exclude=None),
+          build_plan(root, [ROUTE], **kw, exclude=set())]
+
+    for built in 셋:
+        # 계획이 비면 "빈 것 == 빈 것" 이라 아무것도 확인하지 못한다.
+        assert len(built.plan.actions) == 2, "mkdir + move 가 있어야 한다"
+        assert built.missing_excluded == []

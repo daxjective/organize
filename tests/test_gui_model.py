@@ -596,3 +596,88 @@ def test_excluded_keys_hands_out_a_copy(repo, work):
     s.excluded_keys().add("엉뚱한것")
 
     assert s.excluded_keys() == {str(work / "보고서.pdf")}
+
+
+# ── 리뷰 2건(Minor): 같은 폴더를 다시 골라도 조용히 날리지 않는다 ──────────
+
+def test_choosing_the_same_folder_again_keeps_the_exclusions(repo, work):
+    """`set_recipe` 와 같은 빗장이다 — **진짜 바뀌었을 때만** 버린다.
+
+    창이 같은 값을 되먹이는 일은 실제로 생긴다(새로고침, [찾아보기] 에서
+    같은 폴더를 다시 고르기). 그때마다 체크 상태와 미리보기가 조용히
+    날아가면 사용자는 자기가 뭘 잘못 눌렀는지 알 수 없다.
+    """
+    old_file(work / "사진.png")
+    s = Session(repo_root=repo)
+    s.set_root(work)
+    s.set_recipe("정리")
+    s.set_excluded({str(work / "보고서.pdf")})
+    s.preview()
+    assert s.can_apply, "여기서 켜져 있어야 뒤 assert 가 뭔가를 확인한다"
+
+    s.set_root(work)                      # 같은 폴더를 다시 고른다
+
+    assert s.excluded_keys() == {str(work / "보고서.pdf")}
+    assert s.can_apply, "같은 폴더인데 미리보기가 날아가면 안 된다"
+
+
+def test_the_same_folder_written_as_a_string_is_still_the_same_folder(repo, work):
+    """창은 위젯에서 문자열을 받아 넘긴다 — Path 로 고쳐 넣은 것과 같아야 한다."""
+    s = Session(repo_root=repo)
+    s.set_root(work)
+    s.set_recipe("정리")
+    s.preview()
+
+    s.set_root(str(work))
+
+    assert s.can_apply
+
+
+def test_choosing_a_different_folder_still_throws_the_preview_away(repo, work, tmp_path):
+    """빗장을 걸었다고 **진짜 바뀐** 경우까지 놓치면 안 된다."""
+    다른폴더 = tmp_path / "다른작업"
+    old_file(다른폴더 / "메모.pdf")
+    s = Session(repo_root=repo)
+    s.set_root(work)
+    s.set_recipe("정리")
+    s.preview()
+    assert s.can_apply
+
+    s.set_root(다른폴더)
+
+    assert not s.can_apply
+
+
+# ── 리뷰 3건(Minor): 뺐다고 한 파일이 없으면 화면에 드러낸다 ────────────────
+
+def test_preview_warns_when_an_excluded_file_is_gone(repo, work):
+    """조용한 무작동은 금기다. 거부하지도 않는다 — 파일은 진짜로 사라질 수 있다."""
+    old_file(work / "사진.png")
+    s = Session(repo_root=repo)
+    s.set_root(work)
+    s.set_recipe("정리")
+    view = s.preview()
+    key = next(r.key for r in view.rows if r.name == "보고서.pdf")
+
+    s.set_excluded({key})
+    (work / "보고서.pdf").unlink()          # 탐색기에서 지웠다 · USB 를 뽑았다
+    다시 = s.preview()
+
+    assert any("찾을 수 없습니다" in w for w in 다시.warnings), \
+        f"경고가 없다: {다시.warnings}"
+    assert any(r.name == "사진.png" for r in 다시.rows), "나머지는 그대로 돈다"
+
+
+def test_preview_does_not_warn_when_every_excluded_file_is_there(repo, work):
+    old_file(work / "사진.png")
+    s = Session(repo_root=repo)
+    s.set_root(work)
+    s.set_recipe("정리")
+    view = s.preview()
+    key = next(r.key for r in view.rows if r.name == "보고서.pdf")
+
+    s.set_excluded({key})
+    다시 = s.preview()
+
+    assert not any("찾을 수 없습니다" in w for w in 다시.warnings), \
+        f"멀쩡히 뺐는데 경고가 났다: {다시.warnings}"

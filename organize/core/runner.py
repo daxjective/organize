@@ -46,6 +46,11 @@ class BuiltPlan:
     # 계획 단계(dest_folder)와 실행 단계(_guard_destination)가 **같은 목록**을
     # 봐야 한다 — 어긋나면 계획은 세워지는데 실행에서 막혀 미리보기가 거짓말이 된다.
     external: list[Path] = field(default_factory=list)
+    # `exclude` 로 넘어왔는데 이번 스캔에는 없던 경로들(정렬됨).
+    # **조용한 무작동은 이 프로젝트의 금기다.** 파일은 두 미리보기 사이에 진짜로
+    # 사라질 수 있으므로(탐색기에서 지웠거나 USB 를 뽑았거나) 거부하지는 않는다.
+    # 대신 드러낸다 — 화면이 이 목록을 보고 경고 한 줄을 띄운다.
+    missing_excluded: list[Path] = field(default_factory=list)
 
 
 def make_run_id(now: datetime) -> str:
@@ -116,12 +121,18 @@ def external_names(steps: list[dict]) -> list[str]:
     return names
 
 
-def _origin(ctx: Context, src: Path | None, on_disk: set[Path]) -> Path | None:
-    """이 동작이 나온 원본 파일. mkdir(=src 없음)과 계획이 만들 파일은 None."""
+def _origin(ctx: Context, src: Path | None,
+            scanned_paths: set[Path]) -> Path | None:
+    """이 동작이 나온 원본 파일. mkdir(=src 없음)과 계획이 만들 파일은 None.
+
+    `scanned_paths` 는 **이번에 스캐너가 본 엔트리들**이다 — "디스크에 있는
+    파일" 이 아니다. 시스템 파일도, 1분 안에 바뀐 파일도 디스크에는 있지만
+    여기에는 없다.
+    """
     if src is None:
         return None
     origin = ctx.origin_of(src)
-    return origin if origin in on_disk else None
+    return origin if origin in scanned_paths else None
 
 
 def build_plan(root: Path, steps: list[dict], *, today: date, run_id: str,
@@ -145,9 +156,10 @@ def build_plan(root: Path, steps: list[dict], *, today: date, run_id: str,
     if exclude:
         entries = [e for e in scanned.entries if e.path not in exclude]
         dropped = [e for e in scanned.entries if e.path in exclude]
-    # 스캐너가 **실제로 본** 파일들. origin 은 이 안에 있는 것만 인정한다 —
-    # 아래 origins 주석 참고.
-    on_disk = {e.path for e in entries}
+    # 이번에 스캐너가 **본** 파일들. origin 은 이 안에 있는 것만 인정한다 —
+    # 아래 origins 주석 참고. 디스크에 있는 파일 전부가 아니다(스캐너가 거른
+    # 시스템 파일·방금 바뀐 파일은 여기 없다).
+    scanned_paths = {e.path for e in entries}
     ctx = Context(root=root, entries=entries, today=today, run_id=run_id,
                   external=external)
 
@@ -157,6 +169,11 @@ def build_plan(root: Path, steps: list[dict], *, today: date, run_id: str,
     # 뺀 파일이 **조용히 사라지면 안 된다.** 화면의 "손대지 않음" 숫자에 잡혀야
     # 사용자가 자기가 뺀 것을 확인할 수 있다.
     built.plan.skipped.extend((e.path, "제외함") for e in dropped)
+    # 뺐다고 했는데 스캔 결과에 없던 경로. 계획도 안 바뀌고 skipped 에도 안 남아
+    # **아무 일도 안 일어난다** — 그걸 화면이 알 수 있게 여기서 실어 보낸다.
+    if exclude:
+        found = {e.path for e in dropped}
+        built.missing_excluded = sorted(set(exclude) - found, key=str)
     built.snapshot = {str(e.path): (e.size, e.mtime) for e in entries}
 
     for i, step in enumerate(steps, start=1):
@@ -176,14 +193,14 @@ def build_plan(root: Path, steps: list[dict], *, today: date, run_id: str,
         # **ctx.apply 보다 먼저 물어야 한다.** apply 가 옛 경로를 장부에서
         # 지우므로, 뒤에 물으면 두 번째 이동부터 origin 이 전부 None 이 된다.
         #
-        # `on_disk` 로 한 번 거르는 이유: 압축에서 나올 파일처럼 **이 계획이
+        # `scanned_paths` 로 한 번 거르는 이유: 압축에서 나올 파일처럼 **이 계획이
         # 만들어 낼 파일**은 아직 디스크에 없다. 그 경로로 exclude 를 걸어도
         # 스캔 결과에 없으니 아무 일도 안 일어난다 — 그대로 두면 화면에
         # **눌러도 아무 일 없는 체크박스**가 생긴다(실측했다). 열쇠를 안 주면
         # 창은 폴더 생성 줄처럼 체크박스 없이 그린다. 압축 안의 파일을 빼고
         # 싶으면 그 zip 의 체크를 끄면 된다.
         built.origins.extend(
-            _origin(ctx, a.src, on_disk) for a in sub.actions)
+            _origin(ctx, a.src, scanned_paths) for a in sub.actions)
         ctx.apply(sub)
         built.plan.extend(sub)
         built.per_block.append((block_name, len(sub.actions)))

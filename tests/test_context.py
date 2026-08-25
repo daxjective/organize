@@ -293,3 +293,90 @@ def test_claim_name_handles_an_external_place_that_is_not_there_yet(tmp_path):
     ctx = Context(root=tmp_path / "작업", entries=[], today=TODAY, run_id="r1",
                   external={"백업": tmp_path / "안꽂힌USB"})
     assert ctx.claim_name("@백업", "보고서.pdf") == "보고서.pdf"
+
+
+# --- 리뷰 1건(Major): 이름표는 **디스크도** 봐야 한다 -------------------------
+#
+# 스캐너가 본 것만 세면 이름표에 구멍이 난다. 사용자가 미리보기에서 뺀 파일,
+# 1분 안에 바뀐 파일, 시스템 파일은 스캔 결과에 없지만 디스크에는 그대로
+# 앉아 있다. 그 이름을 비어 있다고 보면 미리보기가 "영상.mp4 로 간다" 고
+# 약속해 놓고 실제로는 `영상_(1).mp4` 가 된다 — 화면과 실제가 다르다.
+
+
+def test_claim_name_sees_a_file_the_scanner_never_saw(tmp_path):
+    """entries 에 없어도 **디스크에 있으면** 그 이름은 차 있는 것이다."""
+    root = tmp_path / "작업"
+    (root / "02_Media").mkdir(parents=True)
+    (root / "02_Media" / "영상.mp4").write_bytes(b"OLD")
+
+    c = Context(root=root, entries=[], today=TODAY)     # 스캐너는 못 봤다
+
+    assert c.claim_name("02_Media", "영상.mp4") == "영상_(1).mp4"
+
+
+def test_claim_name_sees_a_file_sitting_in_the_root_folder(tmp_path):
+    """rel 이 빈 문자열(정리 대상 폴더 자신)일 때도 마찬가지다."""
+    root = tmp_path / "작업"
+    root.mkdir()
+    (root / "메모.txt").write_bytes(b"OLD")
+
+    c = Context(root=root, entries=[], today=TODAY)
+
+    assert c.claim_name("", "메모.txt") == "메모_(1).txt"
+
+
+def test_claim_name_ignores_case_for_files_on_disk_too(tmp_path):
+    """윈도우가 주 사용 환경이다 — 디스크에서 읽은 이름도 대소문자를 안 가린다."""
+    root = tmp_path / "작업"
+    (root / "02_Media").mkdir(parents=True)
+    (root / "02_Media" / "영상.MP4").write_bytes(b"OLD")
+
+    c = Context(root=root, entries=[], today=TODAY)
+
+    assert c.claim_name("02_Media", "영상.mp4") == "영상_(1).mp4"
+
+
+def test_claim_name_does_not_count_a_subfolder_as_a_taken_name(tmp_path):
+    """폴더는 파일이 아니다 — 같은 이름의 폴더가 있다고 이름을 비켜 주면
+    쓸데없는 `_(1)` 이 생긴다(밖(external) 가지도 is_file() 로 거른다)."""
+    root = tmp_path / "작업"
+    (root / "02_Media" / "영상").mkdir(parents=True)
+
+    c = Context(root=root, entries=[], today=TODAY)
+
+    assert c.claim_name("02_Media", "영상") == "영상"
+
+
+def test_claim_name_handles_a_destination_folder_that_does_not_exist_yet(tmp_path):
+    """앞으로 만들 목적지다 — 못 읽어도 미리보기는 죽지 않고 비어 있는 것으로 본다."""
+    root = tmp_path / "작업"
+    root.mkdir()
+
+    c = Context(root=root, entries=[], today=TODAY)
+
+    assert c.claim_name("02_Media", "영상.mp4") == "영상.mp4"
+
+
+def test_claim_name_does_not_read_the_folder_on_every_call(tmp_path):
+    """디스크를 보게 만들었다고 폴더를 매번 훑으면 안 된다.
+
+    캐시(`_claimed`)를 우회하면 예전에 겪은 O(n² log n) 이 돌아온다
+    (실측: 파일 1000개 미리보기 41초). 폴더당 한 번이면 된다.
+    """
+    root = tmp_path / "작업"
+    (root / "01_Docs").mkdir(parents=True)
+    c = Context(root=root, entries=[], today=TODAY)
+
+    calls = 0
+    real = c._disk_names
+
+    def counting(folder):
+        nonlocal calls
+        calls += 1
+        return real(folder)
+
+    c._disk_names = counting
+    for i in range(30):
+        c.claim_name("01_Docs", f"파일{i:02d}.txt")
+
+    assert calls <= 1, f"같은 폴더를 {calls}번 읽었다 — 한 번이면 된다"

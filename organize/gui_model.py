@@ -98,9 +98,17 @@ class Session:
         return list_recipes(self.repo_root / "recipes")
 
     def set_root(self, folder: Path | str | None) -> None:
+        """정리할 폴더를 정한다. **진짜 바뀌었을 때만** 본 것을 버린다.
+
+        `set_recipe` 와 같은 빗장이다. 무조건 버리면, 창이 같은 폴더를 다시
+        고르거나(사용자가 [찾아보기] 에서 같은 것을 다시 눌렀다) 화면을
+        새로고침하면서 같은 값을 되먹일 때마다 체크 상태와 미리보기가 조용히
+        날아간다 — 사용자는 자기가 뭘 잘못 눌렀는지 알 수 없다.
+        """
         new = Path(folder) if folder else None
-        if new != self._root:
-            self._invalidate()          # 대상이 바뀌면 본 것이 무효다
+        if new == self._root:
+            return
+        self._invalidate()          # 대상이 바뀌면 본 것이 무효다
         # 다른 폴더인데 옛 제외가 남아 있으면 설명할 수 없는 결과가 된다.
         self._clear_excluded()
         self._root = new
@@ -323,6 +331,15 @@ class Session:
             f"이 정리는 파일 {n}개를 정리 대상 폴더 밖으로 내보냅니다 → {base}"
             f"  (되돌리기 전까지 원래 폴더에 없습니다)"
             for base, n in sorted(나가는것.items(), key=lambda kv: str(kv[0]))]
+
+        # 뺐다고 한 파일이 스캔 결과에 없으면 **아무 일도 안 일어난다.**
+        # 거부하지는 않는다 — 두 미리보기 사이에 사용자가 탐색기에서 지웠거나
+        # USB 를 뽑았을 수 있고, 그건 정상적인 일이다. 대신 조용히 넘어가지
+        # 않는다: 조용한 무작동이 이 프로젝트의 금기다.
+        if built.missing_excluded:
+            warnings.append(
+                f"뺀 파일 {len(built.missing_excluded)}개를 찾을 수 없습니다 "
+                "— 이미 옮겨졌거나 지워졌을 수 있습니다.")
 
         return PreviewView(rows=rows, counts=built.plan.counts(),
                            skipped=len(built.plan.skipped), warnings=warnings)

@@ -146,18 +146,35 @@ class Context:
         folder = Path(os.path.normpath(base / tail)) if tail else Path(os.path.normpath(base))
         return folder if folder.is_relative_to(base) else None
 
+    def _disk_names(self, folder: Path) -> set[str]:
+        """그 폴더에 **실제로 있는** 파일 이름들(소문자).
+
+        폴더가 아직 없거나(앞으로 만들 목적지) 읽을 수 없으면(USB 가 안 꽂혔다)
+        **비어 있는 것으로 본다** — 미리보기는 죽지 않아야 한다. 실제로 쓸 때는
+        실행기가 `claim_path` 로 원자적으로 다시 잡으므로 덮어쓸 위험은 없다.
+        """
+        try:
+            return {p.name.casefold() for p in folder.iterdir() if p.is_file()}
+        except OSError:
+            return set()
+
     def _names_at(self, rel: str) -> set[str]:
-        """그 폴더에 이미 있는 파일 이름들(소문자). 이름표의 출발점이다."""
+        """그 폴더에 이미 있는 파일 이름들(소문자). 이름표의 출발점이다.
+
+        **스캐너가 본 것과 디스크에 실제로 있는 것을 합친다.** 스캐너를 통과한
+        파일만 세면 이름표에 구멍이 난다 — 시스템 파일, 1분 안에 바뀐 파일,
+        그리고 사용자가 미리보기에서 뺀 파일은 스캔 결과에 없지만 디스크에는
+        그대로 앉아 있다. 그 이름을 비어 있다고 보면 미리보기가 "영상.mp4 로
+        간다" 고 약속해 놓고 실제로는 `영상_(1).mp4` 가 된다(실행기가 덮어쓰지
+        않으려고 비켜 놓는다). 데이터는 안전하지만 **화면과 실제가 다르다.**
+
+        밖(external)과 안이 같은 모양이어야 한다 — 이름을 잡는 곳은 하나다.
+        """
         external = self.external_folder(rel)
         if external is not None:
-            try:
-                return {p.name.casefold() for p in external.iterdir() if p.is_file()}
-            except OSError:
-                # USB 가 안 꽂혔거나 읽을 수 없다. 미리보기는 죽지 않아야 하므로
-                # 비어 있는 것으로 본다. 실제로 쓸 때는 claim_path 가 원자적으로
-                # 다시 잡으므로 덮어쓸 위험은 없다.
-                return set()
-        return {e.path.name.casefold() for e in self.files_at(rel)}
+            return self._disk_names(external)
+        return ({e.path.name.casefold() for e in self.files_at(rel)}
+                | self._disk_names(self.root / rel if rel else self.root))
 
     def files_at(self, rel: str) -> list[FileEntry]:
         return [e for e in self.all_files() if self.rel_of(e) == rel]
