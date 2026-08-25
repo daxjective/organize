@@ -127,6 +127,41 @@ def kind_tabs(counts: dict) -> list[tuple[str, str, int]]:
             for kind in _KIND_TABS if counts.get(kind, 0)]
 
 
+def keeps_preview(before, after, can_apply: bool) -> bool:
+    """설정을 바꾼 **뒤** — 지금 표와 [실행] 을 그대로 둘 수 있는가.
+
+    **둘 다여야 한다.**
+      · 세션이 말하는 설정(`before`/`after` 지문)이 그대로일 것.
+      · 세션이 여전히 실행할 수 있다고 말할 것(`can_apply`).
+
+    앞만 보면, 같은 값을 다시 골라 세션이 조용히 버린 계획을 표가 계속
+    보여준다. 뒤만 보면, 도는 중(can_apply=False)에 같은 값을 다시 고른 것까지
+    "바뀌었다" 로 읽어 멀쩡한 미리보기를 버린다.
+    """
+    return before == after and can_apply
+
+
+def foot_text(counts: dict, skipped: int, hidden: int = 0) -> str:
+    """표 아래 **항상 보이는** 줄에 적을 말.
+
+    잘렸다는 안내가 여기 있어야 한다. 표 맨 끝에 두면 250줄일 때 4233px 중 맨
+    아래라 200줄을 내려야 보이고, 못 본 사람은 "전부 봤다" 고 믿고 [실행] 을
+    누른다. 그래서 **잘린 이유를 맨 앞에** 적는다.
+    """
+    말 = []
+    if hidden:
+        말.append(f"⚠ 이 탭의 {hidden}줄은 표에 그리지 않았습니다 — 너무 많으면"
+                 " 창이 멈춥니다. 탭 숫자와 아래 개수는 안 그린 줄까지 다 셉니다.")
+    말.append(f"손대지 않음 {skipped}개 (여기에 뺀 파일도 들어갑니다).")
+    if counts.get("extract"):
+        # 누를 수 없는 이유를 모르면 고장으로 읽힌다.
+        말.append("압축 안에서 나올 파일에는 체크박스가 없습니다 — 아직 디스크에"
+                 " 없어서 뺄 수가 없습니다. 빼려면 그 압축 파일의 체크를 끄세요.")
+    if counts.get("mkdir"):
+        말.append("폴더 생성은 파일이 아니라 따로 셉니다.")
+    return "  ".join(말)
+
+
 def dest_text(dest: str, root) -> str:
     """표 오른쪽에 적을 도착 자리.
 
@@ -195,6 +230,10 @@ class App:
         # ── 화면 2 가 들고 있는 것 ────────────────────────────────
         self._jobs: queue.SimpleQueue = queue.SimpleQueue()
         self._busy = False              # 미리보기·실행이 도는 중인가
+        # 설정이 바뀔 때마다 올라가는 번호. 미리보기를 띄울 때 지금 번호를 같이
+        # 넘겨, 결과가 돌아왔을 때 번호가 다르면 그 결과를 **버린다.** 도는
+        # 동안 사용자를 60초 묶어 두는 대신 낡은 결과를 버리는 쪽을 골랐다.
+        self._generation = 0
         self.entries = catalog.catalog()
         self.step_order = [e.id for e in self.entries]     # 보이는 순서 = 실행 순서
         self.step_selected: str | None = None              # ▲▼ 가 다룰 줄(체크와 다르다)
@@ -464,6 +503,38 @@ class App:
         self._refresh_recipes()
         self._clear_result("정리할 대상을 고르고 [미리보기] 를 눌러 주세요.")
 
+    # ── 설정이 바뀌면 **반드시 여기를 지난다** ───────────────────
+    def _settings_fingerprint(self) -> tuple:
+        """미리보기가 무엇으로 세워지는지를 나타내는 지문.
+
+        **세션이 말하는 것만 쓴다.** 창이 따로 기억하면 판단의 출처가 둘이 되고,
+        어긋나는 순간 화면과 실행이 갈라진다.
+        """
+        s = self.session
+        return (s.root, s.recipe_name, s.checked_ids(), s.unmatched_steps(),
+                sorted(s.excluded_keys()))
+
+    def _after_change(self, before: tuple, note: str | None) -> bool:
+        """설정을 바꾼 **뒤** 부른다. 진짜 바뀌었으면 미리보기를 무효로 만든다.
+
+        **세대를 올리는 자리는 여기 하나뿐이다.** 대상·체크·▲▼·레시피·파일
+        빼기가 전부 여기를 지나야, 도는 중인 미리보기가 끝나 옛 계획을 들고
+        와도 화면에 반영되지 않는다(`_drain_jobs` 가 세대를 본다). 하나라도
+        빠뜨리면 그 조작에서만 옛 계획으로 [실행] 이 되살아난다.
+
+        `note` 가 None 이면 표를 그대로 둔다 — 파일 체크를 껐을 때는 곧바로
+        미리보기를 다시 세우므로, 표를 비웠다가 다시 그리면 눈만 깜박인다.
+        """
+        after = self._settings_fingerprint()
+        if keeps_preview(before, after, self.session.can_apply):
+            return False              # 정말 아무것도 안 바뀌었다 — 표도 [실행] 도 그대로
+        if after != before:
+            self._generation += 1
+        if note is not None:
+            self._clear_result(note)
+        self._sync_buttons()
+        return True
+
     # ── 드롭다운 (ttk.Combobox 가 아니다) ────────────────────────
     def _dropdown(self, parent, var):
         """이름 드롭다운 하나.
@@ -515,14 +586,20 @@ class App:
 
     def _on_recipe(self, name: str) -> None:
         with self._reporting("레시피 고르기"):
+            # `_follow_recipe_root` 가 대상까지 옮길 수 있으므로 **그 전에** 지문을
+            # 뜬다. 레시피와 대상 중 하나라도 바뀌면 미리보기가 무효다.
+            before = self._settings_fingerprint()
             self.session.set_recipe(name)
             self.recipe_var.set(name)
             self._sync_steps_from_session()
             옮김 = self._follow_recipe_root(name)
-            self._clear_result(
-                f"레시피 '{name}' 을 불러왔습니다." + (f"  대상을 {옮김} 으로 옮겼습니다."
-                                                  if 옮김 else "")
-                + "  [미리보기] 를 눌러 주세요.")
+            말 = (f"레시피 '{name}' 을 불러왔습니다."
+                 + (f"  대상을 {옮김} 으로 옮겼습니다." if 옮김 else "")
+                 + "  [미리보기] 를 눌러 주세요.")
+            # 같은 레시피를 다시 고른 것뿐이면 표도 [실행] 도 건드리지 않는다.
+            if not self._after_change(before, 말):
+                self.status_var.set(f"레시피 '{name}' 은 이미 고른 것입니다"
+                                    " — 미리보기를 그대로 둡니다.")
         self._sync_buttons()
 
     def _follow_recipe_root(self, name: str) -> str | None:
@@ -555,6 +632,9 @@ class App:
         name = simpledialog.askstring("레시피 저장", "이 조합을 무슨 이름으로 저장할까요?",
                                       parent=self.window)
         if not name:
+            # 알리지 않으면 상태줄에 직전 "저장했습니다" 가 남아, 방금 저장된
+            # 것처럼 읽힌다.
+            self.status_var.set("레시피 저장을 취소했습니다.")
             return
         with self._reporting("레시피 저장"):
             try:
@@ -593,9 +673,15 @@ class App:
         if info is None:
             return
         with self._reporting("대상 고르기"):
+            before = self._settings_fingerprint()
             self.session.set_root(info.path)
             self.target_var.set(text)
-            self._clear_result(f"대상: {info.path}")
+            # 같은 폴더를 다시 골랐으면 표도 [실행] 도 그대로 둔다. 무조건
+            # 지우면 표만 비고 [실행] 은 켜진 채로 남아, 확인 대화상자의 요약이
+            # 빈칸으로 뜬다.
+            if not self._after_change(before, f"대상: {info.path}"):
+                self.status_var.set(f"대상: {info.path}"
+                                    "  — 이미 고른 대상입니다. 미리보기를 그대로 둡니다.")
         self._sync_buttons()
 
     # ── 작업 체크박스 + ▲▼ ──────────────────────────────────────
@@ -674,14 +760,18 @@ class App:
     def _push_steps(self, *, quiet: bool = False) -> None:
         """체크·순서를 **즉시** 세션에 넘긴다. 화면과 실행이 갈라지지 않게."""
         ids = [i for i in self.step_order if self.step_vars[i].get()]
+        before = self._settings_fingerprint()
         with self._reporting("작업 고르기"):
             self.session.set_steps(ids)
         # set_steps 뒤에는 어떤 레시피도 아니다(세션이 그렇게 말한다).
         # 드롭다운에 옛 레시피 이름이 남아 있으면 그것이 곧 거짓말이 된다.
         self.recipe_var.set(_NO_RECIPE)
         self._update_unmatched()
-        if not quiet:
-            self._clear_result("작업이 바뀌었습니다 — [미리보기] 를 다시 눌러 주세요.")
+        # ▲▼ 로 **켜지 않은** 줄만 옮긴 경우처럼, 세션은 계획을 버렸는데 실제로
+        # 실행될 것은 그대로인 때가 있다. 그때도 표와 [실행] 은 세션을 따른다.
+        self._after_change(before,
+                           None if quiet else
+                           "작업이 바뀌었습니다 — [미리보기] 를 다시 눌러 주세요.")
         self._sync_buttons()
 
     def _move_step(self, delta: int) -> None:
@@ -714,11 +804,16 @@ class App:
         self.btn_save.state(["disabled"] if self._busy else ["!disabled"])
 
     def _do_preview(self) -> None:
-        self._run_job("미리보기", self.session.preview, self._preview_done)
+        self._run_job("미리보기", self.session.preview, self._preview_done,
+                      discard_if_stale=True)
 
     def _do_apply(self) -> None:
         from tkinter import messagebox
 
+        # **빗장을 먼저.** 대화상자를 먼저 띄우면, 세 번 눌렀을 때 실행은 한 번만
+        # 되어도 대화상자가 세 번 떴다 사라진다.
+        if self._busy:
+            return
         보던것 = self.view.summary if self.view else ""
         if not messagebox.askyesno(
                 "실행", f"지금 미리보기 그대로 파일을 옮깁니다.\n\n{보던것}\n\n계속할까요?",
@@ -729,30 +824,51 @@ class App:
     def _do_undo(self) -> None:
         self._run_job("되돌리기", self.session.undo, self._undo_done)
 
-    def _run_job(self, what: str, work, done) -> None:
-        """오래 걸리는 일을 딴 스레드에서. 도는 동안 버튼을 전부 끈다."""
+    def _run_job(self, what: str, work, done, *,
+                 discard_if_stale: bool = False) -> None:
+        """오래 걸리는 일을 딴 스레드에서. 도는 동안 버튼을 전부 끈다.
+
+        `discard_if_stale` 은 **미리보기에만** 붙인다. 도는 동안 설정이 바뀌면
+        그 결과는 화면이 말하는 것과 다르므로 버린다.
+
+        실행·되돌리기에는 붙이지 않는다 — 그쪽은 이미 파일을 건드린 뒤라,
+        결과를 버리면 무슨 일이 벌어졌는지가 화면에서 사라진다. 대신 두 메서드는
+        끝에서 스스로 미리보기를 무효로 만들므로 옛 계획이 되살아나지 않는다.
+        """
         if self._busy:
             return
         self._busy = True
         self._sync_buttons()
         self.status_var.set(f"{what} 중…  (파일이 많으면 시간이 걸립니다)")
+        세대 = self._generation if discard_if_stale else None
 
         def 일하기():
             try:
-                self._jobs.put((what, done, "ok", work()))
+                self._jobs.put((what, done, 세대, "ok", work()))
             except Exception as e:               # noqa: BLE001 — 창은 살아 있어야 한다
-                self._jobs.put((what, done, "fail", e))
+                self._jobs.put((what, done, 세대, "fail", e))
 
         threading.Thread(target=일하기, daemon=True).start()
         self.window.after(60, self._drain_jobs)
 
     def _drain_jobs(self) -> None:
         try:
-            what, done, kind, payload = self._jobs.get_nowait()
+            what, done, 세대, kind, payload = self._jobs.get_nowait()
         except queue.Empty:
             self.window.after(60, self._drain_jobs)
             return
         self._busy = False
+        if 세대 is not None and 세대 != self._generation:
+            # 띄울 때와 지금의 세대가 다르다 — 도는 동안 설정이 바뀌었다.
+            # **세션이 계산해 둔 계획도 함께 버린다.** 창이 결과를 안 그리는
+            # 것만으로는 부족하다: session.can_apply 가 True 로 남아 [실행] 이
+            # 되살아나고, 확인 대화상자는 화면에 없는 계획을 요약해 보여준다.
+            self.session.invalidate()
+            # 조용히 버리면 사용자는 미리보기가 아직 안 끝났다고 생각한다.
+            self.status_var.set("설정이 바뀌어 미리보기를 버렸습니다"
+                                " — [미리보기] 를 다시 눌러 주세요.")
+            self._sync_buttons()
+            return
         if kind == "ok":
             with self._reporting(what):
                 done(payload)
@@ -876,14 +992,16 @@ class App:
         for i, (row, 켜짐) in enumerate(zip(보일줄[:_MAX_ROWS], 상태[:_MAX_ROWS])):
             self._file_row(row.name, dest_text(row.dest, self.session.root),
                            row.reason, 켜짐, row.key, row.leaving, i)
-        if len(보일줄) > _MAX_ROWS:
+        # 여기서 잘렸다는 **표시**만 남긴다. 이유를 적은 문장은 아래 줄(foot)에
+        # 둔다 — 250줄이면 이 줄은 4233px 중 맨 아래라 200줄을 내려야 보인다.
+        가린줄 = max(0, len(보일줄) - _MAX_ROWS)
+        if 가린줄:
             tk.Label(self.table_inner,
-                     text=f"… 이 탭의 나머지 {len(보일줄) - _MAX_ROWS}줄은 표시하지"
-                          " 않았습니다(너무 많으면 창이 멈춥니다).",
+                     text=f"… 여기서 잘렸습니다 — 이 탭의 나머지 {가린줄}줄.",
                      bg=theme.SURFACE, fg=theme.MUTED, font=theme.body_font(9),
                      anchor="w").pack(fill="x", padx=14, pady=(6, 8))
 
-        self.foot.config(text=self._foot_text(view))
+        self.foot.config(text=foot_text(view.counts, view.skipped, 가린줄))
 
     def _tab(self, kind: str, text: str):
         """탭 하나. 누르면 그 종류만 표에 남는다(계획을 다시 세우지는 않는다)."""
@@ -932,7 +1050,11 @@ class App:
                      anchor="w").pack(side="left", padx=(10, 0))
 
     def _draw_excluded(self) -> None:
-        """뺀 파일을 표 아래에 **남긴다.** 사라지면 다시 켤 방법이 없다."""
+        """뺀 파일을 표 **맨 위에** 남긴다. 사라지면 다시 켤 방법이 없다.
+
+        아래에 두면 줄이 많을 때 화면 밖으로 밀려, 방금 뺀 것이 어디로 갔는지
+        보이지 않는다(실측: 캡처에서 안 보였다).
+        """
         tk = self.tk
         뺀것 = sorted(self.session.excluded_keys())
         if not 뺀것:
@@ -956,16 +1078,6 @@ class App:
                      font=theme.mono_font(9)).pack(side="right", padx=(8, 12))
         tk.Frame(self.table_inner, bg=theme.LINE_SOFT, height=1).pack(fill="x", pady=(0, 6))
 
-    def _foot_text(self, view) -> str:
-        말 = [f"손대지 않음 {view.skipped}개 (여기에 뺀 파일도 들어갑니다)."]
-        if view.counts.get("extract"):
-            # 누를 수 없는 이유를 모르면 고장으로 읽힌다.
-            말.append("압축 안에서 나올 파일에는 체크박스가 없습니다 — 아직 디스크에"
-                     " 없어서 뺄 수가 없습니다. 빼려면 그 압축 파일의 체크를 끄세요.")
-        if view.counts.get("mkdir"):
-            말.append("폴더 생성은 파일이 아니라 따로 셉니다.")
-        return "  ".join(말)
-
     def _on_file_check(self, key: str, 켜짐: bool) -> None:
         """파일 하나를 빼거나 되돌린다. **계획을 처음부터 다시 세운다.**
 
@@ -979,9 +1091,13 @@ class App:
             if self.view:
                 self._draw_result()
             return
+        before = self._settings_fingerprint()
         with self._reporting("파일 빼기"):
             self.session.set_excluded(toggle_file_key(self.session.excluded_keys(),
                                                       key, 켜짐))
+        # 표는 그대로 두고(note=None) 곧바로 다시 세운다. 세대를 올리는 자리를
+        # 여기도 지나야 다섯 조작이 모두 같은 규칙을 따른다.
+        self._after_change(before, None)
         self._do_preview()
 
     # ── 화면 3 — 다음 Task 의 몫 ────────────────────────────────

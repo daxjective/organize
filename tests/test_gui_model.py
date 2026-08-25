@@ -681,3 +681,69 @@ def test_preview_does_not_warn_when_every_excluded_file_is_there(repo, work):
 
     assert not any("찾을 수 없습니다" in w for w in 다시.warnings), \
         f"멀쩡히 뺐는데 경고가 났다: {다시.warnings}"
+
+
+# ── 리뷰(Critical): 도는 동안 설정이 바뀐 미리보기를 창이 버릴 수 있어야 한다 ──
+
+def test_invalidate_throws_away_a_preview_the_window_no_longer_wants(repo, work):
+    """창은 "내가 부탁한 것과 지금 설정이 달라졌다" 고 말할 수 있어야 한다.
+
+    미리보기가 딴 스레드에서 도는 동안 사용자가 체크를 바꾸면, 끝나는 순간
+    `preview()` 가 **옛 steps 로 세운 계획**을 세션에 써 넣는다. 창이 그 결과를
+    화면에 안 그려도 `can_apply` 는 True 라 [실행] 이 되살아난다 — 그때
+    화면에서 본 적 없는 계획이 그대로 실행된다.
+    """
+    s = Session(repo_root=repo)
+    s.set_root(work)
+    s.set_recipe("정리")
+    s.preview()
+    assert s.can_apply
+
+    s.invalidate()
+    assert not s.can_apply, "버렸다고 했는데 [실행] 이 켜진 채로 남았다"
+
+
+def test_invalidate_works_where_calling_the_setters_again_does_not(repo, work):
+    """같은 값으로 세터를 다시 부르는 것으로는 못 버린다 — 값이 같으면 빠져나간다.
+
+    그래서 공개 메서드가 따로 필요하다. 이 두 줄이 그 이유 전부다.
+    """
+    s = Session(repo_root=repo)
+    s.set_root(work)
+    s.set_recipe("정리")
+    s.preview()
+
+    s.set_root(work)              # 같은 값 — 세터는 아무 일도 안 한다
+    s.set_recipe("정리")
+    assert s.can_apply, "세터로는 못 버린다(그래서 invalidate 가 있다)"
+
+    s.invalidate()
+    assert not s.can_apply
+
+
+def test_invalidate_on_a_session_that_never_previewed_is_harmless(repo, work):
+    """버릴 것이 없을 때 불러도 죽지 않는다. 창은 조건 없이 부를 수 있어야 한다."""
+    s = Session(repo_root=repo)
+    s.invalidate()
+    s.set_root(work)
+    s.set_recipe("정리")
+    s.invalidate()
+    assert not s.can_apply
+    assert s.can_preview, "버렸다고 고른 것까지 지우면 안 된다"
+
+
+def test_invalidate_keeps_what_the_user_chose(repo, work):
+    """계획만 버린다. 대상·레시피·뺀 파일은 사용자가 고른 것이라 남는다."""
+    s = Session(repo_root=repo)
+    s.set_root(work)
+    s.set_recipe("정리")
+    view = s.preview()
+    key = next(r.key for r in view.rows if r.name == "보고서.pdf")
+    s.set_excluded({key})
+    s.preview()
+
+    s.invalidate()
+    assert s.root == work
+    assert s.recipe_name == "정리"
+    assert s.excluded_keys() == {key}
+    assert s.can_preview, "다시 [미리보기] 를 누를 수 있어야 한다"

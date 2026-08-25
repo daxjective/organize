@@ -248,6 +248,14 @@ class Session:
             self._excluded = set()
             self._invalidate()
 
+    def invalidate(self) -> None:
+        """계산해 둔 미리보기를 버린다.
+
+        창이 "내가 부탁한 것과 지금 설정이 달라졌다" 고 말할 수 있어야 한다.
+        (set_root/set_steps 를 다시 불러도 값이 같으면 빠져나가므로 안 통한다.)
+        """
+        self._invalidate()
+
     def _invalidate(self) -> None:
         """미리보기 결과를 버린다.
 
