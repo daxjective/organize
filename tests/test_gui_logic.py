@@ -8,10 +8,14 @@
 
 from pathlib import Path
 
-from organize.gui import (arrange_steps, control_locks, dest_text, foot_text,
-                          keeps_preview, kind_tabs, move_item, row_checks,
-                          toggle_file_key, undo_label, undo_prompt, _raw_kind)
+from organize.folders import FolderInfo
+from organize.gui import (arrange_steps, builtin_places, control_locks, custom_places,
+                          dest_text, foot_text, keeps_preview, kind_tabs,
+                          local_place_names, move_item, new_place_error,
+                          profile_folder_names, row_checks, toggle_file_key,
+                          undo_label, undo_prompt, _raw_kind)
 from organize.gui_model import Row, _KIND_LABEL
+from organize.userconfig import UserConfig
 
 
 # ── ▲▼ 순서 바꾸기 ───────────────────────────────────────────────
@@ -256,3 +260,141 @@ def test_undo_prompt_이름을_모를_때도_말이_되게_적는다():
     말 = undo_prompt("", Path("/home/나/Desktop"))
     assert "「" not in 말 and "이 폴더의" in 말
     assert "Desktop" in 말
+
+
+# ── 화면 3 — 설정 · 폴더 위치 ────────────────────────────────────
+# 창을 못 띄우는 곳에서도 **무엇을 적을지**는 확인할 수 있어야 한다.
+
+def _info(name, label, path, *, count=3, status="", builtin=True):
+    return FolderInfo(name=name, label=label, path=Path(path), count=count,
+                      status=status, builtin=builtin)
+
+
+def test_builtin_places_정상인_줄은_조용히_둔다():
+    줄 = builtin_places([_info("desktop", "바탕화면", "/home/나/Desktop")], set())[0]
+    assert 줄.note == "정상" and 줄.alert is False
+
+
+def test_builtin_places_홈은_목록에서_뺀다():
+    # 홈 전체는 정리 대상이 아니다. 목록에 두면 겁만 준다.
+    infos = [_info("home", "홈", "/home/나"),
+             _info("desktop", "바탕화면", "/home/나/Desktop")]
+    assert [p.name for p in builtin_places(infos, set())] == ["desktop"]
+
+
+def test_builtin_places_파일이_0개면_빨갛게():
+    """OneDrive 백업이 켜진 PC 의 신호다 — 진짜 바탕화면이 다른 곳에 있다."""
+    줄 = builtin_places([_info("desktop", "바탕화면", "/x", count=0)], set())[0]
+    assert 줄.alert is True and 줄.note == "비어 있습니다"
+
+
+def test_builtin_places_폴더가_없으면_빨갛게():
+    줄 = builtin_places([_info("pictures", "사진", "/x", count=None,
+                               status="폴더 없음")], set())[0]
+    assert 줄.alert is True and "폴더가 없습니다" == 줄.note
+
+
+def test_builtin_places_직접_지정한_줄만_pinned():
+    infos = [_info("desktop", "바탕화면", "/a"), _info("pictures", "사진", "/b")]
+    표 = {p.name: p.pinned for p in builtin_places(infos, {"desktop"})}
+    assert 표 == {"desktop": True, "pictures": False}
+
+
+def test_builtin_places_내장이_아닌_줄은_이_칸에_안_들어온다():
+    infos = [_info("백업", "백업", "/mnt/usb", builtin=False)]
+    assert builtin_places(infos, set()) == []
+
+
+def test_custom_places_있는_폴더는_조용히(tmp_path):
+    (tmp_path / "USB").mkdir()
+    cfg = UserConfig(paths={"백업": [str(tmp_path / "USB")]}, folder_names={})
+    줄 = custom_places(cfg, {"백업"})[0]
+    assert 줄.alert is False and 줄.note == "" and 줄.pinned is True
+
+
+def test_custom_places_안_꽂힌_USB는_빨갛게_하되_지우지_않는다(tmp_path):
+    cfg = UserConfig(paths={"백업": [str(tmp_path / "안꽂힘")]}, folder_names={})
+    줄들 = custom_places(cfg, {"백업"})
+    assert len(줄들) == 1, "없다고 목록에서 빼면 안 된다"
+    assert 줄들[0].alert is True and 줄들[0].note == "없음 · 다시 지정"
+
+
+def test_custom_places_내장_이름은_두_번_적지_않는다(tmp_path):
+    """`organize paths` 가 같은 줄을 두 번 찍던 것과 같은 문제다 —
+    내장 이름을 등록하면 '자동으로 찾은 위치' 칸에 이미 나온다."""
+    cfg = UserConfig(paths={"desktop": [str(tmp_path)], "백업": [str(tmp_path)]},
+                     folder_names={})
+    assert [p.name for p in custom_places(cfg, set())] == ["백업"]
+
+
+def test_custom_places_공용_설정에서_온_이름은_pinned가_아니다(tmp_path):
+    cfg = UserConfig(paths={"archive": [str(tmp_path)]}, folder_names={})
+    assert custom_places(cfg, set())[0].pinned is False
+
+
+def test_custom_places_돌고_도는_별칭은_그_줄만_빨갛게(tmp_path):
+    """목록 전체가 죽는 것보다 그 줄에 이유를 적는 편이 낫다."""
+    cfg = UserConfig(paths={"고리": ["@고리"], "백업": [str(tmp_path)]}, folder_names={})
+    표 = {p.name: p for p in custom_places(cfg, set())}
+    assert 표["고리"].alert is True and "돌고 돌아" in 표["고리"].note
+    assert 표["백업"].alert is False, "한 줄이 이상해도 나머지는 보여야 한다"
+
+
+def test_local_place_names_파일이_없으면_빈_묶음(tmp_path):
+    assert local_place_names(tmp_path) == set()
+
+
+def test_local_place_names_는_이_PC_설정만_읽는다(tmp_path):
+    (tmp_path / "config.default.json").write_text(
+        '{"paths": {"archive": "D:/보관"}}', encoding="utf-8")
+    (tmp_path / "config.local.json").write_text(
+        '{"paths": {"백업": "E:/백업"}}', encoding="utf-8")
+    assert local_place_names(tmp_path) == {"백업"}
+
+
+def test_local_place_names_설정이_깨져도_죽지_않는다(tmp_path):
+    (tmp_path / "config.local.json").write_text("{망가짐", encoding="utf-8")
+    assert local_place_names(tmp_path) == set()
+
+
+def test_new_place_error_빈_이름():
+    assert new_place_error("   ", UserConfig()) == "이름이 비어 있습니다."
+
+
+def test_new_place_error_이미_있는_이름():
+    말 = new_place_error("백업", UserConfig(paths={"백업": ["D:/x"]}))
+    assert 말 and "이미 있는 이름" in 말
+
+
+def test_new_place_error_앞에_붙인_골뱅이는_막는다():
+    말 = new_place_error("@백업", UserConfig())
+    assert 말 and "@" in 말
+
+
+def test_new_place_error_슬래시는_막는다():
+    """`@백업/사진` 의 뒷부분과 구분이 안 된다 — 등록해도 영영 안 풀린다."""
+    assert new_place_error("백업/사진", UserConfig()) is not None
+    assert new_place_error("백업\\사진", UserConfig()) is not None
+
+
+def test_new_place_error_멀쩡한_이름은_통과한다():
+    assert new_place_error("  백업드라이브  ", UserConfig()) is None
+
+
+def test_profile_folder_names_는_실제로_만들_폴더를_모은다(tmp_path):
+    (tmp_path / "a.toml").write_text(
+        'name = "바탕화면 정리"\n'
+        '[[rules]]\n to = "01_Docs"\n ext = [".pdf"]\n'
+        '[[rules]]\n to = "01_Docs"\n ext = [".md"]\n'
+        '[[rules]]\n to = "99_Unsorted"\n default = true\n', encoding="utf-8")
+    (보일이름, 폴더들, 문제), = profile_folder_names(tmp_path)
+    assert 보일이름 == "바탕화면 정리"
+    assert 폴더들 == ["01_Docs", "99_Unsorted"], "같은 이름을 두 번 적지 않는다"
+    assert 문제 == ""
+
+
+def test_profile_folder_names_못_읽는_파일도_숨기지_않는다(tmp_path):
+    """조용히 빼면 사용자는 그 프로파일이 없는 줄 안다."""
+    (tmp_path / "깨진것.toml").write_text("이건 = TOML 이 아니다 [[", encoding="utf-8")
+    (보일이름, 폴더들, 문제), = profile_folder_names(tmp_path)
+    assert 보일이름 == "깨진것" and 폴더들 == [] and 문제

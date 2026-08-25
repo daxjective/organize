@@ -9,17 +9,21 @@
 색과 글꼴은 `gui_theme` 만 안다. 여기서 색 코드를 직접 쓰지 않는다.
 """
 
+import json
 import queue
 import threading
 from pathlib import Path
+from typing import NamedTuple
 
-from organize import catalog, folders, gui_theme as theme
+from organize import catalog, folders, gui_theme as theme, picker, profiles
+from organize.aliases import BUILTIN
 from organize.errors import OrganizeError
 # 종류 이름표(`move` → "이동")는 `gui_model` 이 이미 갖고 있다. 여기서 같은 표를
 # 다시 적으면 탭 이름과 표 안의 글자가 갈라진다 — 한쪽만 고쳐지기 때문이다.
 from organize.gui_model import _KIND_LABEL as KIND_LABEL, Session
 from organize.recipes import find_recipe, load_recipe
-from organize.userconfig import AliasNotDefined, load_config, resolve_alias
+from organize.userconfig import (AliasNotDefined, load_config, remove_local_path,
+                                 resolve_alias)
 
 _SCREENS = ("first", "main", "settings")
 
@@ -233,6 +237,122 @@ def dest_text(dest: str, root) -> str:
     return _short(Path(dest))
 
 
+# ── 화면 3 이 쓰는 것 (역시 위젯을 모른다) ───────────────────────
+
+# 설정 화면의 경로 칸 길이. 표 기본값(56)보다 짧다 — 오른쪽에 상태 글자와
+# 버튼 둘이 더 붙어서, 길면 서로 밀고 들어온다(실측: 캡처에서 그렇게 됐다).
+_PLACE_PATH = 46
+
+
+class Place(NamedTuple):
+    """설정 화면의 위치 한 줄. **무엇을 적을지만 정한다** — 그리는 일은 창이 한다."""
+    name: str        # 별칭 이름 ("desktop" · "백업")
+    label: str       # 화면에 보일 이름 ("바탕화면" · "백업")
+    path: str        # 보여줄 경로 글자(길면 가운데를 접은 것)
+    note: str        # 오른쪽에 적을 말. 문제 없으면 "정상" 또는 빈 칸
+    alert: bool      # 빨갛게 + [다시 지정] 을 붙일 줄인가
+    pinned: bool     # 이 PC 에서 직접 지정한 것인가(config.local.json 에 있는가)
+
+
+def local_place_names(repo_root: Path) -> set[str]:
+    """`config.local.json` 에 적힌 별칭 이름들 — **이 화면에서 지울 수 있는 것.**
+
+    `config.default.json` 은 저장소 공용 파일이라 이 PC 의 [지우기] 가 건드릴
+    대상이 아니다. 구분하지 않으면 눌러도 아무 일이 없는 버튼이 생긴다.
+    설정이 깨져 있으면 빈 묶음을 준다 — 무엇이 잘못됐는지는 `load_config` 가
+    한국어로 알린다. 여기서 같은 말을 두 번 하지 않는다.
+    """
+    path = repo_root / "config.local.json"
+    if not path.is_file():
+        return set()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return set()
+    paths = data.get("paths") if isinstance(data, dict) else None
+    return set(paths) if isinstance(paths, dict) else set()
+
+
+def builtin_places(infos, pinned: set[str]) -> list[Place]:
+    """'자동으로 찾은 위치' 칸. **정상이면 조용히 둔다.**
+
+    `home` 은 뺀다 — 홈 전체는 정리 대상이 아니고, 목록에 두면 겁만 준다.
+    """
+    out = []
+    for info in infos:
+        if not info.builtin or info.name == "home":
+            continue
+        문제 = _문제인가(info)
+        out.append(Place(name=info.name, label=info.label,
+                         path=_short(info.path, _PLACE_PATH),
+                         note=_why(info) if 문제 else "정상",
+                         alert=문제, pinned=info.name in pinned))
+    return out
+
+
+def custom_places(cfg, pinned: set[str]) -> list[Place]:
+    """'내가 추가한 위치' 칸.
+
+    **내장 이름은 여기에 다시 적지 않는다** — 위 칸에 이미 나온 줄이다
+    (`organize paths` 가 같은 줄을 두 번 찍던 것과 같은 문제).
+
+    **폴더가 없다고 등록을 지우지 않는다.** USB·SD카드는 안 꽂혀 있을 수 있다.
+    """
+    out = []
+    for name in sorted(cfg.paths):
+        if name in BUILTIN:
+            continue
+        try:
+            path = resolve_alias(f"@{name}", cfg)
+        except AliasNotDefined as e:
+            # 돌고 도는 별칭. 목록 전체가 죽는 것보다 그 줄에 이유를 적는 편이 낫다.
+            out.append(Place(name, name, "—", e.message, True, name in pinned))
+            continue
+        있음 = path.is_dir()
+        out.append(Place(name, name, _short(path, _PLACE_PATH),
+                         "" if 있음 else "없음 · 다시 지정",
+                         not 있음, name in pinned))
+    return out
+
+
+def new_place_error(name: str, cfg) -> str | None:
+    """[+ 위치 추가] 로 받은 이름이 쓸 수 있는가. 못 쓰면 **한국어 이유**를 준다."""
+    이름 = (name or "").strip()
+    if not 이름:
+        return "이름이 비어 있습니다."
+    if 이름.startswith("@"):
+        return "이름 앞에 @ 를 붙이지 마세요 — 쓸 때만 '@백업' 처럼 붙입니다."
+    if "/" in 이름 or "\\" in 이름:
+        # `@백업/사진` 의 뒷부분과 구분이 안 된다 — 등록해도 영영 안 풀린다.
+        return "이름에 / 나 \\ 를 쓸 수 없습니다."
+    if 이름 in cfg.paths:
+        return f"'{이름}' 은 이미 있는 이름입니다 — 그 줄의 [찾아보기] 로 경로만 바꿀 수 있습니다."
+    return None
+
+
+def profile_folder_names(profiles_dir: Path) -> list[tuple[str, list[str], str]]:
+    """프로파일이 **실제로 만드는** 폴더 이름. (보일 이름, 폴더들, 문제).
+
+    설정의 `folder_names` 는 **엔진이 읽지 않는다.** 편집 화면을 만들면
+    "바꿨는데 안 바뀐다" 가 된다 — 그래서 못 바꾸는 것을 바꿀 수 있는 것처럼
+    그리지 않고, 지금 실제로 쓰이는 이름을 읽기 전용으로 보여준다.
+    """
+    out: list[tuple[str, list[str], str]] = []
+    for path in sorted(profiles_dir.glob("*.toml")):
+        try:
+            profile = profiles.load_profile(path)
+        except OrganizeError:
+            # 조용히 빼면 사용자는 그 프로파일이 없는 줄 안다.
+            out.append((path.stem, [], "이 파일을 읽지 못했습니다 — organize list 로 확인해 주세요."))
+            continue
+        이름들: list[str] = []
+        for rule in profile.rules:
+            if rule.to and rule.to not in 이름들:
+                이름들.append(rule.to)
+        out.append((profile.name, 이름들, ""))
+    return out
+
+
 def run(repo_root: Path) -> int:
     """창을 띄운다. 창을 못 띄우면 한국어로 알리고 1 을 돌려준다."""
     try:
@@ -279,7 +399,9 @@ class App:
         self.status_var = tk.StringVar(value="")
         self.current = "first"
         self._counted = False                  # 폴더를 이미 세었는가
+        self._pending_counts = 0               # 아직 안 돌아온 세기 작업 수
         self._count_summary = ""
+        self._infos: list = []                 # 마지막으로 센 결과. 화면 3 도 이것을 본다
         self._inbox: queue.SimpleQueue = queue.SimpleQueue()
 
         # ── 화면 2 가 들고 있는 것 ────────────────────────────────
@@ -341,6 +463,11 @@ class App:
             self.status_var.set(self._count_summary)      # 이미 센 결과를 되살린다
         if name == "main":
             self._sync_buttons()
+        if name == "settings":
+            # 들어올 때마다 다시 센다 — 명령줄에서 위치를 바꿨거나 USB 를 꽂았을
+            # 수 있다. 이 화면은 "무엇이 잘못됐는가" 를 보러 오는 곳이다.
+            self._start_counting(force=True)
+            self._fill_settings()
 
     # ── 화면 1 — 처음 실행 ───────────────────────────────────────
     def _build_first(self, parent) -> None:
@@ -378,9 +505,7 @@ class App:
         self.folder_card = self._card(parent)
         self.folder_card.pack(fill="both", expand=True)
         self.folder_card.columnconfigure(0, weight=1)
-        self._counting_note = ttk.Label(self.folder_card, text="폴더를 세는 중입니다…",
-                                        style="CardPath.TLabel")
-        self._counting_note.grid(row=0, column=0, sticky="w", padx=16, pady=16)
+        self._folder_note("폴더를 세는 중입니다…")
 
     def _go(self, name: str) -> None:
         """버튼이 실제로 화면을 바꾼다. **눌러도 아무 일이 없으면 그게 결함이다.**"""
@@ -389,15 +514,23 @@ class App:
             self.status_var.set("")
 
     # ── 폴더 개수 세기 (창이 멈추면 안 된다) ─────────────────────
-    def _start_counting(self) -> None:
-        """세는 일은 딴 스레드에서. 진짜 다운로드 폴더는 파일이 많고 WSL 은 느리다."""
-        if self._counted:
+    def _start_counting(self, *, force: bool = False) -> None:
+        """세는 일은 딴 스레드에서. 진짜 다운로드 폴더는 파일이 많고 WSL 은 느리다.
+
+        `force` 는 **설정에서 위치를 바꾼 뒤**에 쓴다. 다시 세지 않으면 방금
+        지정한 폴더가 화면 1·대상 드롭다운·설정 화면에 옛 값으로 남는다.
+        """
+        if self._counted and not force:
             return
         self._counted = True
+        self._pending_counts += 1
         threading.Thread(target=self._count_worker, daemon=True).start()
         # 결과는 **주 스레드**가 꺼내 간다. 딴 스레드가 위젯을 건드리면
         # tkinter 는 조용히 이상해지거나 죽는다.
-        self.window.after(80, self._drain)
+        # 꺼내는 고리는 **하나만** 돈다 — 두 번 세면 고리가 둘이 되어, 하나는
+        # 영영 빈 상자를 들여다보며 80ms 마다 깨어난다.
+        if self._pending_counts == 1:
+            self.window.after(80, self._drain)
 
     def _count_worker(self) -> None:
         """디스크를 읽는 부분. 위젯을 하나도 건드리지 않는다."""
@@ -417,17 +550,36 @@ class App:
         except queue.Empty:
             self.window.after(80, self._drain)   # 아직이다. 다시 본다.
             return
+        self._pending_counts = max(0, self._pending_counts - 1)
         if kind == "ok":
+            self._infos = payload
             self._fill_folders([f for f in payload if f.builtin])
             self._fill_targets(payload)
+            self._fill_settings()
         else:
-            self._counting_note.config(text="폴더를 세지 못했습니다.")
+            self._folder_note("폴더를 세지 못했습니다.")
             self.target_var.set(_NO_TARGET)
             self._report("폴더 세기", payload)
+        if self._pending_counts:
+            self.window.after(80, self._drain)   # 다시 세라고 시킨 것이 남아 있다
+
+    def _folder_note(self, text: str) -> None:
+        """화면 1 의 판을 비우고 한 줄만 적는다("세는 중" · "못 셌습니다").
+
+        판을 비우지 않으면 다시 셀 때마다 같은 줄이 아래에 쌓인다.
+        """
+        for w in self.folder_card.winfo_children():
+            w.destroy()
+        self.ttk.Label(self.folder_card, text=text, style="CardPath.TLabel",
+                       ).grid(row=0, column=0, sticky="w", padx=16, pady=16)
 
     def _fill_folders(self, infos) -> None:
         ttk = self.ttk
-        self._counting_note.destroy()
+        # 다시 셀 때가 있다(설정에서 위치를 바꾼 뒤). 지우지 않으면 같은 줄이
+        # 아래에 계속 쌓인다.
+        for w in self.folder_card.winfo_children():
+            w.destroy()
+        self._alert_note.pack_forget()      # 이번 결과에 문제가 없으면 옛 경고가 남으면 안 된다
         for r, info in enumerate(infos):
             if r:                                 # 줄 사이 얇은 선 — Finder 의 목록 느낌
                 ttk.Frame(self.folder_card, style="Line.TFrame", height=1).grid(
@@ -694,7 +846,7 @@ class App:
         return 보일글자
 
     def _save_recipe(self) -> None:
-        from tkinter import messagebox, simpledialog
+        from tkinter import simpledialog
 
         name = simpledialog.askstring("레시피 저장", "이 조합을 무슨 이름으로 저장할까요?",
                                       parent=self.window)
@@ -712,10 +864,9 @@ class App:
                 있는것 = self.repo_root / "recipes" / f"{name.strip()}.json"
                 if not 있는것.is_file():
                     raise
-                if not messagebox.askyesno(
+                if not self._confirm(
                         "레시피 저장",
-                        f"'{name.strip()}' 레시피가 이미 있습니다. 덮어쓸까요?",
-                        parent=self.window):
+                        f"'{name.strip()}' 레시피가 이미 있습니다. 덮어쓸까요?"):
                     self.status_var.set("저장하지 않았습니다.")
                     return
                 path = self.session.save_recipe(name, overwrite=True)
@@ -892,16 +1043,13 @@ class App:
                       discard_if_stale=True)
 
     def _do_apply(self) -> None:
-        from tkinter import messagebox
-
         # **빗장을 먼저.** 대화상자를 먼저 띄우면, 세 번 눌렀을 때 실행은 한 번만
         # 되어도 대화상자가 세 번 떴다 사라진다.
         if self._busy:
             return
         보던것 = self.view.summary if self.view else ""
-        if not messagebox.askyesno(
-                "실행", f"지금 미리보기 그대로 파일을 옮깁니다.\n\n{보던것}\n\n계속할까요?",
-                parent=self.window):
+        if not self._confirm(
+                "실행", f"지금 미리보기 그대로 파일을 옮깁니다.\n\n{보던것}\n\n계속할까요?"):
             return
         self._run_job("실행", self.session.apply, self._apply_done)
 
@@ -911,8 +1059,6 @@ class App:
         [실행] 과 같은 모양이다. 되돌리기는 사용자의 마지막 안전줄이라 더
         어렵게 만들지 않는다 — 확인 한 번이면 된다.
         """
-        from tkinter import messagebox
-
         # [실행] 과 같은 순서: 빗장을 먼저. 대화상자를 먼저 띄우면 여러 번 눌렸을 때
         # 되돌리기는 한 번만 돌아도 대화상자가 그만큼 떴다 사라진다.
         if self._busy:
@@ -923,9 +1069,8 @@ class App:
             self._report("되돌리기", OrganizeError(
                 "되돌릴 폴더를 알 수 없습니다.", hint="정리할 폴더를 먼저 골라 주세요."))
             return
-        if not messagebox.askyesno(
-                "되돌리기", undo_prompt(undo_label(root, self.targets), root),
-                parent=self.window):
+        if not self._confirm(
+                "되돌리기", undo_prompt(undo_label(root, self.targets), root)):
             # 알리지 않으면 상태줄에 직전 말이 남아 무슨 일이 있었는지 헷갈린다.
             self.status_var.set("되돌리기를 취소했습니다 — 아무것도 바뀌지 않았습니다.")
             return
@@ -1227,21 +1372,245 @@ class App:
         self._after_change(before, None)
         self._do_preview()
 
-    # ── 화면 3 — 다음 Task 의 몫 ────────────────────────────────
+    # ── 화면 3 — 설정 · 폴더 위치 ────────────────────────────────
     def _build_settings(self, parent) -> None:
-        self._stub(parent, "설정 · 폴더 위치", "등록한 위치와 폴더 이름이 들어올 자리입니다.")
+        """등록된 위치를 보고 고친다. **탐색기를 쓰는 유일한 화면이다.**
 
-    def _stub(self, parent, 제목: str, 설명: str) -> None:
+        **[저장] 버튼을 두지 않는다** — 탐색기에서 고른 것이 곧 확정이라
+        저장할 것이 없다. 아무 일도 안 하는 버튼은 사용자를 속인다.
+        """
         ttk = self.ttk
-        self._header(parent, 제목)
-        card = self._card(parent)
-        card.pack(fill="both", expand=True, pady=(14, 0))
-        ttk.Label(card, text="다음 단계에서 만듭니다.", style="CardName.TLabel",
-                  ).pack(anchor="w", padx=16, pady=(18, 2))
-        ttk.Label(card, text=설명, style="CardPath.TLabel",
-                  ).pack(anchor="w", padx=16, pady=(0, 18))
-        ttk.Button(parent, text="← 처음 화면", style="Link.TButton",
-                   command=lambda: self._go("first")).pack(anchor="w", pady=(12, 0))
+        self._header(parent, "설정 · 폴더 위치")
+
+        # 바닥부터 붙인다 — 목록이 길어져도 [닫기] 가 창 밖으로 밀려 잘리지 않게
+        # (화면 1 에서 실측한 실수다).
+        아래 = ttk.Frame(parent)
+        아래.pack(side="bottom", fill="x", pady=(14, 0))
+        self.btn_settings_close = ttk.Button(아래, text="닫기", style="Primary.TButton",
+                                             command=self._close_settings)
+        self.btn_settings_close.pack(side="right")
+        ttk.Label(아래, text="고른 즉시 저장됩니다 — 그래서 [저장] 버튼이 없습니다.",
+                  style="Faint.TLabel").pack(side="left")
+
+        wrap, _canvas, self.settings_body = self._table_area(parent)
+        wrap.pack(fill="both", expand=True, pady=(14, 0))
+        self._fill_settings()
+
+    def _fill_settings(self) -> None:
+        """설정 화면을 처음부터 다시 그린다. **무엇을 적을지는 순수 함수가 정한다.**"""
+        tk, ttk = self.tk, self.ttk
+        body = getattr(self, "settings_body", None)
+        if body is None:
+            return                          # 아직 화면을 짓는 중이다
+        for w in body.winfo_children():
+            w.destroy()
+
+        try:
+            cfg = load_config(self.repo_root)
+        except OrganizeError as e:
+            칸 = self._settings_group(body, "설정을 읽지 못했습니다", e.message)
+            self._settings_line(칸, e.hint or "", alert=True)
+            return
+        pinned = local_place_names(self.repo_root)
+
+        # ① 자동으로 찾은 위치 — 정상이면 조용히 둔다
+        칸 = self._settings_group(
+            body, "자동으로 찾은 위치",
+            "문제가 있는 줄만 눈에 띕니다. PC 를 옮겼으면 그 줄만 다시 지정하면 됩니다.")
+        내장 = builtin_places(self._infos, pinned)
+        if not 내장:
+            self._settings_line(칸, "폴더를 확인하는 중입니다…")
+        for place in 내장:
+            self._place_row(칸, place, builtin=True)
+
+        # ② 내가 추가한 위치 — 탐색기를 쓰는 유일한 자리
+        칸 = self._settings_group(
+            body, "내가 추가한 위치",
+            "USB·SD카드는 안 꽂혀 있을 수 있습니다 — 없다고 등록을 지우지 않습니다.")
+        추가 = custom_places(cfg, pinned)
+        if not 추가:
+            self._settings_line(칸, "아직 없습니다. 아래 [+ 위치 추가] 로 등록하세요.")
+        for place in 추가:
+            self._place_row(칸, place, builtin=False)
+        줄 = tk.Frame(칸, bg=theme.SURFACE)
+        줄.pack(fill="x", pady=(8, 0))
+        ttk.Button(줄, text="+ 위치 추가", style="Tiny.Ghost.TButton",
+                   command=self._add_place).pack(side="right")
+
+        # ③ 폴더 이름 — **읽기 전용.** 엔진이 folder_names 를 읽지 않는다.
+        칸 = self._settings_group(
+            body, "폴더 이름 (읽기 전용)",
+            "정리하면 아래 이름의 폴더가 만들어집니다.")
+        for 보일이름, 폴더들, 문제 in profile_folder_names(self.repo_root / "profiles"):
+            줄 = tk.Frame(칸, bg=theme.SURFACE)
+            줄.pack(fill="x", pady=3)
+            tk.Label(줄, text=보일이름, bg=theme.SURFACE, fg=theme.TEXT,
+                     font=theme.body_font(), width=18, anchor="w").pack(side="left")
+            tk.Label(줄, text=(문제 or "  ".join(폴더들) or "만드는 폴더가 없습니다"),
+                     bg=theme.SURFACE, fg=(theme.TRASH if 문제 else theme.MUTED),
+                     font=theme.mono_font(9), anchor="w", justify="left",
+                     wraplength=520).pack(side="left")
+        self._settings_line(
+            칸, "폴더 이름을 바꾸려면 profiles 폴더의 .toml 파일에서 to 값을 고치세요.")
+
+    def _settings_group(self, parent, 제목: str, 설명: str):
+        """설정 화면의 칸 하나. 제목·설명을 얹고 줄이 들어갈 자리를 돌려준다."""
+        tk = self.tk
+        칸 = tk.Frame(parent, bg=theme.SURFACE)
+        칸.pack(fill="x", padx=16, pady=(16, 6))
+        tk.Label(칸, text=제목, bg=theme.SURFACE, fg=theme.TEXT,
+                 font=theme.body_font(11), anchor="w").pack(fill="x")
+        if 설명:
+            tk.Label(칸, text=설명, bg=theme.SURFACE, fg=theme.MUTED,
+                     font=theme.body_font(9), anchor="w", justify="left",
+                     wraplength=740).pack(fill="x", pady=(1, 8))
+        tk.Frame(칸, bg=theme.LINE_SOFT, height=1).pack(fill="x", pady=(0, 8))
+        return 칸
+
+    def _settings_line(self, parent, text: str, *, alert: bool = False) -> None:
+        self.tk.Label(parent, text=text, bg=theme.SURFACE,
+                      fg=(theme.TRASH if alert else theme.FAINT),
+                      font=theme.body_font(9), anchor="w", justify="left",
+                      wraplength=740).pack(fill="x", pady=(6, 0))
+
+    def _place_row(self, parent, place, *, builtin: bool) -> None:
+        """위치 한 줄. 오른쪽 버튼을 **먼저** 붙인다 — 경로가 길어도 밀려나지 않게."""
+        tk, ttk = self.tk, self.ttk
+        줄 = tk.Frame(parent, bg=theme.SURFACE)
+        줄.pack(fill="x", pady=3)
+
+        tk.Label(줄, text=place.label, bg=theme.SURFACE, fg=theme.TEXT,
+                 font=theme.body_font(), width=12, anchor="w").pack(side="left")
+
+        if builtin:
+            # 정상인 줄에는 버튼을 두지 않는다 — 고칠 것이 없는데 고치는 단추가
+            # 있으면 무엇이 문제인지 눈에 안 들어온다.
+            if place.alert:
+                ttk.Button(줄, text="다시 지정", style="Tiny.Ghost.TButton",
+                           command=lambda p=place: self._pick_place(p.name, p.label),
+                           ).pack(side="right", padx=(6, 0))
+            if place.pinned:
+                # 직접 지정한 줄은 **되돌릴 수 있어야 한다.** 안 그러면 한 번
+                # 잘못 고른 뒤로 OS 가 찾아 주는 자리로 못 돌아온다.
+                ttk.Button(줄, text="기본 위치로", style="Tiny.Ghost.TButton",
+                           command=lambda p=place: self._reset_place(p.name, p.label),
+                           ).pack(side="right", padx=(6, 0))
+        else:
+            if place.pinned:
+                ttk.Button(줄, text="지우기", style="Tiny.Ghost.TButton",
+                           command=lambda p=place: self._remove_place(p),
+                           ).pack(side="right", padx=(6, 0))
+            else:
+                # 지울 수 없는 이름에 [지우기] 를 그리면 눌러도 아무 일이 없다.
+                tk.Label(줄, text="공용 설정", bg=theme.SURFACE, fg=theme.FAINT,
+                         font=theme.body_font(9)).pack(side="right", padx=(6, 0))
+            ttk.Button(줄, text="찾아보기", style="Tiny.Ghost.TButton",
+                       command=lambda p=place: self._pick_place(p.name, p.label),
+                       ).pack(side="right", padx=(6, 0))
+
+        if place.note:
+            tk.Label(줄, text=place.note, bg=theme.SURFACE,
+                     fg=(theme.TRASH if place.alert else theme.MUTED),
+                     font=theme.body_font(9)).pack(side="right", padx=(10, 0))
+        tk.Label(줄, text=place.path, bg=theme.SURFACE,
+                 fg=(theme.TRASH if place.alert else theme.FAINT),
+                 font=theme.mono_font(9), anchor="w").pack(side="left", fill="x", expand=True)
+
+    # ── 화면 3 의 조작 — 고른 즉시 저장된다 ─────────────────────
+    def _pick_place(self, name: str, label: str) -> None:
+        """탐색기로 폴더를 골라 그 이름으로 저장한다. 고른 것이 곧 확정이다."""
+        with self._reporting("위치 지정"):
+            self._need_picker()
+            cfg = load_config(self.repo_root)
+            try:
+                시작 = resolve_alias(f"@{name}", cfg)
+            except AliasNotDefined:
+                시작 = None
+            chosen = picker.ask_folder(title=f"'{label}' 으로 쓸 폴더를 고르세요",
+                                       start=시작)
+            if chosen is None:
+                self.status_var.set("고르지 않았습니다 — 아무것도 바꾸지 않았습니다.")
+                return
+            picker.store_picked_path(self.repo_root, name, chosen)
+            # 경로를 통째로 적으면 상태줄이 창 밖으로 밀려 끝이 잘린다(실측).
+            self.status_var.set(f"'{label}' 위치를 {_short(chosen)} 로 저장했습니다.")
+        self._refresh_settings()
+
+    def _add_place(self) -> None:
+        """이름을 묻고 → 탐색기 → 저장. 이름이 이상하면 한국어로 알린다."""
+        from tkinter import simpledialog
+
+        with self._reporting("위치 추가"):
+            self._need_picker()
+            name = simpledialog.askstring(
+                "위치 추가", "이 위치를 무슨 이름으로 부를까요?  (예: 백업드라이브)",
+                parent=self.window)
+            if name is None:
+                self.status_var.set("위치 추가를 취소했습니다.")
+                return
+            cfg = load_config(self.repo_root)
+            문제 = new_place_error(name, cfg)
+            if 문제:
+                raise OrganizeError(문제, hint="[+ 위치 추가] 를 다시 눌러 주세요.")
+            이름 = name.strip()
+            chosen = picker.ask_folder(title=f"'{이름}' 으로 쓸 폴더를 고르세요")
+            if chosen is None:
+                # 이름만 저장해 두면 가리키는 곳이 없는 이름이 남는다.
+                self.status_var.set("고르지 않았습니다 — 이름도 저장하지 않았습니다.")
+                return
+            picker.store_picked_path(self.repo_root, 이름, chosen)
+            self.status_var.set(f"'{이름}' 위치를 {_short(chosen)} 로 저장했습니다.")
+        self._refresh_settings()
+
+    def _remove_place(self, place) -> None:
+        """등록만 지운다. **폴더와 파일은 건드리지 않는다** — 그 말을 대화상자에 적는다."""
+        if not self._confirm(
+                "위치 지우기",
+                f"'{place.name}' 위치 등록을 지웁니다.\n\n  {place.path}\n\n"
+                "폴더와 파일은 그대로 있고, 이름만 지워집니다.\n\n계속할까요?"):
+            self.status_var.set("지우지 않았습니다 — 아무것도 바뀌지 않았습니다.")
+            return
+        with self._reporting("위치 지우기"):
+            지웠나 = remove_local_path(self.repo_root, place.name)
+        self.status_var.set(
+            f"'{place.name}' 위치를 지웠습니다." if 지웠나 else
+            f"'{place.name}' 은 저장소 공용 설정(config.default.json)에 있어 여기서 지울 수 없습니다.")
+        self._refresh_settings()
+
+    def _reset_place(self, name: str, label: str) -> None:
+        """직접 지정한 내장 위치를 OS 가 찾아 주는 기본 위치로 되돌린다."""
+        if not self._confirm(
+                "기본 위치로",
+                f"'{label}' 을 이 PC 의 기본 위치로 되돌립니다.\n\n"
+                "폴더와 파일은 그대로 있고, 직접 지정한 기록만 지웁니다.\n\n계속할까요?"):
+            self.status_var.set("되돌리지 않았습니다 — 아무것도 바뀌지 않았습니다.")
+            return
+        with self._reporting("기본 위치로"):
+            지웠나 = remove_local_path(self.repo_root, name)
+        self.status_var.set(f"'{label}' 을 기본 위치로 되돌렸습니다." if 지웠나 else
+                            f"'{label}' 은 직접 지정한 기록이 없습니다.")
+        self._refresh_settings()
+
+    def _need_picker(self) -> None:
+        """탐색기를 못 띄우는 파이썬이면 **한국어로 알리고 창은 살려 둔다.**"""
+        if not picker.can_open_window():
+            raise OrganizeError(
+                "이 파이썬에서는 폴더 고르기 창을 띄울 수 없습니다 (tkinter 없음).",
+                hint="리눅스라면 'sudo apt install python3-tk' 로 설치하세요.\n"
+                     "    창 없이 지정하려면: organize paths --set <이름>=<경로>")
+
+    def _refresh_settings(self) -> None:
+        """설정을 바꾼 뒤. 개수를 **다시 세고** 화면 3 을 다시 그린다."""
+        self._start_counting(force=True)
+        self._fill_settings()
+
+    def _close_settings(self) -> None:
+        """화면 2 로 돌아가면서 **대상 드롭다운을 새로 고친다.**
+
+        방금 등록한 위치가 바로 안 보이면 사용자는 등록이 안 된 줄 안다.
+        """
+        self._go("main")
+        self._start_counting(force=True)
 
     # ── 공통 조각 ────────────────────────────────────────────────
     def _header(self, parent, 제목: str) -> None:
@@ -1267,6 +1636,60 @@ class App:
         return self.tk.Frame(parent, bg=theme.SURFACE, bd=0,
                              highlightthickness=1,
                              highlightbackground=theme.LINE, highlightcolor=theme.LINE)
+
+    # ── 물어보기 (버튼 글자가 한국어여야 한다) ───────────────────
+    def _confirm(self, title: str, body: str) -> bool:
+        """[예]/[아니오] 로 묻는다. 예를 누르면 True.
+
+        `messagebox.askyesno` 를 쓰지 않는 이유는 하나다 — 버튼이 **[Yes]/[No]**
+        로 뜬다. tkinter 에는 그 글자를 바꾸는 표준 방법이 없다. 이 도구는
+        오류도 안내도 전부 한국어인데 정작 "정말 실행할까요" 를 묻는 자리만
+        영어면, 되돌리기 가장 어려운 순간에 사용자가 낯선 글자를 누르게 된다.
+
+        **묻는 내용과 동작은 바뀌지 않는다** — 글자와 창만 우리가 그린다.
+        """
+        tk, ttk = self.tk, self.ttk
+        답 = {"예": False}
+
+        win = tk.Toplevel(self.window)
+        win.title(title)
+        win.configure(bg=theme.BG)
+        win.transient(self.window)
+        win.resizable(False, False)
+
+        몸 = ttk.Frame(win, padding=(22, 18))
+        몸.pack(fill="both", expand=True)
+        ttk.Label(몸, text=body, style="Lead.TLabel", wraplength=440,
+                  justify="left").pack(anchor="w")
+        줄 = ttk.Frame(몸)
+        줄.pack(fill="x", pady=(18, 0))
+
+        def 끝(값: bool) -> None:
+            답["예"] = 값
+            win.destroy()
+
+        ttk.Button(줄, text="아니오", style="Ghost.TButton",
+                   command=lambda: 끝(False)).pack(side="right")
+        예 = ttk.Button(줄, text="예", style="Primary.TButton", command=lambda: 끝(True))
+        예.pack(side="right", padx=(0, 10))
+
+        # Enter 는 예, Esc 는 아니오. **창을 그냥 닫아도 아니오다** — 확인 없이
+        # 파일이 움직이는 일이 있어서는 안 된다.
+        win.bind("<Return>", lambda _e: 끝(True))
+        win.bind("<Escape>", lambda _e: 끝(False))
+        win.protocol("WM_DELETE_WINDOW", lambda: 끝(False))
+
+        win.update_idletasks()
+        가로 = max(0, (self.window.winfo_width() - win.winfo_width()) // 2)
+        win.geometry(f"+{self.window.winfo_rootx() + 가로}"
+                     f"+{self.window.winfo_rooty() + 110}")
+        예.focus_set()
+        try:
+            win.grab_set()      # 묻는 동안 뒤 화면이 바뀌면 확인한 것과 달라진다
+        except tk.TclError:
+            pass                # 창을 아직 못 잡는 환경 — 물어보는 일 자체는 그대로 된다
+        self.window.wait_window(win)
+        return 답["예"]
 
     # ── 오류를 창으로 ────────────────────────────────────────────
     def _report(self, what: str, exc: BaseException) -> None:
