@@ -15,7 +15,7 @@
 
 | 문제 | 내용 |
 |---|---|
-| 경로 하드코딩 | `C:\Users\notebiz765\...` — **현재 PC의 사용자명이 아니다** (실제는 `cloocus`). 그대로 실행하면 전부 실패한다. |
+| 경로 하드코딩 | `C:\Users\<옛 사용자명>\...` — **현재 PC의 사용자명이 아니다.** 그대로 실행하면 전부 실패한다. |
 | 미리보기 불가 | 폴더를 순회하며 즉시 `shutil.move` / `os.remove`. 실행 전에 결과를 알 방법이 없다. |
 | 되돌리기 불가 | 이동 내역을 기록하지 않는다. |
 | 영구 삭제 | `os.remove`를 직접 호출한다. 복구 수단이 없다. |
@@ -64,7 +64,7 @@
 사용하지 않는다. 그 뒤에는 다른 PC 에서 개발과 실행이 이어진다.
 
 이 제약은 가정이 아니라 이미 일어난 일이다. `legacy/` 의 스크립트들은
-`C:\Users\notebiz765` 를 가리키고 있는데 그것은 **그 이전 PC** 다. PC 가 바뀌면서
+옛 사용자 폴더를 가리키고 있는데 그것은 **그 이전 PC** 다. PC 가 바뀌면서
 전부 죽었고, 그것이 이 재작성의 출발점이다.
 
 따라서 이 문서에 등장하는 구체적 경로·버전·파일 개수는 **오늘 관측한 사실이지 사양이 아니다.**
@@ -90,7 +90,7 @@
 |---|---|
 | 개발 | WSL2, Python 3.12.3 |
 | 실행 | Windows Python 3.14.6, tkinter 8.6 |
-| 사용자 폴더 | `C:\Users\cloocus\...` (WSL 에서 `/mnt/c` 로 읽기·쓰기 가능) |
+| 사용자 폴더 | `C:\Users\<사용자>\...` (WSL 에서 `/mnt/c` 로 읽기·쓰기 가능) |
 
 WSL 에서 코드를 쓰고 같은 파일을 Windows Python 으로 실행할 수 있었다. 파일 복사가 불필요했다.
 새 PC 에서 WSL 이 없다면 Windows 에서 직접 편집·실행하면 되고, 설계는 영향받지 않는다.
@@ -104,11 +104,11 @@ WSL 실행은 임시 폴더 대상 테스트 용도로만 쓴다.
 관측 당시 이 PC 에는 같은 이름의 폴더가 두 벌 있었다.
 
 ```
-C:\Users\cloocus\Desktop             6개   레지스트리상 당시 진짜 바탕화면
-C:\Users\cloocus\OneDrive\바탕 화면   3개   OneDrive 백업이 켜지면 여기가 진짜가 됨
+C:\Users\<사용자>\Desktop             6개   레지스트리상 당시 진짜 바탕화면
+C:\Users\<사용자>\OneDrive\바탕 화면   3개   OneDrive 백업이 켜지면 여기가 진짜가 됨
 
-C:\Users\cloocus\Pictures            1개
-C:\Users\cloocus\OneDrive\사진       4개   사진은 이미 여기가 더 많았다
+C:\Users\<사용자>\Pictures            1개
+C:\Users\<사용자>\OneDrive\사진       4개   사진은 이미 여기가 더 많았다
 ```
 
 `~/Desktop` 으로 하드코딩하면 OneDrive 백업이 켜진 PC 에서 엉뚱한 폴더를 정리한다.
@@ -1056,10 +1056,10 @@ tkinter. 화면은 3개다. 기능 우선으로 만들고 외형은 나중에 �
 |                                                    |
 |  폴더 위치를 자동으로 찾았습니다.                    |
 |                                                    |
-|    바탕화면   C:\Users\cloocus\Desktop    파일   6 |
-|    다운로드   C:\Users\cloocus\Downloads  파일 121 |
-|    문서       C:\Users\cloocus\Documents  파일  43 |
-|    사진       C:\Users\cloocus\Pictures   파일   1 |
+|    바탕화면   C:\Users\<사용자>\Desktop    파일   6 |
+|    다운로드   C:\Users\<사용자>\Downloads  파일 121 |
+|    문서       C:\Users\<사용자>\Documents  파일  43 |
+|    사진       C:\Users\<사용자>\Pictures   파일   1 |
 |                                                    |
 |  이 위치가 맞나요?                                   |
 |                                                    |
@@ -1101,10 +1101,10 @@ tkinter. 화면은 3개다. 기능 우선으로 만들고 외형은 나중에 �
 +- 설정 · 폴더 위치 ---------------------------------+
 |                                                    |
 |  자동으로 찾은 위치        (수정할 필요 없음)       |
-|    바탕화면   C:\Users\cloocus\Desktop      정상  |
-|    다운로드   C:\Users\cloocus\Downloads    정상  |
-|    문서       C:\Users\cloocus\Documents    정상  |
-|    사진       C:\Users\cloocus\Pictures     정상  |
+|    바탕화면   C:\Users\<사용자>\Desktop      정상  |
+|    다운로드   C:\Users\<사용자>\Downloads    정상  |
+|    문서       C:\Users\<사용자>\Documents    정상  |
+|    사진       C:\Users\<사용자>\Pictures     정상  |
 |                                                    |
 |  내가 추가한 위치                                   |
 |    백업드라이브  F:\day                [찾아보기]  |

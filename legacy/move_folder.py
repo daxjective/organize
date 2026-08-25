@@ -1,10 +1,14 @@
 import os
 import shutil
 import re
+from pathlib import Path
 # 0. F드라이브로는 액세스가 거부됨 
 # 1. 설정 (경로 뒤에 r을 꼭 붙여주세요)
-# source_path = r'C:\Users\notebiz765\CrossDevice\davin의 S23 Ultra\storage\DCIM\Camera'
-source_path = r'C:\Users\notebiz765\Downloads\a'
+# source_path = str(Path.home() / "CrossDevice" / "내휴대폰" / "storage" / "DCIM" / "Camera")
+# ── 경로 설정 · 여기만 바꾸면 된다 ─────────────────────────────
+# PC 를 옮겨도 돌아가게 홈 폴더 기준으로 잡는다(Path.home()).
+# 다른 곳을 쓰려면 아래 줄의 값을 바꾼다.  예) str(Path(r'D:\정리할폴더'))
+source_path = str(Path.home() / "Downloads" / "a")
 base_destination = r'F:\day'
 
 def organize_across_drives(src, dest_root):

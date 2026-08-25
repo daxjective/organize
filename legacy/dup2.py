@@ -1,9 +1,13 @@
 import os
 import hashlib
 import re
+from pathlib import Path
 
 # 1. 정리할 폴더 경로
-target_path = r'C:\Users\notebiz765\Downloads\a'
+# ── 경로 설정 · 여기만 바꾸면 된다 ─────────────────────────────
+# PC 를 옮겨도 돌아가게 홈 폴더 기준으로 잡는다(Path.home()).
+# 다른 곳을 쓰려면 아래 줄의 값을 바꾼다.  예) str(Path(r'D:\정리할폴더'))
+target_path = str(Path.home() / "Downloads" / "a")
 
 def get_file_hash(file_path):
     """파일의 데이터 지문을 생성합니다."""

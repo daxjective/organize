@@ -1,12 +1,16 @@
 import os
 import shutil
 import re
+from pathlib import Path
 
 # [설정] 원본 사진이 있는 곳
-source_path = r'C:\Users\notebiz765\CrossDevice\davin의 S23 Ultra\storage\DCIM\Camera'
+# ── 경로 설정 · 여기만 바꾸면 된다 ─────────────────────────────
+# PC 를 옮겨도 돌아가게 홈 폴더 기준으로 잡는다(Path.home()).
+# 다른 곳을 쓰려면 아래 줄의 값을 바꾼다.  예) str(Path(r'D:\정리할폴더'))
+source_path = str(Path.home() / "CrossDevice" / "내휴대폰" / "storage" / "DCIM" / "Camera")
 
 # [설정] 정리된 폴더들이 들어갈 새 위치 (예: 내 PC의 사진 폴더)
-base_destination = r'C:\Users\notebiz765\Pictures\Sorted_Photos'
+base_destination = str(Path.home() / "Pictures" / "Sorted_Photos")
 
 def organize_to_new_location(src, dest_root):
     # 목적지 루트 폴더가 없으면 생성

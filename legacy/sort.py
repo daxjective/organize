@@ -1,11 +1,15 @@
 import os
 import shutil
 import re  # 정규 표현식을 사용하기 위한 도구
+from pathlib import Path
 
 # 1. 경로 설정
 
-## target_path = r'C:\Users\notebiz765\CrossDevice\davin의 S23 Ultra\storage\DCIM\Camera'
-target_path = r'C:\Users\notebiz765\Downloads\a'
+## target_path = str(Path.home() / "CrossDevice" / "내휴대폰" / "storage" / "DCIM" / "Camera")
+# ── 경로 설정 · 여기만 바꾸면 된다 ─────────────────────────────
+# PC 를 옮겨도 돌아가게 홈 폴더 기준으로 잡는다(Path.home()).
+# 다른 곳을 쓰려면 아래 줄의 값을 바꾼다.  예) str(Path(r'D:\정리할폴더'))
+target_path = str(Path.home() / "Downloads" / "a")
 
 def organize_photos(path):
     if not os.path.exists(path):

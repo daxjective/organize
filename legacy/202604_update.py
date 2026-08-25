@@ -1,9 +1,13 @@
 import os
 import shutil
 import re
+from pathlib import Path
 
 # 1. 사진이 들어있는 폴더 경로 (여기 안에 폴더들이 생깁니다)
-target_path = r'C:\Users\notebiz765\Downloads\a' 
+# ── 경로 설정 · 여기만 바꾸면 된다 ─────────────────────────────
+# PC 를 옮겨도 돌아가게 홈 폴더 기준으로 잡는다(Path.home()).
+# 다른 곳을 쓰려면 아래 줄의 값을 바꾼다.  예) str(Path(r'D:\정리할폴더'))
+target_path = str(Path.home() / "Downloads" / "a") 
 
 def organize_fast(path):
     if not os.path.exists(path):

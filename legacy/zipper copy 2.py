@@ -1,10 +1,14 @@
 import os
 import zipfile
 import hashlib
+from pathlib import Path
 
 # 1. 설정
-zip_folder_path = r'C:\Users\notebiz765\Downloads'
-extract_to_path = r'C:\Users\notebiz765\Downloads\a'
+# ── 경로 설정 · 여기만 바꾸면 된다 ─────────────────────────────
+# PC 를 옮겨도 돌아가게 홈 폴더 기준으로 잡는다(Path.home()).
+# 다른 곳을 쓰려면 아래 줄의 값을 바꾼다.  예) str(Path(r'D:\정리할폴더'))
+zip_folder_path = str(Path.home() / "Downloads")
+extract_to_path = str(Path.home() / "Downloads" / "a")
 
 def get_data_hash(data):
     """메모리 상의 데이터 지문(MD5)을 생성합니다."""

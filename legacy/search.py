@@ -1,7 +1,8 @@
 import os
+from pathlib import Path
 
 # 현재 작업 중인 경로
-#target_path = r'C:\Users\notebiz765\Downloads\a' 
+#target_path = str(Path.home() / "Downloads" / "a") 
 
 print(f"🔍 탐색 시작: {target_path}")
 print("-" * 50)

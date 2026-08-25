@@ -2,9 +2,13 @@ import os
 import shutil
 import re
 import hashlib
+from pathlib import Path
 
 # [설정] 경로를 본인 환경에 맞게 최종 확인하세요
-source_path = r'C:\Users\notebiz765\Downloads\a'
+# ── 경로 설정 · 여기만 바꾸면 된다 ─────────────────────────────
+# PC 를 옮겨도 돌아가게 홈 폴더 기준으로 잡는다(Path.home()).
+# 다른 곳을 쓰려면 아래 줄의 값을 바꾼다.  예) str(Path(r'D:\정리할폴더'))
+source_path = str(Path.home() / "Downloads" / "a")
 base_destination = r'F:\day'
 
 def get_file_hash(file_path):

@@ -1,9 +1,13 @@
 import os
 import zipfile
+from pathlib import Path
 
 # 1. 설정
-zip_folder_path = r'C:\Users\notebiz765\Downloads' # zip 파일들이 모여있는 폴더
-extract_to_path = r'C:\Users\notebiz765\Downloads\a'    # 하나로 합쳐질 대상 폴더
+# ── 경로 설정 · 여기만 바꾸면 된다 ─────────────────────────────
+# PC 를 옮겨도 돌아가게 홈 폴더 기준으로 잡는다(Path.home()).
+# 다른 곳을 쓰려면 아래 줄의 값을 바꾼다.  예) str(Path(r'D:\정리할폴더'))
+zip_folder_path = str(Path.home() / "Downloads") # zip 파일들이 모여있는 폴더
+extract_to_path = str(Path.home() / "Downloads" / "a")    # 하나로 합쳐질 대상 폴더
 
 def extract_and_delete_originals(src_path, dest_path):
     if not os.path.exists(dest_path):
