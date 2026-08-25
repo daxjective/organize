@@ -17,26 +17,13 @@ from organize.core.undo import list_runs
 from organize.core.undo import undo as undo_run
 from organize.core.undo import unreadable_runs
 from organize.errors import OrganizeError
+from organize.folders import LABEL, count_text
 from organize.profiles import normalize_ext
 from organize.recipes import Recipe, find_recipe, list_recipes, load_recipe
 from organize.userconfig import (AliasNotDefined, load_config, refuse_unsupported,
                                  resolve_alias, save_local_path, unsupported_notes)
 
 _KIND_LABEL = {"mkdir": "폴더 생성", "move": "이동", "quarantine": "격리", "extract": "압축 해제"}
-
-_ALIAS_LABEL = {"home": "홈", "desktop": "바탕화면", "downloads": "다운로드",
-                "documents": "문서", "pictures": "사진", "music": "음악", "videos": "영상"}
-
-
-def _count_files(path: Path) -> str:
-    if not path.is_dir():
-        # "파일 없음!" 은 바로 옆 줄의 "파일 0" 과 같은 뜻으로 읽힌다.
-        # 실제로는 폴더 자체가 없다는 뜻이므로 그대로 말한다.
-        return "— 폴더 없음"
-    try:
-        return str(sum(1 for p in path.iterdir() if p.is_file()))
-    except OSError:
-        return "읽을 수 없음"
 
 
 def repo_root() -> Path:
@@ -625,12 +612,12 @@ def _cmd_doctor(args) -> int:
             p = resolve_alias(f"@{name}", cfg)
         except AliasNotDefined:
             continue
-        print(f"    {_ALIAS_LABEL.get(name, name):<10} {str(p):<44} 파일 {_count_files(p)}")
+        print(f"    {LABEL.get(name, name):<10} {str(p):<44} 파일 {count_text(p)}")
         if p not in checked_folders:
             checked_folders.append(p)
     for name in sorted(cfg.paths):
         p = resolve_alias(f"@{name}", cfg)
-        print(f"    @{name:<9} {str(p):<44} 파일 {_count_files(p)}")
+        print(f"    @{name:<9} {str(p):<44} 파일 {count_text(p)}")
         if p not in checked_folders:
             checked_folders.append(p)
 
@@ -646,7 +633,7 @@ def _cmd_doctor(args) -> int:
             checked_folders.append(p)
             if shown == 0:
                 print("\n  최근에 정리한 폴더")
-            print(f"    {str(p):<54} 파일 {_count_files(p)}")
+            print(f"    {str(p):<54} 파일 {count_text(p)}")
             shown += 1
 
     recipes_dir = root / "recipes"

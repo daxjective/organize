@@ -3,15 +3,30 @@
 `tkinter` 를 함수 안에서 늦게 import 한다. 없는 환경에서도 `organize` 의 나머지
 기능은 그대로 돌아야 하기 때문이다(리눅스에서 tkinter 는 별도 패키지다).
 
-버튼이 켜지고 꺼지는 규칙은 여기서 정하지 않는다. `Session.can_*` 를 그대로
-따른다 — 규칙이 두 군데 있으면 어긋나고, 어긋나면 **미리보기를 안 본 채로
-실행이 눌리는** 순간이 생긴다.
+화면은 셋이고 **창은 하나다**(`ttk.Frame` 세 개를 `tkraise()` 로 바꿔 올린다).
+창을 여러 개 띄우면 사용자가 창을 관리하게 된다 — 그건 도구의 일이다.
+
+색과 글꼴은 `gui_theme` 만 안다. 여기서 색 코드를 직접 쓰지 않는다.
 """
 
+import queue
+import threading
 from pathlib import Path
 
+from organize import folders, gui_theme as theme
 from organize.errors import OrganizeError
 from organize.gui_model import Session
+from organize.userconfig import load_config
+
+_SCREENS = ("first", "main", "settings")
+
+_TITLES = {"first": "organize — 처음 실행",
+           "main": "organize",
+           "settings": "설정 · 폴더 위치"}
+
+# 폴더가 비었거나 없을 때 옆에 적는 말. **왜** 그런지까지 적는다 — OneDrive
+# 백업이 켜진 PC 에서는 진짜 바탕화면이 다른 곳이라 여기가 0 으로 뜬다.
+_ONEDRIVE = "OneDrive 백업이 켜져 있으면 실제 폴더가 다른 곳일 수 있습니다."
 
 
 def run(repo_root: Path) -> int:
@@ -37,176 +52,229 @@ class App:
         from tkinter import ttk
 
         self.tk, self.ttk = tk, ttk
+        self.repo_root = Path(repo_root)
         self.session = Session(repo_root)
 
         self.window = tk.Tk()
-        self.window.title("organize — 파일 정리")
-        self.window.geometry("980x620")
-        self.window.minsize(760, 480)
+        self.window.title(_TITLES["first"])
+        self.window.geometry("760x660")
+        self.window.minsize(680, 560)
+        theme.apply_theme(self.window)
 
-        self.root_var = tk.StringVar()
-        self.recipe_var = tk.StringVar()
-        self.dest_var = tk.StringVar()
-        self.status_var = tk.StringVar(value="정리할 폴더를 고르고 미리보기를 눌러 주세요.")
+        self.status_var = tk.StringVar(value="")
+        self._counted = False                  # 폴더를 이미 세었는가
+        self._inbox: queue.SimpleQueue = queue.SimpleQueue()
 
-        self._build()
-        self._sync_buttons()
+        body = ttk.Frame(self.window)
+        body.pack(fill="both", expand=True)
+        body.rowconfigure(0, weight=1)
+        body.columnconfigure(0, weight=1)
 
-    # ── 화면 만들기 ──────────────────────────────────────────────
-    def _build(self) -> None:
-        tk, ttk = self.tk, self.ttk
-        pad = {"padx": 10, "pady": 6}
+        # 화면 셋을 같은 자리에 겹쳐 둔다. 바꿀 때는 tkraise() 만 한다.
+        self.frames = {}
+        for name, build in (("first", self._build_first),
+                            ("main", self._build_main),
+                            ("settings", self._build_settings)):
+            frame = ttk.Frame(body, padding=(24, 20))
+            frame.grid(row=0, column=0, sticky="nsew")
+            self.frames[name] = frame
+            build(frame)
 
-        고르는곳 = ttk.LabelFrame(self.window, text="무엇을 어떻게")
-        고르는곳.pack(fill="x", **pad)
-        고르는곳.columnconfigure(1, weight=1)
+        # 무슨 일이 있었는지 적는 줄. 오류·진행 상황이 여기 남는다 — 창을 닫고
+        # 나서야 알게 되는 일이 없도록.
+        ttk.Label(self.window, textvariable=self.status_var,
+                  style="Muted.TLabel", anchor="w").pack(fill="x", padx=26, pady=(0, 10))
 
-        ttk.Label(고르는곳, text="정리할 폴더").grid(row=0, column=0, sticky="w", padx=8, pady=6)
-        ttk.Entry(고르는곳, textvariable=self.root_var).grid(row=0, column=1, sticky="ew", pady=6)
-        ttk.Button(고르는곳, text="찾아보기…", command=self._pick_root
-                   ).grid(row=0, column=2, padx=8)
+        # 설정이 이미 있으면 첫 화면을 건너뛴다(시안: "설정이 이미 있으면 이 화면을 건너뛴다").
+        self.show("main" if (self.repo_root / "config.local.json").is_file() else "first")
 
-        ttk.Label(고르는곳, text="무엇을 할까").grid(row=1, column=0, sticky="w", padx=8, pady=6)
-        self.recipe_box = ttk.Combobox(고르는곳, textvariable=self.recipe_var,
-                                       state="readonly",
-                                       values=self.session.recipe_names())
-        self.recipe_box.grid(row=1, column=1, sticky="ew", pady=6)
-        self.recipe_box.bind("<<ComboboxSelected>>", lambda _e: self._on_recipe())
+    # ── 화면 바꾸기 ──────────────────────────────────────────────
+    def show(self, name: str) -> None:
+        """화면 하나를 올린다. "first" | "main" | "settings"."""
+        if name not in self.frames:
+            raise OrganizeError(f"그런 화면이 없습니다: {name}",
+                                hint=f"쓸 수 있는 이름: {', '.join(_SCREENS)}")
+        self.frames[name].tkraise()
+        self.window.title(_TITLES[name])
+        if name == "first":
+            # 세는 일은 화면 1 에서만 필요하다. 필요할 때 시작한다.
+            self._start_counting()
 
-        ttk.Label(고르는곳, text="보낼 곳 (선택)").grid(row=2, column=0, sticky="w", padx=8, pady=6)
-        ttk.Entry(고르는곳, textvariable=self.dest_var, state="readonly"
-                  ).grid(row=2, column=1, sticky="ew", pady=6)
-        ttk.Button(고르는곳, text="찾아보기…", command=self._pick_dest
-                   ).grid(row=2, column=2, padx=8)
+    # ── 화면 1 — 처음 실행 ───────────────────────────────────────
+    def _build_first(self, parent) -> None:
+        ttk = self.ttk
+        self._header(parent, "처음 실행")
 
-        누르는곳 = ttk.Frame(self.window)
-        누르는곳.pack(fill="x", **pad)
-        self.btn_preview = ttk.Button(누르는곳, text="미리보기", command=self._preview)
-        self.btn_apply = ttk.Button(누르는곳, text="실행", command=self._apply)
-        self.btn_undo = ttk.Button(누르는곳, text="되돌리기", command=self._undo)
-        for b in (self.btn_preview, self.btn_apply, self.btn_undo):
-            b.pack(side="left", padx=(0, 8))
+        ttk.Label(parent, text="폴더 위치를 자동으로 찾았습니다.",
+                  style="Lead.TLabel").pack(anchor="w", pady=(14, 2))
+        ttk.Label(parent, text="파일 개수가 맞는지 봐 주세요. 개수가 0 이면 다른 곳일 수 있습니다.",
+                  style="Muted.TLabel").pack(anchor="w", pady=(0, 12))
 
-        # 밖으로 나갈 때만 보이는 경고. 평소에는 자리도 차지하지 않는다.
-        self.warn = tk.Label(self.window, anchor="w", justify="left",
-                             fg="#8a4b00", bg="#fdf3e0", padx=10, pady=8)
+        # **버튼을 먼저 바닥에 붙인다.** 나중에 붙이면 목록이 길어졌을 때
+        # 버튼이 창 밖으로 밀려 잘린다(실측: 캡처에서 반쯤 잘려 나갔다).
+        # 아래에서 위로 — 버튼줄, 안내줄, 그리고 남는 자리를 목록이 갖는다.
+        아래 = ttk.Frame(parent)
+        아래.pack(side="bottom", fill="x", pady=(16, 0))
+        ttk.Label(아래, text="이 위치가 맞나요?", style="Lead.TLabel").pack(side="left")
+        # 버튼을 이름으로 들고 있는다 — 눌렀을 때 실제로 화면이 바뀌는지
+        # 밖에서 확인할 수 있어야 한다(invoke). 다음 Task 도 이 이름을 쓴다.
+        self.btn_pick = ttk.Button(아래, text="직접 고를게요", style="Ghost.TButton",
+                                   command=lambda: self._go("settings"))
+        self.btn_pick.pack(side="right")
+        self.btn_start = ttk.Button(아래, text="맞아요, 시작", style="Primary.TButton",
+                                    command=lambda: self._go("main"))
+        self.btn_start.pack(side="right", padx=(0, 10))
 
-        표 = ttk.Frame(self.window)
-        표.pack(fill="both", expand=True, **pad)
-        cols = ("kind", "name", "dest", "reason")
-        self.tree = ttk.Treeview(표, columns=cols, show="headings", height=14)
-        for c, 제목, w in (("kind", "종류", 90), ("name", "파일", 220),
-                          ("dest", "어디로", 380), ("reason", "왜", 240)):
-            self.tree.heading(c, text=제목)
-            self.tree.column(c, width=w, anchor="w")
-        # 밖으로 나가는 줄은 눈에 띄게 — 무게가 다른 일이다.
-        self.tree.tag_configure("leaving", background="#fdf3e0", foreground="#8a4b00")
-        sb = ttk.Scrollbar(표, orient="vertical", command=self.tree.yview)
-        self.tree.configure(yscrollcommand=sb.set)
-        self.tree.pack(side="left", fill="both", expand=True)
-        sb.pack(side="right", fill="y")
+        # 문제 있는 줄이 있을 때만 보이는 안내. 같은 문장을 줄마다 반복하면
+        # 여섯 줄이 같은 빨간 글로 뒤덮여 아무도 안 읽는다(실측: 캡처로 확인).
+        # 줄 옆에는 짧은 이유만, 왜 그런지는 여기 한 번만 적는다.
+        self._alert_note = ttk.Label(
+            parent, style="Alert.TLabel", wraplength=700, justify="left",
+            text=f"표시된 줄은 비어 있거나 폴더가 없습니다 — {_ONEDRIVE}\n"
+                 "[직접 고를게요] 에서 위치를 직접 지정할 수 있습니다.")
 
-        ttk.Label(self.window, textvariable=self.status_var, anchor="w"
-                  ).pack(fill="x", padx=10, pady=(0, 10))
+        self.folder_card = self._card(parent)
+        self.folder_card.pack(fill="both", expand=True)
+        self.folder_card.columnconfigure(0, weight=1)
+        self._counting_note = ttk.Label(self.folder_card, text="폴더를 세는 중입니다…",
+                                        style="CardPath.TLabel")
+        self._counting_note.grid(row=0, column=0, sticky="w", padx=16, pady=16)
 
-    # ── 버튼이 하는 일 ───────────────────────────────────────────
-    def _pick_root(self) -> None:
-        from organize import picker
-        with self._reporting("폴더 고르기"):
-            chosen = picker.ask_folder("정리할 폴더를 고르세요",
-                                       start=self.session.root)
-            if chosen is None:
-                return
-            self.session.set_root(chosen)
-            self.root_var.set(str(chosen))
-            self._clear_table()
-            self.status_var.set("미리보기를 눌러 무엇이 어디로 갈지 확인하세요.")
+    def _go(self, name: str) -> None:
+        """버튼이 실제로 화면을 바꾼다. **눌러도 아무 일이 없으면 그게 결함이다.**"""
+        with self._reporting("화면 바꾸기"):
+            self.show(name)
+            self.status_var.set("")
 
-    def _pick_dest(self) -> None:
-        """보낼 곳을 골라 이름표(`@백업`)로 등록한다.
+    # ── 폴더 개수 세기 (창이 멈추면 안 된다) ─────────────────────
+    def _start_counting(self) -> None:
+        """세는 일은 딴 스레드에서. 진짜 다운로드 폴더는 파일이 많고 WSL 은 느리다."""
+        if self._counted:
+            return
+        self._counted = True
+        threading.Thread(target=self._count_worker, daemon=True).start()
+        # 결과는 **주 스레드**가 꺼내 간다. 딴 스레드가 위젯을 건드리면
+        # tkinter 는 조용히 이상해지거나 죽는다.
+        self.window.after(80, self._drain)
 
-        레시피가 `@백업` 을 쓰고 있을 때 그 위치를 창에서 바꿀 수 있게 한다.
-        타이핑이 없으므로 오타로 엉뚱한 곳에 쏟을 일이 없다.
-        """
-        from organize import picker
-        with self._reporting("보낼 곳 고르기"):
-            chosen = picker.ask_folder("보낼 곳을 고르세요 (USB·SD카드 등)")
-            if chosen is None:
-                return
-            picker.store_picked_path(self.session.repo_root, "백업", chosen)
-            self.dest_var.set(str(chosen))
-            self.session.set_recipe(self.session.recipe_name)   # 미리보기 무효화
-            self._clear_table()
-            self.status_var.set(
-                f"@백업 → {chosen} 로 저장했습니다. 레시피의 dest 가 \"@백업\" 이면 이리로 갑니다.")
+    def _count_worker(self) -> None:
+        """디스크를 읽는 부분. 위젯을 하나도 건드리지 않는다."""
+        try:
+            infos = [f for f in folders.overview(load_config(self.repo_root))
+                     # 내장 별칭만 보여준다. 홈은 뺀다 — 홈 전체 파일 개수는
+                     # 정리 대상이 아니고, 숫자가 크면 겁만 준다.
+                     if f.builtin and f.name != "home"]
+            self._inbox.put(("ok", infos))
+        except Exception as e:                   # noqa: BLE001 — 창은 살아 있어야 한다
+            self._inbox.put(("fail", e))
 
-    def _on_recipe(self) -> None:
-        with self._reporting("정리 방식 고르기"):
-            self.session.set_recipe(self.recipe_var.get())
-            self._clear_table()
-            self.status_var.set("미리보기를 눌러 무엇이 어디로 갈지 확인하세요.")
-
-    def _preview(self) -> None:
-        with self._reporting("미리보기"):
-            view = self.session.preview()
-            self._fill_table(view)
-            self.status_var.set(
-                f"총계  {view.summary}      (미리보기입니다 — 파일은 그대로입니다)")
-
-    def _apply(self) -> None:
-        with self._reporting("실행"):
-            done = self.session.apply()
-            self._clear_table()
-            줄 = f"완료. 옮김 {done.moved} · 폴더 생성 {done.folders} · 실패 {done.failed}"
-            if done.log_path:
-                줄 += "     되돌리기를 누르면 되돌릴 수 있습니다."
-            self.status_var.set(줄)
-            if done.messages:
-                self._show("실행 결과", "\n".join(done.messages))
-
-    def _undo(self) -> None:
-        with self._reporting("되돌리기"):
-            back = self.session.undo()
-            self._clear_table()
-            self.status_var.set(f"되돌림 {back.restored} · 실패 {back.failed}")
-            if back.messages:
-                self._show("되돌리기 결과", "\n".join(back.messages))
-
-    # ── 표 그리기 ────────────────────────────────────────────────
-    def _clear_table(self) -> None:
-        self.tree.delete(*self.tree.get_children())
-        self.warn.pack_forget()
-        self._sync_buttons()
-
-    def _fill_table(self, view) -> None:
-        self.tree.delete(*self.tree.get_children())
-        for r in view.rows:
-            self.tree.insert("", "end",
-                             values=(r.kind, r.name, r.dest, r.reason),
-                             tags=("leaving",) if r.leaving else ())
-        if view.warnings:
-            self.warn.config(text="⚠  " + "\n⚠  ".join(view.warnings))
-            self.warn.pack(fill="x", padx=10, pady=(0, 4), before=self.tree.master)
+    def _drain(self) -> None:
+        try:
+            kind, payload = self._inbox.get_nowait()
+        except queue.Empty:
+            self.window.after(80, self._drain)   # 아직이다. 다시 본다.
+            return
+        if kind == "ok":
+            self._fill_folders(payload)
         else:
-            self.warn.pack_forget()
-        self._sync_buttons()
+            self._counting_note.config(text="폴더를 세지 못했습니다.")
+            self._report("폴더 세기", payload)
 
-    def _sync_buttons(self) -> None:
-        """버튼 상태는 **Session 이 정한 대로만** 따른다.
+    def _fill_folders(self, infos) -> None:
+        ttk = self.ttk
+        self._counting_note.destroy()
+        for r, info in enumerate(infos):
+            if r:                                 # 줄 사이 얇은 선 — Finder 의 목록 느낌
+                ttk.Frame(self.folder_card, style="Line.TFrame", height=1).grid(
+                    row=r * 2 - 1, column=0, sticky="ew", padx=16)
+            self._folder_row(self.folder_card, info).grid(
+                row=r * 2, column=0, sticky="ew", padx=16, pady=9)
+        문제수 = sum(1 for f in infos if _문제인가(f))
+        if 문제수:
+            self._alert_note.pack(side="bottom", fill="x", pady=(10, 0))
+        self.status_var.set(
+            f"폴더 {len(infos)}곳을 확인했습니다."
+            + (f"  그중 {문제수}곳은 비어 있거나 없습니다." if 문제수 else ""))
 
-        여기서 따로 판단하면 규칙이 두 군데가 되고, 어긋나는 순간 미리보기를
-        안 본 채로 실행이 눌린다. 이 도구가 가장 경계하는 일이다.
+    def _folder_row(self, parent, info):
+        """한 줄: 이름 · 꼬리 경로 · 전체 경로(작게) · 개수(크게)."""
+        ttk = self.ttk
+        row = ttk.Frame(parent, style="Card.TFrame")
+        row.columnconfigure(1, weight=1)
+
+        ttk.Label(row, text=info.label, style="CardName.TLabel", width=7,
+                  ).grid(row=0, column=0, sticky="w")
+        ttk.Label(row, text=_tail(info.path), style="CardPath.TLabel",
+                  ).grid(row=0, column=1, sticky="w")
+
+        문제 = _문제인가(info)
+        ttk.Label(row, text=("—" if info.count is None else str(info.count)),
+                  style="CardAlertCount.TLabel" if 문제 else "CardCount.TLabel",
+                  anchor="e", width=5).grid(row=0, column=2, rowspan=2,
+                                            sticky="e", padx=(12, 0))
+
+        ttk.Label(row, text=_short(info.path), style="CardFull.TLabel",
+                  ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(1, 0))
+        if 문제:
+            ttk.Label(row, text=_why(info), style="CardAlert.TLabel",
+                      wraplength=480, justify="left",
+                      ).grid(row=2, column=0, columnspan=3, sticky="w", pady=(3, 0))
+        return row
+
+    # ── 화면 2·3 — 다음 Task 의 몫 ───────────────────────────────
+    def _build_main(self, parent) -> None:
+        self._stub(parent, "메인", "레시피·작업 체크박스·미리보기 표가 들어올 자리입니다.")
+
+    def _build_settings(self, parent) -> None:
+        self._stub(parent, "설정 · 폴더 위치", "등록한 위치와 폴더 이름이 들어올 자리입니다.")
+
+    def _stub(self, parent, 제목: str, 설명: str) -> None:
+        ttk = self.ttk
+        self._header(parent, 제목)
+        card = self._card(parent)
+        card.pack(fill="both", expand=True, pady=(14, 0))
+        ttk.Label(card, text="다음 단계에서 만듭니다.", style="CardName.TLabel",
+                  ).pack(anchor="w", padx=16, pady=(18, 2))
+        ttk.Label(card, text=설명, style="CardPath.TLabel",
+                  ).pack(anchor="w", padx=16, pady=(0, 18))
+        ttk.Button(parent, text="← 처음 화면", style="Link.TButton",
+                   command=lambda: self._go("first")).pack(anchor="w", pady=(12, 0))
+
+    # ── 공통 조각 ────────────────────────────────────────────────
+    def _header(self, parent, 제목: str) -> None:
+        """신호등 점 + 화면 제목.
+
+        **가짜 제목표시줄이 아니다.** 윈도우에는 진짜 제목표시줄이 위에 그대로
+        있어서, 창 안에 또 하나를 그리면 두 줄이 되어 흉하다.
         """
-        def 켬(b, on):
-            b.state(["!disabled"] if on else ["disabled"])
-        켬(self.btn_preview, self.session.can_preview)
-        켬(self.btn_apply, self.session.can_apply)
-        켬(self.btn_undo, self.session.can_undo)
+        ttk = self.ttk
+        줄 = ttk.Frame(parent)
+        줄.pack(fill="x")
+        theme.traffic_lights(줄).pack(side="left", pady=(0, 2))
+        ttk.Label(줄, text=제목, style="Title.TLabel").pack(side="left", padx=(12, 0))
+
+    def _card(self, parent):
+        """판 하나. 얇은 테두리를 두른 밝은 면.
+
+        ttk 프레임 대신 `tk.Frame` 을 쓴다 — `highlightthickness` 로 1px 테두리를
+        어느 OS 에서나 같은 색으로 그릴 수 있는 유일한 방법이다. 둥근 모서리는
+        tkinter 에 없다(시안의 반경 4px 는 여기서 못 낸다).
+        """
+        return self.tk.Frame(parent, bg=theme.SURFACE, bd=0,
+                             highlightthickness=1,
+                             highlightbackground=theme.LINE, highlightcolor=theme.LINE)
 
     # ── 오류를 창으로 ────────────────────────────────────────────
-    def _show(self, title: str, body: str) -> None:
+    def _report(self, what: str, exc: BaseException) -> None:
         from tkinter import messagebox
-        messagebox.showinfo(title, body, parent=self.window)
+        if isinstance(exc, OrganizeError):
+            몸 = exc.message + (f"\n\n{exc.hint}" if exc.hint else "")
+        else:
+            # 파이썬 예외 원문을 그대로 보여주지 않는다(전역 규칙).
+            몸 = (f"{what} 중 예상치 못한 오류가 났습니다.\n\n"
+                  "디스크 상태나 쓰기 권한을 확인해 주세요.")
+        messagebox.showerror(what, 몸, parent=self.window)
+        self.status_var.set(f"{what} 실패 — 위 안내를 확인해 주세요.")
 
     class _Reporting:
         def __init__(self, app, what): self.app, self.what = app, what
@@ -216,18 +284,47 @@ class App:
         def __exit__(self, exc_type, exc, tb):
             if exc is None:
                 return False
-            from tkinter import messagebox
-            if isinstance(exc, OrganizeError):
-                몸 = exc.message + (f"\n\n{exc.hint}" if exc.hint else "")
-            else:
-                # 파이썬 예외 원문을 그대로 보여주지 않는다(전역 규칙).
-                몸 = (f"{self.what} 중 예상치 못한 오류가 났습니다.\n\n"
-                      "디스크 상태나 쓰기 권한을 확인해 주세요.")
-            messagebox.showerror(self.what, 몸, parent=self.app.window)
-            self.app.status_var.set(f"{self.what} 실패 — 위 안내를 확인해 주세요.")
-            self.app._sync_buttons()
+            self.app._report(self.what, exc)
             return True                    # 창이 죽지 않는다
 
     def _reporting(self, what: str):
         """무엇이 터지든 창은 살아 있고, 사람이 읽을 말로 알린다."""
         return self._Reporting(self, what)
+
+
+def _tail(path: Path) -> str:
+    """`…\\Desktop` 처럼 **꼬리만**. 전체 경로는 그 아래 회색 작은 글씨로 따로 보여준다."""
+    parent = str(path.parent)
+    sep = "\\" if "\\" in parent else "/"
+    return f"…{sep}{path.name}" if path.name else str(path)
+
+
+def _short(text_path: Path, limit: int = 56) -> str:
+    """긴 경로는 가운데를 접는다.
+
+    접지 않으면 라벨이 개수 칸까지 밀고 들어와 **숫자와 글자가 겹친다**
+    (실측: 임시 폴더 경로에서 그렇게 됐다). 앞(드라이브·루트)과 끝(폴더 이름)은
+    남긴다 — 사용자가 알아보는 두 조각이 그것이다.
+    """
+    text = str(text_path)
+    if len(text) <= limit:
+        return text
+    return f"{text[:14]}…{text[-(limit - 15):]}"
+
+
+def _문제인가(info) -> bool:
+    """이 줄을 눈에 띄게 해야 하는가.
+
+    개수 0 과 폴더 없음은 **다른 일이지만 둘 다 신호다** — OneDrive 백업이
+    켜진 PC 에서는 진짜 바탕화면이 다른 곳에 있다.
+    """
+    return info.status != "" or info.count == 0
+
+
+def _why(info) -> str:
+    """줄 옆에 적을 **짧은** 이유. 긴 설명은 카드 아래에 한 번만 적는다."""
+    if info.status == "폴더 없음":
+        return "폴더가 없습니다"
+    if info.status == "읽을 수 없음":
+        return "읽을 수 없습니다 — 접근 권한을 확인해 주세요"
+    return "비어 있습니다"
