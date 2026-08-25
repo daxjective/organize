@@ -21,10 +21,15 @@ from organize.errors import OrganizeError
 
 class Context:
     def __init__(self, root: Path, entries: list[FileEntry], today: date,
-                 run_id: str = "") -> None:
+                 run_id: str = "", external: dict[str, Path] | None = None) -> None:
         self.root = root
         self.today = today
         self.run_id = run_id
+        # 이름 -> 정리 대상 폴더 **밖**의 실제 경로. 백업용이다(SD카드·USB).
+        # 러너가 설정(`config.local.json`)에서 풀어서 넣어 준다. 여기 없는
+        # 이름으로는 밖으로 못 나간다 — 손으로 쓴 경로는 아예 못 나간다.
+        # 등록이라는 한 단계가 곧 안전장치다: 오타는 등록되어 있지 않다.
+        self.external: dict[str, Path] = dict(external or {})
         self._entries: list[FileEntry] = list(entries)
         self._rel: dict[Path, str] = {}
         self._name: dict[Path, str] = {}

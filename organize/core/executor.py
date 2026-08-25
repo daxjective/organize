@@ -44,7 +44,7 @@ def _changed(path: Path, expected: tuple[int, float]) -> bool:
     return st.st_size != size or abs(st.st_mtime - mtime) > 1.0
 
 
-def _guard_within_root(dst: Path, real_root: str, *, block: str) -> None:
+def _guard_destination(dst: Path, allowed: tuple[str, ...], *, block: str) -> None:
     """`dst` 가 실제로도(심볼릭 링크를 다 푼 뒤에도) root 안인지 확인한다.
 
     `os.path.realpath` 는 존재하는 구간까지는 심볼릭 링크를 따라가고, 아직
@@ -56,11 +56,14 @@ def _guard_within_root(dst: Path, real_root: str, *, block: str) -> None:
     실제로 쓰기 직전인 여기서 다시 막는다.
     """
     real_dst = os.path.realpath(dst)
-    if real_dst != real_root and not real_dst.startswith(real_root + os.sep):
-        raise OrganizeError(
-            f"'{block}' 작업의 목적지가 실제로는 정리 대상 폴더 밖을 가리킵니다: {dst}",
-            hint="목적지 경로 중간에 정리 대상 폴더 밖을 가리키는 심볼릭 링크가 있는지 확인해 주세요.",
-        )
+    for base in allowed:
+        if real_dst == base or real_dst.startswith(base + os.sep):
+            return
+    raise OrganizeError(
+        f"'{block}' 작업의 목적지가 실제로는 허락되지 않은 곳을 가리킵니다: {dst}",
+        hint="정리 대상 폴더 안이거나, organize paths 로 등록한 위치여야 합니다. "
+             "경로 중간에 밖을 가리키는 심볼릭 링크가 있는지도 확인해 주세요.",
+    )
 
 
 def _mkdir_recording(dst: Path) -> list[Path]:
@@ -93,13 +96,14 @@ def execute(built: BuiltPlan) -> ExecResult:
     result = ExecResult()
     remap: dict[Path, Path] = {}          # 계획된 경로 -> 실제로 놓인 경로
     quarantined: list[dict] = []
-    real_root = os.path.realpath(built.root)
+    # root 와 등록된 백업 위치를 함께 허용 목록으로 만든다.
+    allowed = tuple(os.path.realpath(p) for p in (built.root, *built.external))
 
     for a in built.plan.actions:
         src_label = str(a.src) if a.src is not None else ""
         try:
             if a.kind == "mkdir":
-                _guard_within_root(a.dst, real_root, block=a.block)
+                _guard_destination(a.dst, allowed, block=a.block)
                 for folder in _mkdir_recording(a.dst):
                     result.done.append({"kind": "mkdir", "final": str(folder)})
                 continue
@@ -116,7 +120,7 @@ def execute(built: BuiltPlan) -> ExecResult:
                 continue
 
             if a.kind in ("move", "quarantine"):
-                _guard_within_root(a.dst, real_root, block=a.block)
+                _guard_destination(a.dst, allowed, block=a.block)
                 final = move_file(src, a.dst)
                 if final != a.dst:
                     remap[a.dst] = final
@@ -127,7 +131,7 @@ def execute(built: BuiltPlan) -> ExecResult:
                     quarantined.append({"from": str(src), "to": str(final)})
 
             elif a.kind == "extract":
-                _guard_within_root(a.dst, real_root, block=a.block)
+                _guard_destination(a.dst, allowed, block=a.block)
                 a.dst.parent.mkdir(parents=True, exist_ok=True)
                 final = claim_path(a.dst)      # 이름을 먼저 잡는다(덮어쓰기 방지)
                 try:

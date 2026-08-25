@@ -12,7 +12,7 @@ from organize import __version__
 from organize.aliases import BUILTIN
 from organize.core.executor import (execute, prepare_runlog, write_json_atomic,
                                     write_runlog)
-from organize.core.runner import build_plan, make_run_id
+from organize.core.runner import build_plan, external_names, make_run_id
 from organize.core.undo import list_runs
 from organize.core.undo import undo as undo_run
 from organize.core.undo import unreadable_runs
@@ -142,6 +142,37 @@ def _cmd_run(args) -> int:
     return _run_recipe(recipe, args, apply=bool(args.apply), label=args.recipe)
 
 
+def _resolve_external(recipe, *, apply: bool) -> dict[str, Path]:
+    """레시피가 밖으로 내보내려는 이름들을 실제 경로로 푼다.
+
+    **등록되지 않은 이름이면 여기서 멈춘다** — 파일을 하나도 건드리기 전이다.
+    `--apply` 일 때는 그 위치가 실제로 있는지도 본다: SD카드·USB 는 안 꽂혀
+    있을 수 있고, 그때 반쯤 옮기다 멈추면 사용자가 수습할 수 없다.
+    미리보기는 꽂지 않은 채로도 무엇이 어디로 갈지 볼 수 있어야 하므로
+    존재 여부를 따지지 않는다.
+    """
+    names = external_names(recipe.steps)
+    if not names:
+        return {}
+    cfg = load_config(repo_root())
+    out: dict[str, Path] = {}
+    for name in names:
+        try:
+            path = resolve_alias(f"@{name}", cfg)
+        except AliasNotDefined as e:
+            raise OrganizeError(
+                f"이 레시피가 보내려는 '@{name}' 위치가 등록되어 있지 않습니다.",
+                hint=f"먼저 등록해 주세요:\n    organize paths --set {name}=<경로>\n"
+                     f"    organize paths --pick {name}   (탐색기에서 고르기)") from e
+        if apply and not path.is_dir():
+            raise OrganizeError(
+                f"보낼 위치 '@{name}' 를 찾을 수 없습니다: {path}",
+                hint="USB·SD카드라면 꽂혀 있는지, 드라이브 문자가 바뀌지 않았는지 "
+                     f"확인해 주세요. 위치를 바꾸려면: organize paths --set {name}=<경로>")
+        out[name] = path
+    return out
+
+
 def _run_recipe(recipe, args, *, apply: bool, label: str) -> int:
     """레시피 하나를 미리보거나 실행한다. `preview`/`run`/`do` 가 모두 이걸 쓴다.
 
@@ -158,6 +189,7 @@ def _run_recipe(recipe, args, *, apply: bool, label: str) -> int:
     # 미리보기도 여기서 막는다 — 사용자가 미리보기 화면을 믿고 --apply 를
     # 치기 때문이다. `undo`·`doctor`·`paths` 는 이 검사를 하지 않는다.
     refuse_unsupported(load_config(repo_root()))
+    external = _resolve_external(recipe, apply=apply)
     roots = _resolve_roots(recipe, args.root)
     run_id = make_run_id(datetime.now())
 
@@ -185,7 +217,8 @@ def _run_recipe(recipe, args, *, apply: bool, label: str) -> int:
         # 여전히 통해야 한다.
         try:
             built = build_plan(root, recipe.steps, today=date.today(), run_id=run_id,
-                               profiles_dir=repo_root() / "profiles")
+                               profiles_dir=repo_root() / "profiles",
+                               external=external)
             _print_plan(built, args.verbose)
             planned_actions += len(built.plan.actions)
 

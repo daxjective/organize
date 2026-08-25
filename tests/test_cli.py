@@ -818,3 +818,62 @@ def test_undo_mentions_records_it_could_not_use(project, capsys):
 
     assert "되돌림" in out
     assert "99999999-000000" in out, "못 되돌리는 기록이 있으면 어느 것인지 말해야 한다"
+
+
+# ── 다른 드라이브로 백업 (SD카드·USB) ────────────────────────────
+def test_a_recipe_can_send_files_to_a_registered_place(project, tmp_path, capsys):
+    """이 도구를 만든 이유 — 백업. 레시피가 `@백업` 으로 밖에 내보낸다."""
+    repo, work = project
+    usb = tmp_path / "USB"
+    usb.mkdir()
+    (repo / "config.local.json").write_text(
+        json.dumps({"paths": {"백업": str(usb)}}, ensure_ascii=False), encoding="utf-8")
+    (repo / "recipes" / "t.json").write_text(json.dumps({
+        "name": "백업", "roots": [str(work)],
+        "steps": [{"block": "route", "profile": "desktop", "dest": "@백업"}],
+    }, ensure_ascii=False), encoding="utf-8")
+    old_file(work / "보고서.pdf")
+
+    assert cli.main(["run", "t", "--apply"]) == 0
+    assert (usb / "01_Docs" / "보고서.pdf").read_bytes() == b"DATA"
+    assert not (work / "보고서.pdf").exists()
+
+    # 그리고 되돌아와야 한다 — 드라이브를 넘었어도
+    assert cli.main(["undo", "--root", str(work)]) == 0
+    assert (work / "보고서.pdf").read_bytes() == b"DATA"
+
+
+def test_an_unregistered_backup_name_fails_before_touching_anything(project, capsys):
+    """등록 안 한 이름이면 **파일을 건드리기 전에** 멈춘다."""
+    repo, work = project
+    (repo / "recipes" / "t.json").write_text(json.dumps({
+        "name": "백업", "roots": [str(work)],
+        "steps": [{"block": "route", "profile": "desktop", "dest": "@없는것"}],
+    }, ensure_ascii=False), encoding="utf-8")
+    old_file(work / "보고서.pdf")
+
+    assert cli.main(["run", "t", "--apply"]) == 1
+    out = capsys.readouterr().out
+    assert "없는것" in out
+    assert "paths --set" in out or "paths --pick" in out
+    assert (work / "보고서.pdf").exists(), "막았으면 파일은 그대로여야 한다"
+
+
+def test_a_backup_drive_that_is_not_plugged_in_stops_before_moving(project, tmp_path, capsys):
+    """SD카드·USB 는 안 꽂혀 있을 수 있다. 그때 **한 파일도 옮기지 않는다.**"""
+    repo, work = project
+    없는드라이브 = tmp_path / "안꽂힌USB"          # 만들지 않는다
+    (repo / "config.local.json").write_text(
+        json.dumps({"paths": {"백업": str(없는드라이브)}}, ensure_ascii=False), encoding="utf-8")
+    (repo / "recipes" / "t.json").write_text(json.dumps({
+        "name": "백업", "roots": [str(work)],
+        "steps": [{"block": "route", "profile": "desktop", "dest": "@백업"}],
+    }, ensure_ascii=False), encoding="utf-8")
+    old_file(work / "보고서.pdf")
+
+    code = cli.main(["run", "t", "--apply"])
+    out = capsys.readouterr().out
+
+    assert code == 1
+    assert "백업" in out
+    assert (work / "보고서.pdf").exists(), "드라이브가 없으면 한 파일도 옮기지 않는다"

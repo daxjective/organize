@@ -496,3 +496,48 @@ def test_prepare_runlog_leaves_no_empty_record_when_the_skeleton_write_fails(
 
     left = list((tmp_path / ".organize" / "runs").glob("*"))
     assert left == [], f"잡아 둔 빈 자리가 남았다: {left}"
+
+
+# ── 등록된 밖으로 실제로 옮기기 ───────────────────────────────────
+def test_execute_moves_to_a_registered_place_outside_the_root(tmp_path):
+    """백업의 본체 — 정리 대상 폴더 **밖**으로 실제로 옮긴다.
+
+    실행기는 목적지가 root 밖이면 막아 왔다(심볼릭 링크 탈출 방어).
+    등록된 곳은 통과시켜야 한다. 안 그러면 계획은 세워지는데 실행에서 막혀
+    "미리보기와 실행이 다르다" 가 된다 — 이 도구가 가장 경계하는 것이다.
+    """
+    root = tmp_path / "작업"
+    root.mkdir()
+    usb = tmp_path / "USB"
+    src = root / "보고서.pdf"
+    src.write_bytes(b"DATA")
+
+    b = BuiltPlan(root=root, run_id="r1", plan=Plan(actions=[
+        Action("mkdir", None, usb / "백업", "폴더", "route"),
+        Action("move", src, usb / "백업" / "보고서.pdf", "이동", "route")]),
+        external=[usb])
+
+    result = execute(b)
+
+    assert not result.failed, result.failed
+    assert (usb / "백업" / "보고서.pdf").read_bytes() == b"DATA"
+    assert not src.exists()
+
+
+def test_execute_still_refuses_a_place_that_was_not_registered(tmp_path):
+    """등록하지 않은 밖은 실행기가 계속 막는다 — 마지막 관문이다."""
+    root = tmp_path / "작업"
+    root.mkdir()
+    src = root / "보고서.pdf"
+    src.write_bytes(b"DATA")
+    남의곳 = tmp_path / "남의곳"
+
+    b = BuiltPlan(root=root, run_id="r1", plan=Plan(actions=[
+        Action("move", src, 남의곳 / "보고서.pdf", "이동", "route")]),
+        external=[tmp_path / "USB"])          # USB 만 등록했다
+
+    result = execute(b)
+
+    assert result.failed, "등록 안 한 곳으로 나가면 막아야 한다"
+    assert src.exists(), "막았으면 원본은 그대로여야 한다"
+    assert not (남의곳 / "보고서.pdf").exists()

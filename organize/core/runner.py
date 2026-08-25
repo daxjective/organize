@@ -34,6 +34,11 @@ class BuiltPlan:
     # 갔을 수 있으므로 write_runlog 은 반드시 이 경로에 써야 한다 — 어긋나면
     # 준비한 자리와 결과를 쓴 자리가 달라져 남의 기록을 덮어쓴다.
     runlog_path: Path | None = None
+    # 정리 대상 폴더 **밖**인데 사용자가 등록해서 허락한 곳들(백업 대상).
+    # 실행기가 "밖으로 나가면 막는다" 를 판정할 때 이 목록을 예외로 본다.
+    # 계획 단계(dest_folder)와 실행 단계(_guard_destination)가 **같은 목록**을
+    # 봐야 한다 — 어긋나면 계획은 세워지는데 실행에서 막혀 미리보기가 거짓말이 된다.
+    external: list[Path] = field(default_factory=list)
 
 
 def make_run_id(now: datetime) -> str:
@@ -87,14 +92,34 @@ def _to_config(step: dict, profiles_dir: Path, block_name: str,
     )
 
 
+def external_names(steps: list[dict]) -> list[str]:
+    """레시피가 밖으로 내보내려는 이름들(`dest: "@백업"`)을 모은다.
+
+    부르는 쪽이 이 이름들을 설정에서 풀어 `build_plan(external=...)` 로 넘긴다.
+    러너가 직접 설정을 읽지 않는 이유는, 계획을 세우는 일과 이 PC 의 설정을
+    읽는 일이 다른 관심사이기 때문이다(테스트도 설정 없이 돌아야 한다).
+    """
+    names: list[str] = []
+    for step in steps:
+        dest = step.get("dest")
+        if isinstance(dest, str) and dest.startswith("@"):
+            name = dest[1:].partition("/")[0]
+            if name and name not in names:
+                names.append(name)       # 순서 유지 — 결정적이어야 한다
+    return names
+
+
 def build_plan(root: Path, steps: list[dict], *, today: date, run_id: str,
-               profiles_dir: Path, now: float | None = None) -> BuiltPlan:
+               profiles_dir: Path, now: float | None = None,
+               external: dict[str, Path] | None = None) -> BuiltPlan:
     # 하위 폴더까지 읽는다. dedup 이 참고해야 하기 때문이다.
     # files_at("") 은 직속만 돌려주므로 하위 폴더 파일이 함부로 옮겨지지는 않는다.
     scanned = scan(root, recursive=True, now=now)
-    ctx = Context(root=root, entries=scanned.entries, today=today, run_id=run_id)
+    ctx = Context(root=root, entries=scanned.entries, today=today, run_id=run_id,
+                  external=external)
 
-    built = BuiltPlan(root=root, run_id=run_id, plan=Plan())
+    built = BuiltPlan(root=root, run_id=run_id, plan=Plan(),
+                      external=sorted(set((external or {}).values()), key=str))
     built.plan.skipped.extend(scanned.skipped)
     built.snapshot = {str(e.path): (e.size, e.mtime) for e in scanned.entries}
 

@@ -55,12 +55,47 @@ def dest_folder(ctx: Context, rel: str, *, block: str) -> Path:
     심볼릭 링크는 따지지 않는다 — `normpath` 는 순수 문자열 정규화다.
     링크를 통한 탈출은 실행기가 옮기기 직전에 막는다(Task 16).
     """
+    if rel.startswith("@"):
+        return _external_folder(ctx, rel, block=block)
+
     folder = Path(os.path.normpath(ctx.root / rel))
     if not folder.is_relative_to(ctx.root):
         raise OrganizeError(
             f"'{block}' 작업의 목적지가 정리 대상 폴더 밖을 가리킵니다: {rel}",
             hint=f"목적지는 {ctx.root} 안쪽이어야 합니다. "
-                 "'/' 로 시작하는 절대경로나 '..' 는 쓸 수 없습니다.")
+                 "'/' 로 시작하는 절대경로나 '..' 는 쓸 수 없습니다. "
+                 "밖으로 내보내려면 먼저 이름을 등록하세요: "
+                 "organize paths --set 백업=E:/정리  그다음 dest 에 @백업 을 씁니다.")
+    return folder
+
+
+def _external_folder(ctx: Context, rel: str, *, block: str) -> Path:
+    """`@백업` 처럼 **등록된 이름**으로 정리 대상 폴더 밖에 보낸다.
+
+    이 도구를 만든 이유가 백업이다 — SD카드·USB 로 내보내는 것이 포함된다.
+    그렇다고 손으로 쓴 경로를 열어 주면 오타 하나로 파일이 엉뚱한 곳에
+    흩어진다. **등록이라는 한 단계가 안전장치다**: 오타는 등록되어 있지 않다.
+    `organize paths --pick 백업` 으로 탐색기에서 골라 등록할 수도 있다.
+    """
+    name, _, tail = rel[1:].partition("/")
+    if not name:
+        raise OrganizeError(
+            f"'{block}' 작업의 목적지에 이름이 없습니다: {rel}",
+            hint="'@백업' 처럼 등록한 이름을 적어 주세요.")
+    base = ctx.external.get(name)
+    if base is None:
+        raise OrganizeError(
+            f"'{block}' 작업이 보내려는 '@{name}' 위치가 등록되어 있지 않습니다.",
+            hint=f"먼저 등록해 주세요:\n    organize paths --set {name}=<경로>\n"
+                 f"    organize paths --pick {name}   (탐색기에서 고르기)")
+    # 등록된 곳 **아래**로만 간다. tail 에 '..' 가 섞여 등록한 곳 밖으로
+    # 새는 것까지 여기서 막는다 — 등록은 그 폴더를 허락한 것이지 그 위를
+    # 허락한 것이 아니다.
+    folder = Path(os.path.normpath(base / tail)) if tail else Path(os.path.normpath(base))
+    if not folder.is_relative_to(base):
+        raise OrganizeError(
+            f"'{block}' 작업의 목적지가 '@{name}' 밖을 가리킵니다: {rel}",
+            hint="등록한 폴더 안쪽만 쓸 수 있습니다. '..' 는 쓸 수 없습니다.")
     return folder
 
 
