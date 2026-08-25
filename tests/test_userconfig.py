@@ -63,6 +63,47 @@ def test_builtin_alias_with_subpath(monkeypatch, tmp_path):
     assert resolve_alias("@documents/메모", cfg) == tmp_path / "문서" / "메모"
 
 
+# ── 내장 이름 vs 사용자가 등록한 값 — 어느 쪽이 이기는가 ────────────
+# 이 우선순위를 못박는 테스트가 **하나도 없었다.** 그래서 내장 이름을
+# 설정에 적어도 영영 무시되는 결함이 여덟 달 동안 안 잡혔다. 설정 화면의
+# [다시 지정] 이 저장만 하고 아무 일도 안 하는 것이 그 증상이다.
+
+def test_a_registered_path_beats_the_builtin_guess(monkeypatch, tmp_path):
+    """PC 를 옮기면 OS 추측이 틀린다(OneDrive 백업 등). **사용자가 적은 값이 이긴다.**"""
+    monkeypatch.setattr(userconfig, "builtin_path",
+                        lambda name: tmp_path / "OS가찍은바탕화면")
+    내가고른것 = tmp_path / "진짜바탕화면"
+    내가고른것.mkdir()
+    cfg = UserConfig(paths={"desktop": [str(내가고른것)]}, folder_names={})
+    assert resolve_alias("@desktop", cfg) == 내가고른것
+
+
+def test_a_registered_builtin_name_also_wins_for_subpaths(monkeypatch, tmp_path):
+    """꼬리(`@desktop/보관`)가 붙어도 앞머리는 등록한 값에서 온다."""
+    monkeypatch.setattr(userconfig, "builtin_path",
+                        lambda name: tmp_path / "OS가찍은바탕화면")
+    내가고른것 = tmp_path / "진짜바탕화면"
+    내가고른것.mkdir()
+    cfg = UserConfig(paths={"desktop": [str(내가고른것)]}, folder_names={})
+    assert resolve_alias("@desktop/보관", cfg) == 내가고른것 / "보관"
+
+
+def test_a_builtin_name_that_is_not_registered_still_uses_the_os(monkeypatch, tmp_path):
+    """등록하지 않은 내장 이름은 **예전 그대로** OS 가 답한다(회귀 없음)."""
+    monkeypatch.setattr(userconfig, "builtin_path",
+                        lambda name: tmp_path / "OS가찍은바탕화면" if name == "desktop" else None)
+    cfg = UserConfig(paths={"백업": ["X:/백업"]}, folder_names={})
+    assert resolve_alias("@desktop", cfg) == tmp_path / "OS가찍은바탕화면"
+
+
+def test_a_registered_builtin_name_falls_back_to_the_last_entry(monkeypatch, tmp_path):
+    """USB 를 안 꽂았어도 목록의 마지막을 쓴다 — 사슬 규칙은 내장 이름에도 같다."""
+    monkeypatch.setattr(userconfig, "builtin_path", lambda name: tmp_path / "OS가찍은것")
+    cfg = UserConfig(paths={"pictures": [str(tmp_path / "없음1"), str(tmp_path / "없음2")]},
+                     folder_names={})
+    assert resolve_alias("@pictures", cfg) == tmp_path / "없음2"
+
+
 def test_plain_path_passes_through(tmp_path):
     cfg = UserConfig(paths={}, folder_names={})
     assert resolve_alias(str(tmp_path), cfg) == tmp_path
@@ -148,3 +189,47 @@ def test_a_wrongly_shaped_config_is_a_korean_error_not_a_traceback(tmp_path, bad
     합친것 = ex.value.message + (ex.value.hint or "")
     for 원문 in ("AttributeError", "TypeError", "object has no attribute", "not iterable"):
         assert 원문 not in 합친것
+
+
+# ── 등록한 위치 지우기 (설정 화면의 [지우기]) ───────────────────────
+
+def test_remove_local_path_removes_only_that_name(tmp_path):
+    userconfig.save_local_path(tmp_path, "백업", "D:/백업")
+    userconfig.save_local_path(tmp_path, "사진보관", "E:/사진")
+
+    assert userconfig.remove_local_path(tmp_path, "백업") is True
+
+    cfg = load_config(tmp_path)
+    assert "백업" not in cfg.paths
+    assert cfg.paths["사진보관"] == ["E:/사진"], "다른 이름은 그대로 남아야 한다"
+
+
+def test_remove_local_path_returns_false_for_an_unknown_name(tmp_path):
+    userconfig.save_local_path(tmp_path, "백업", "D:/백업")
+    assert userconfig.remove_local_path(tmp_path, "없던이름") is False
+    assert load_config(tmp_path).paths["백업"] == ["D:/백업"]
+
+
+def test_remove_local_path_survives_a_missing_config_file(tmp_path):
+    """`config.local.json` 이 아직 없는 PC 에서 눌러도 죽지 않는다."""
+    assert not (tmp_path / "config.local.json").exists()
+    assert userconfig.remove_local_path(tmp_path, "백업") is False
+    assert not (tmp_path / "config.local.json").exists(), "없는 파일을 새로 만들지 않는다"
+
+
+def test_remove_local_path_keeps_an_empty_paths_map(tmp_path):
+    """마지막 하나를 지워도 `paths` 키는 빈 묶음으로 남는다."""
+    userconfig.save_local_path(tmp_path, "백업", "D:/백업")
+    assert userconfig.remove_local_path(tmp_path, "백업") is True
+
+    data = json.loads((tmp_path / "config.local.json").read_text(encoding="utf-8"))
+    assert data["paths"] == {}
+
+
+def test_remove_local_path_never_touches_the_shared_config(tmp_path):
+    """`config.default.json` 은 저장소 공용 파일이다 — 이 PC 의 [지우기] 가 건드리면 안 된다."""
+    write(tmp_path / "config.default.json", {"paths": {"archive": "@documents/Archive"}})
+    원본 = (tmp_path / "config.default.json").read_text(encoding="utf-8")
+
+    assert userconfig.remove_local_path(tmp_path, "archive") is False
+    assert (tmp_path / "config.default.json").read_text(encoding="utf-8") == 원본

@@ -156,6 +156,25 @@ def save_local_path(repo_root: Path, name: str, value: str) -> None:
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def remove_local_path(repo_root: Path, name: str) -> bool:
+    """`config.local.json` 에서 별칭 하나를 지운다. 없던 이름이면 False.
+
+    `save_local_path` 와 **같은 방식**으로 local 쪽만 건드린다 — 저장소 공용
+    파일(config.default.json)은 다른 PC 의 설정이라 지울 대상이 아니다.
+    다 지워도 `paths` 키 자체는 빈 묶음으로 남긴다: 키를 없애면 다음에
+    `save_local_path` 가 다시 만들 뿐이고, 파일을 열어 본 사람은 설정이
+    깨진 것으로 읽는다.
+    """
+    path = repo_root / "config.local.json"
+    data = _read(path)
+    paths = data.get("paths")
+    if not isinstance(paths, dict) or name not in paths:
+        return False
+    del paths[name]
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    return True
+
+
 def resolve_alias(spec: str, cfg: UserConfig, *,
                   _seen: tuple[str, ...] = ()) -> Path:
     """'@downloads', '@documents/메모', '~/foo', 'F:/day' 를 모두 받는다."""
@@ -164,19 +183,24 @@ def resolve_alias(spec: str, cfg: UserConfig, *,
 
     head, _, tail = spec[1:].partition("/")
 
-    base = builtin_path(head)
-    if base is None:
+    # **사용자가 적어 둔 값이 OS 의 추측을 이긴다.** 내장 이름(desktop 등)을
+    # 먼저 보면 `builtin_path` 가 절대 None 을 주지 않아 `cfg.paths` 까지
+    # 영영 내려오지 않는다 — 설정 화면에서 바탕화면 위치를 다시 지정해도
+    # 저장만 되고 무시된다. 이 도구의 존재 이유가 이식성이므로 순서를 뒤집었다.
+    if head in cfg.paths:
         if head in _seen:
             chain = " → ".join(f"@{n}" for n in (*_seen, head))
             raise AliasNotDefined(
                 f"'@{head}' 위치가 돌고 돌아 자기 자신을 가리킵니다: {chain}",
                 hint=f"config.local.json 에서 '@{head}' 가 가리키는 경로를 실제 폴더로 바꿔 주세요.",
             )
-        if head not in cfg.paths:
+        base = _first_existing(cfg.paths[head], cfg, _seen=(*_seen, head))
+    else:
+        base = builtin_path(head)
+        if base is None:
             raise AliasNotDefined(
                 f"'@{head}' 위치가 정해져 있지 않습니다.",
                 hint=f"다음 명령으로 지정할 수 있습니다:\n    organize paths --set {head}=<경로>",
             )
-        base = _first_existing(cfg.paths[head], cfg, _seen=(*_seen, head))
 
     return base / tail if tail else base

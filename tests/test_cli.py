@@ -912,3 +912,26 @@ def test_preview_does_not_cry_wolf_when_nothing_leaves(project, capsys):
     cli.main(["preview", "t"])
     out = capsys.readouterr().out
     assert "내보냅니다" not in out
+
+
+# ── organize paths (인자 없는 목록) ──────────────────────────────
+def test_paths_lists_a_registered_builtin_name_only_once(project, tmp_path, capsys):
+    """내장 이름을 등록하면 목록에 **두 번 찍혔다.**
+
+    `BUILTIN` 을 찍고 `sorted(cfg.paths)` 를 또 찍기 때문이다. 같은 줄이 두 번
+    나오면 "설정이 두 벌인가" 로 읽힌다. 그리고 찍히는 경로는 사용자가 등록한
+    쪽이어야 한다 — OS 추측이 아니라.
+    """
+    repo, _ = project
+    내가고른것 = tmp_path / "진짜바탕화면"
+    내가고른것.mkdir()
+    (repo / "config.local.json").write_text(
+        json.dumps({"paths": {"desktop": str(내가고른것)}}, ensure_ascii=False),
+        encoding="utf-8")
+
+    assert cli.main(["paths"]) == 0
+    out = capsys.readouterr().out
+
+    줄들 = [line for line in out.splitlines() if line.strip().startswith("@desktop")]
+    assert len(줄들) == 1, f"@desktop 이 한 번만 나와야 한다: {줄들}"
+    assert str(내가고른것) in 줄들[0], "등록한 값이 이겨야 한다"

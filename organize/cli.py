@@ -768,10 +768,18 @@ def _cmd_paths(args) -> int:
         return 0
 
     cfg = load_config(root)
+    # 내장 이름(desktop 등)을 사용자가 등록하면 두 목록에 다 들어 있다.
+    # 그대로 두 번 찍으면 같은 줄이 두 번 나와 "설정이 두 벌인가" 로 읽힌다
+    # — `doctor` 가 checked_folders 로 막아 둔 것과 같은 문제다.
+    찍은이름: list[str] = []
     for name in BUILTIN:
         print(f"  @{name:<10} {resolve_alias(f'@{name}', cfg)}")
+        찍은이름.append(name)
     for name in sorted(cfg.paths):
+        if name in 찍은이름:
+            continue
         print(f"  @{name:<10} {resolve_alias(f'@{name}', cfg)}")
+        찍은이름.append(name)
     print("\n  위치를 바꾸려면:")
     print("      organize paths --set <이름>=<경로>")
     return 0
