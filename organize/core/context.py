@@ -69,6 +69,18 @@ class Context:
         name = self._name.get(entry.path, entry.path.name)
         return (self.root / rel / name) if rel else (self.root / name)
 
+    def origin_of(self, path: Path) -> Path | None:
+        """지금 이 경로에 있는 파일의 **원래 경로**. 모르면 None.
+
+        화면이 체크박스를 **파일 단위**로 묶으려면 Action 하나가 어느 원본에서
+        왔는지 알아야 한다. route 가 옮긴 뒤 by_date 가 또 옮기면 `Action.src`
+        는 중간 경로라서 원본이 아니다.
+
+        **`apply()` 전에 물어야 한다.** apply 가 `_by_current` 에서 옛 경로를
+        지우므로, 뒤에 물으면 그 파일은 이미 사라지고 없어 None 이 돌아온다.
+        """
+        return self._by_current.get(path)
+
     def all_files(self) -> list[FileEntry]:
         alive = [e for e in self._entries if e.path not in self._gone]
         return sorted(alive, key=lambda e: (self.rel_of(e), e.path.name))

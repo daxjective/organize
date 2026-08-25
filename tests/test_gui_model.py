@@ -508,3 +508,91 @@ def test_save_recipe_write_failure_is_a_korean_message_not_the_raw_exception(rep
     with pytest.raises(OrganizeError) as ex:
         s.save_recipe("x")
     assert "some very specific os-level error text" not in ex.value.message
+
+
+# ── 파일 하나만 이번 실행에서 빼기 (미리보기 표의 체크박스) ────────────────
+
+def test_rows_carry_the_key_of_the_file_they_came_from(repo, work):
+    """줄마다 '어느 원본 파일인가' 가 붙어 있어야 체크박스를 파일 단위로 묶는다."""
+    s = Session(repo_root=repo)
+    s.set_root(work)
+    s.set_recipe("정리")
+
+    view = s.preview()
+
+    이동 = [r for r in view.rows if r.kind == "이동"]
+    assert 이동[0].key == str(work / "보고서.pdf")
+    폴더 = [r for r in view.rows if r.kind == "폴더 생성"]
+    assert 폴더, "01_Docs 를 만드는 줄이 있어야 한다"
+    assert 폴더[0].key == "", "폴더 생성은 어느 파일 것도 아니다"
+
+
+def test_set_excluded_turns_the_apply_button_off(repo, work):
+    """체크를 바꿨는데 예전 계획으로 실행되면 사용자가 본 적 없는 일이 벌어진다."""
+    s = Session(repo_root=repo)
+    s.set_root(work)
+    s.set_recipe("정리")
+    s.preview()
+    assert s.can_apply
+
+    s.set_excluded({str(work / "보고서.pdf")})
+
+    assert not s.can_apply, "체크를 바꿨으면 미리보기를 다시 봐야 한다"
+    assert s.excluded_keys() == {str(work / "보고서.pdf")}
+
+
+def test_an_excluded_file_disappears_from_the_next_preview(repo, work):
+    old_file(work / "사진.png")
+    s = Session(repo_root=repo)
+    s.set_root(work)
+    s.set_recipe("정리")
+
+    view = s.preview()
+    assert {r.name for r in view.rows if r.kind == "이동"} == {"보고서.pdf", "사진.png"}
+    key = next(r.key for r in view.rows if r.name == "보고서.pdf")
+
+    s.set_excluded({key})
+    다시 = s.preview()
+
+    assert not any(r.name == "보고서.pdf" for r in 다시.rows), "뺀 파일은 표에서 사라진다"
+    assert any(r.name == "사진.png" for r in 다시.rows), "안 뺀 파일은 그대로다"
+    assert 다시.skipped > view.skipped, "뺀 파일은 '손대지 않음' 에 잡혀야 한다"
+
+
+def test_choosing_another_folder_clears_the_exclusions(repo, work, tmp_path):
+    """다른 폴더인데 옛 제외가 남아 있으면 설명할 수 없는 결과가 된다."""
+    다른폴더 = tmp_path / "다른작업"
+    old_file(다른폴더 / "메모.pdf")
+    s = Session(repo_root=repo)
+    s.set_root(work)
+    s.set_recipe("정리")
+    s.preview()
+    s.set_excluded({str(work / "보고서.pdf")})
+
+    s.set_root(다른폴더)
+
+    assert s.excluded_keys() == set()
+
+
+def test_changing_the_steps_clears_the_exclusions(repo, work):
+    s = Session(repo_root=repo)
+    s.set_root(work)
+    s.set_recipe("정리")
+    s.preview()
+    s.set_excluded({str(work / "보고서.pdf")})
+
+    s.set_steps(["dedup"])
+
+    assert s.excluded_keys() == set()
+
+
+def test_excluded_keys_hands_out_a_copy(repo, work):
+    """받은 쪽이 고쳐도 세션 상태가 조용히 바뀌면 안 된다 — _invalidate 를 안 지난다."""
+    s = Session(repo_root=repo)
+    s.set_root(work)
+    s.set_recipe("정리")
+    s.set_excluded({str(work / "보고서.pdf")})
+
+    s.excluded_keys().add("엉뚱한것")
+
+    assert s.excluded_keys() == {str(work / "보고서.pdf")}

@@ -36,6 +36,10 @@ class Row:
     dest: str                  # 어디로 (전체 경로)
     reason: str                # 왜
     leaving: bool = False      # 정리 대상 폴더 **밖**으로 나가는가
+    # 이 줄이 나온 **원본 파일**의 절대경로 문자열. 체크박스를 파일 단위로
+    # 묶는 열쇠다 — 한 파일이 두 번 옮겨지면 줄이 둘인데 체크박스는 하나여야
+    # 한다. 폴더 생성처럼 어느 파일 것도 아닌 줄은 빈 문자열.
+    key: str = ""
 
 
 @dataclass
@@ -83,6 +87,8 @@ class Session:
         # 레시피 드롭다운과 체크박스는 둘 다 이 steps 를 채우는 두 가지 방법일
         # 뿐이다 — Recipe 객체를 따로 들고 있으면 체크박스가 끼어들 자리가 없다.
         self._steps: list[dict] = []
+        # 이번 실행에서 뺄 파일들(Row.key = 원본 절대경로 문자열).
+        self._excluded: set[str] = set()
         # 미리보기 결과. **이것이 있어야만 실행할 수 있다.**
         self._built: dict[Path, BuiltPlan] | None = None
         self._applied_root: Path | None = None
@@ -95,6 +101,8 @@ class Session:
         new = Path(folder) if folder else None
         if new != self._root:
             self._invalidate()          # 대상이 바뀌면 본 것이 무효다
+        # 다른 폴더인데 옛 제외가 남아 있으면 설명할 수 없는 결과가 된다.
+        self._clear_excluded()
         self._root = new
 
     def set_recipe(self, name: str | None) -> None:
@@ -106,6 +114,7 @@ class Session:
         if not name:
             self._recipe_name, self._steps = None, []
             self._invalidate()
+            self._clear_excluded()
             return
         recipe = load_recipe(find_recipe(self.repo_root / "recipes", name))
         new_steps = list(recipe.steps)
@@ -115,6 +124,8 @@ class Session:
         # Task 에서 드롭다운을 새로고침할 때마다 미리보기가 날아간다.
         if name != self._recipe_name or new_steps != self._steps:
             self._invalidate()
+            # 할 일이 바뀌었으면 어느 파일을 뺐는지도 의미가 없어진다.
+            self._clear_excluded()
         self._recipe_name, self._steps = name, new_steps
 
     def set_steps(self, ids: list[str]) -> None:
@@ -127,6 +138,7 @@ class Session:
         self._recipe_name = None
         self._steps = steps
         self._invalidate()
+        self._clear_excluded()
 
     def checked_ids(self) -> list[str]:
         """지금 steps 중 카탈로그로 알아볼 수 있는 것들의 id, steps 순서대로.
@@ -195,6 +207,39 @@ class Session:
         self._recipe_name = name          # 드롭다운이 방금 저장한 것을 가리켜야 한다
         return path
 
+    # ── 이번 실행에서 뺄 파일 ────────────────────────────────────
+    def set_excluded(self, keys: set[str] | list[str]) -> None:
+        """미리보기 표에서 체크를 끈 파일들(`Row.key`)을 기억한다.
+
+        **여기서 다시 계획을 세우지 않는다. 창이 이 뒤에 `preview()` 를 부르는
+        책임을 진다.** 창은 체크를 여러 개 껐다 켤 수 있고, 그때마다 계획을
+        통째로 다시 세우면 느리기 때문이다.
+
+        대신 **실행 버튼이 꺼진다**(`can_apply` == False). 이것이 핵심
+        안전장치다 — 체크를 바꿨는데 예전 계획으로 실행되면 사용자가 본 적
+        없는 일이 벌어진다.
+        """
+        self._excluded = {str(k) for k in keys}
+        self._invalidate()
+
+    def excluded_keys(self) -> set[str]:
+        """지금 뺀 파일들의 key. 창이 체크 상태를 그리는 데 쓴다.
+
+        **복사본을 준다** — 받은 쪽이 고치면 `_invalidate()` 를 안 지나고
+        세션 상태가 조용히 바뀐다.
+        """
+        return set(self._excluded)
+
+    def _clear_excluded(self) -> None:
+        """제외 목록을 비운다. 비울 것이 있었으면 **미리보기도 함께 버린다.**
+
+        체크 상태와 세워 둔 계획이 갈라지면, 화면은 다 켜진 체크박스를 그리는데
+        실행은 뺀 계획으로 도는 상태가 된다 — 사용자가 설명할 수 없는 결과다.
+        """
+        if self._excluded:
+            self._excluded = set()
+            self._invalidate()
+
     def _invalidate(self) -> None:
         """미리보기 결과를 버린다.
 
@@ -244,14 +289,20 @@ class Session:
         built = build_plan(root, steps, today=date.today(),
                            run_id=make_run_id(datetime.now()),
                            profiles_dir=self.repo_root / "profiles",
-                           external=external)
+                           external=external,
+                           # 뺀 파일은 블록이 **아예 못 보게** 한다. 만들어진
+                           # 계획에서 골라내면 빈 폴더가 생기고 `_(1)` 이 남는다
+                           # (runner.build_plan 의 설명 참고).
+                           exclude={Path(k) for k in self._excluded})
         self._built = {root: built}
         return self._view(built)
 
     def _view(self, built: BuiltPlan) -> PreviewView:
         rows: list[Row] = []
         나가는것: dict[Path, int] = {}
-        for a in built.plan.actions:
+        # strict=True 로 묶는다. 길이가 어긋나면 **화면이 엉뚱한 파일에 체크를
+        # 붙인다** — 조용히 밀린 채로 그리느니 여기서 터지는 편이 낫다.
+        for a, origin in zip(built.plan.actions, built.origins, strict=True):
             leaving = False
             if a.dst is not None and not a.dst.is_relative_to(built.root):
                 for base in built.external:
@@ -265,7 +316,8 @@ class Session:
                 name=a.src.name if a.src else "",
                 dest=str(a.dst) if a.dst else "",
                 reason=a.reason,
-                leaving=leaving))
+                leaving=leaving,
+                key=str(origin) if origin is not None else ""))
 
         warnings = [
             f"이 정리는 파일 {n}개를 정리 대상 폴더 밖으로 내보냅니다 → {base}"

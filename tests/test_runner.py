@@ -278,3 +278,213 @@ def test_string_condition_value_in_a_recipe_is_normalized_not_walked(tmp_path, p
                        today=date(2026, 8, 21), run_id="r1", profiles_dir=profiles_dir)
     moved = [a for a in built.plan.actions if a.kind == "move"]
     assert [a.src.name for a in moved] == ["보고서.pdf"]
+
+
+# ── Task 10: 파일 하나만 이번 실행에서 빼기 (exclude) ──────────────────────
+#
+# 스캐너는 **1분 안에 바뀐 파일**을 "받는 중" 으로 보고 걸러낸다. 방금 만든
+# 테스트 파일이 전부 거기 걸리면 계획이 통째로 비고, 그러면 테스트는 아무것도
+# 확인하지 않은 채 초록불이 된다(이 프로젝트가 여러 번 물린 자리다).
+# 그래서 아래 테스트는 파일 시각을 되돌리는 대신 **가짜 현재 시각**을 넘긴다.
+NOW = 1e12
+
+ROUTE = {"block": "route", "profile": "desktop"}
+
+
+def new_file(path: Path, data: bytes = b"DATA") -> Path:
+    """시각을 손대지 않은 파일. 대신 build_plan 에 now=NOW 를 넘겨서 통과시킨다."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
+    return path
+
+
+def test_excluded_file_gets_no_action(tmp_path, profiles_dir):
+    """뺀 파일을 src 로 삼는 동작이 하나도 없어야 한다."""
+    root = work(tmp_path)
+    빼기 = new_file(root / "가이드.pdf")
+    new_file(root / "보고서.pdf")
+
+    built = build_plan(root, [ROUTE], today=TODAY, run_id="r1",
+                       profiles_dir=profiles_dir, now=NOW, exclude={빼기})
+
+    srcs = [a.src for a in built.plan.actions if a.src is not None]
+    assert srcs, "다른 파일은 계획에 남아 있어야 한다(계획이 통째로 비면 확인한 것이 없다)"
+    assert 빼기 not in srcs
+    assert root / "보고서.pdf" in srcs
+
+
+def test_folder_for_an_excluded_file_is_not_created(tmp_path, profiles_dir):
+    """그 폴더로 갈 파일이 그것뿐이면 **폴더 생성도 함께 사라져야** 한다.
+
+    만들어진 Plan 에서 동작만 골라내는 방식으로는 mkdir 이 남아 빈 폴더가 생긴다.
+    """
+    root = work(tmp_path)
+    사진 = new_file(root / "사진.png")            # 이 파일만 02_Media 로 간다
+    new_file(root / "보고서.pdf")
+
+    before = build_plan(root, [ROUTE], today=TODAY, run_id="r1",
+                        profiles_dir=profiles_dir, now=NOW)
+    assert sorted(a.dst.name for a in before.plan.actions if a.kind == "mkdir") \
+        == ["01_Docs", "02_Media"]
+
+    after = build_plan(root, [ROUTE], today=TODAY, run_id="r1",
+                       profiles_dir=profiles_dir, now=NOW, exclude={사진})
+    assert [a.dst.name for a in after.plan.actions if a.kind == "mkdir"] == ["01_Docs"]
+
+
+def test_excluding_the_first_file_frees_the_name_for_the_second(tmp_path, profiles_dir):
+    """앞 파일을 빼면 뒤 파일은 `_(1)` 을 달 이유가 없어진다.
+
+    이것이 "만든 Plan 에서 골라내기" 로는 절대 안 되는 것이다 — 골라내면
+    이름이 `사진_(1).png` 로 그대로 남아, 사용자가 본 적 없는 이름이 생긴다.
+    """
+    root = work(tmp_path)
+    앞 = new_file(root / "하위1" / "사진.png", b"AAAA")
+    new_file(root / "하위2" / "사진.png", b"BBBB")
+    steps = [{"block": "route", "profile": "desktop", "target": "하위1", "dest": ""},
+             {"block": "route", "profile": "desktop", "target": "하위2", "dest": ""}]
+
+    before = build_plan(root, steps, today=TODAY, run_id="r1",
+                        profiles_dir=profiles_dir, now=NOW)
+    assert [a.dst.name for a in before.plan.actions if a.kind == "move"] \
+        == ["사진.png", "사진_(1).png"]
+
+    after = build_plan(root, steps, today=TODAY, run_id="r1",
+                       profiles_dir=profiles_dir, now=NOW, exclude={앞})
+    moves = [a for a in after.plan.actions if a.kind == "move"]
+    assert [a.src for a in moves] == [root / "하위2" / "사진.png"]
+    assert [a.dst.name for a in moves] == ["사진.png"], "앞 것을 뺐으니 이름이 비었다"
+
+
+def test_excluded_file_is_reported_as_skipped_with_a_reason(tmp_path, profiles_dir):
+    """조용히 사라지면 안 된다 — '손대지 않음' 숫자에 잡혀야 사용자가 확인한다."""
+    root = work(tmp_path)
+    빼기 = new_file(root / "가이드.pdf")
+    new_file(root / "보고서.pdf")
+
+    built = build_plan(root, [ROUTE], today=TODAY, run_id="r1",
+                       profiles_dir=profiles_dir, now=NOW, exclude={빼기})
+
+    assert (빼기, "제외함") in built.plan.skipped
+
+
+def test_exclude_none_and_empty_behave_exactly_like_before(tmp_path, profiles_dir):
+    """CLI 는 이 인자를 안 쓴다. 안 넘겼을 때 동작이 조금이라도 달라지면 안 된다."""
+    root = work(tmp_path)
+    new_file(root / "보고서.pdf")
+    new_file(root / "사진.png")
+    kw = dict(today=TODAY, run_id="r1", profiles_dir=profiles_dir, now=NOW)
+
+    기본 = build_plan(root, [ROUTE], **kw)
+    없음 = build_plan(root, [ROUTE], **kw, exclude=None)
+    빈것 = build_plan(root, [ROUTE], **kw, exclude=set())
+
+    # 계획이 비어 있으면 "빈 것 == 빈 것" 이라 아무것도 확인하지 못한다.
+    assert len(기본.plan.actions) == 4          # mkdir 2 + move 2
+    assert 기본.plan.actions == 없음.plan.actions == 빈것.plan.actions
+    assert 기본.plan.skipped == 없음.plan.skipped == 빈것.plan.skipped
+    assert 기본.per_block == 빈것.per_block
+    assert 기본.snapshot == 빈것.snapshot
+
+
+def test_origins_line_up_one_for_one_with_actions(tmp_path, profiles_dir):
+    """길이가 어긋나면 화면이 **엉뚱한 파일에 체크를 붙인다.**"""
+    root = work(tmp_path)
+    new_file(root / "보고서.pdf")
+    new_file(root / "사진.png")
+
+    built = build_plan(root, [ROUTE], today=TODAY, run_id="r1",
+                       profiles_dir=profiles_dir, now=NOW)
+
+    assert len(built.plan.actions) == 4, "계획이 비면 길이가 같아도 확인한 것이 없다"
+    assert len(built.origins) == len(built.plan.actions)
+    for action, origin in zip(built.plan.actions, built.origins):
+        if action.kind == "mkdir":
+            assert origin is None, "폴더 생성은 어느 파일 것도 아니다"
+        else:
+            assert origin is not None
+
+
+def test_origin_of_a_second_move_is_the_original_file(tmp_path, profiles_dir):
+    """route → by_date 로 두 번 옮겨지는 파일. 두 번째 이동의 src 는 중간 경로지만
+    origin 은 **원본 경로**여야 한다 — 그래야 체크박스 한 개가 사슬 전체를 묶는다."""
+    root = work(tmp_path)
+    원본 = new_file(root / "2023-12-15.png")
+
+    built = build_plan(
+        root,
+        [ROUTE, {"block": "by_date", "target": "02_Media", "layout": "{year}"}],
+        today=TODAY, run_id="r1", profiles_dir=profiles_dir, now=NOW)
+
+    moves = [(a, o) for a, o in zip(built.plan.actions, built.origins)
+             if a.kind == "move"]
+    assert len(moves) == 2
+    assert moves[0][0].src == 원본 and moves[0][1] == 원본
+    assert moves[1][0].src == root / "02_Media" / "2023-12-15.png"
+    assert moves[1][1] == 원본, "중간 경로가 아니라 원본이어야 한다"
+
+
+def test_excluding_a_file_removes_its_whole_chain(tmp_path, profiles_dir):
+    """사슬로 두 번 옮겨지는 파일을 빼면 두 동작이 **모두** 사라진다."""
+    root = work(tmp_path)
+    원본 = new_file(root / "2023-12-15.png")
+    steps = [ROUTE, {"block": "by_date", "target": "02_Media", "layout": "{year}"}]
+
+    before = build_plan(root, steps, today=TODAY, run_id="r1",
+                        profiles_dir=profiles_dir, now=NOW)
+    assert len([a for a in before.plan.actions if a.kind == "move"]) == 2, \
+        "빼기 전에 이동이 둘이어야 이 테스트가 뭔가를 확인한다"
+
+    built = build_plan(root, steps, today=TODAY, run_id="r1",
+                       profiles_dir=profiles_dir, now=NOW, exclude={원본})
+
+    assert [a for a in built.plan.actions if a.kind == "move"] == []
+
+
+def test_the_origin_of_an_extraction_is_the_zip_itself(tmp_path, profiles_dir):
+    """압축 해제 동작의 원본은 **압축 파일 자신**이다.
+
+    그래서 zip 하나의 체크를 끄면 그 zip 을 아예 안 푼다 — 의도한 동작이다.
+    """
+    import zipfile
+    root = work(tmp_path)
+    zpath = root / "묶음.zip"
+    with zipfile.ZipFile(zpath, "w") as z:
+        z.writestr("안.txt", "hi")
+        z.writestr("사진.png", "x")
+
+    built = build_plan(root, [{"block": "unzip", "delete_original": True}],
+                       today=TODAY, run_id="r1", profiles_dir=profiles_dir, now=NOW)
+    assert built.plan.actions, "계획이 비면 확인한 것이 없다"
+    assert set(built.origins) == {zpath}
+
+    뺐을때 = build_plan(root, [{"block": "unzip", "delete_original": True}],
+                        today=TODAY, run_id="r1", profiles_dir=profiles_dir,
+                        now=NOW, exclude={zpath})
+    assert 뺐을때.plan.actions == [], "zip 체크를 끄면 그 zip 을 안 푼다"
+
+
+def test_a_file_the_plan_will_create_has_no_origin(tmp_path, profiles_dir):
+    """압축에서 나올 파일은 아직 디스크에 없다 — 그 경로로는 뺄 수가 없다.
+
+    origin 을 주면 화면에 **눌러도 아무 일 없는 체크박스**가 생긴다.
+    빼려면 그 zip 의 체크를 꺼야 한다.
+    """
+    import zipfile
+    root = work(tmp_path)
+    zpath = root / "묶음.zip"
+    with zipfile.ZipFile(zpath, "w") as z:
+        z.writestr("안.md", "hi")
+
+    built = build_plan(root, [{"block": "unzip"}, ROUTE], today=TODAY, run_id="r1",
+                       profiles_dir=profiles_dir, now=NOW)
+
+    옮김 = {a.src.name: o for a, o in zip(built.plan.actions, built.origins)
+           if a.kind == "move"}
+    assert "안.md" in 옮김, "압축에서 나온 파일이 분류돼야 한다"
+    assert 옮김["안.md"] is None
+    assert 옮김["묶음.zip"] == zpath, "디스크에 있는 zip 자신은 열쇠를 가진다"
+    # 그 경로로 빼 달라고 해도 계획은 그대로다 — 그래서 열쇠를 주지 않는다.
+    같음 = build_plan(root, [{"block": "unzip"}, ROUTE], today=TODAY, run_id="r1",
+                     profiles_dir=profiles_dir, now=NOW, exclude={root / "안.md"})
+    assert 같음.plan.actions == built.plan.actions
