@@ -741,6 +741,24 @@ def _cmd_doctor(args) -> int:
 def _cmd_paths(args) -> int:
     root = repo_root()
     _warn_unsupported_config()
+    if getattr(args, "pick", None):
+        # 탐색기에서 고르게 한다. 드라이브 문자를 외워 타이핑할 필요가 없고,
+        # **실재하는 폴더만 고를 수 있으므로 오타가 원천적으로 없다.**
+        from organize import picker
+        cfg = load_config(root)
+        start = cfg.paths.get(args.pick)
+        chosen = picker.ask_folder(
+            title=f"'{args.pick}' 으로 쓸 폴더를 고르세요",
+            start=Path(start[0]) if start else None)
+        if chosen is None:
+            print("  고르지 않았습니다. 아무것도 바꾸지 않았습니다.")
+            return 0
+        picker.store_picked_path(root, args.pick, chosen)
+        print(f"  @{args.pick} → {chosen} 로 저장했습니다.")
+        print("\n  이 위치로 내보내려면 레시피의 dest 에 이렇게 적습니다:")
+        print(f'      "dest": "@{args.pick}"')
+        return 0
+
     if args.set:
         if "=" not in args.set:
             raise OrganizeError(f"형식이 올바르지 않습니다: {args.set}",
@@ -838,6 +856,12 @@ def _cmd_do(args) -> int:
     return _run_recipe(recipe, fake, apply=bool(args.apply), label=_do_label(args))
 
 
+def _cmd_gui(args) -> int:
+    """창을 띄운다. 창을 못 띄우는 환경에서도 나머지 명령은 그대로 돈다."""
+    from organize import gui
+    return gui.run(repo_root())
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="organize", description="파일 정리 자동화")
     p.add_argument("--version", action="version", version=f"organize {__version__}")
@@ -868,8 +892,13 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--root", help="레시피에 없는 폴더도 함께 점검합니다")
     sp.set_defaults(func=_cmd_doctor)
 
+    sp = sub.add_parser("gui", help="창으로 쓰기 (폴더를 탐색기에서 고름)")
+    sp.set_defaults(func=_cmd_gui)
+
     sp = sub.add_parser("paths", help="폴더 위치 확인·지정")
     sp.add_argument("--set", help="이름=경로")
+    sp.add_argument("--pick", metavar="이름",
+                    help="탐색기에서 폴더를 골라 그 이름으로 등록합니다")
     sp.set_defaults(func=_cmd_paths)
 
     sp = sub.add_parser("list", help="레시피와 분류 설정 목록")
