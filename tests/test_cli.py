@@ -877,3 +877,38 @@ def test_a_backup_drive_that_is_not_plugged_in_stops_before_moving(project, tmp_
     assert code == 1
     assert "백업" in out
     assert (work / "보고서.pdf").exists(), "드라이브가 없으면 한 파일도 옮기지 않는다"
+
+
+def test_preview_warns_loudly_when_files_leave_the_folder(project, tmp_path, capsys):
+    """파일이 **정리 대상 폴더 밖으로 나가면** 미리보기가 눈에 띄게 알린다.
+
+    폴더 안에서 옮기는 것과 다른 드라이브로 내보내는 것은 무게가 다르다.
+    USB 를 뽑으면 접근이 끊기고, 실수로 다른 매체에 쏟으면 되돌리기 전까지
+    파일이 여기 없다. 화면에서 구분되지 않으면 사용자는 같은 일로 읽는다.
+    """
+    repo, work = project
+    usb = tmp_path / "USB"
+    usb.mkdir()
+    (repo / "config.local.json").write_text(
+        json.dumps({"paths": {"백업": str(usb)}}, ensure_ascii=False), encoding="utf-8")
+    (repo / "recipes" / "t.json").write_text(json.dumps({
+        "name": "백업", "roots": [str(work)],
+        "steps": [{"block": "route", "profile": "desktop", "dest": "@백업"}],
+    }, ensure_ascii=False), encoding="utf-8")
+    old_file(work / "보고서.pdf")
+
+    cli.main(["preview", "t"])
+    out = capsys.readouterr().out
+
+    assert str(usb) in out, "어디로 나가는지 경로가 보여야 한다"
+    assert "밖" in out or "내보냅" in out, "밖으로 나간다는 사실이 보여야 한다"
+    assert "1" in out, "몇 개가 나가는지 보여야 한다"
+
+
+def test_preview_does_not_cry_wolf_when_nothing_leaves(project, capsys):
+    """폴더 안에서만 움직이면 그 경고를 띄우지 않는다 — 매번 뜨면 안 보게 된다."""
+    _, work = project
+    old_file(work / "보고서.pdf")
+    cli.main(["preview", "t"])
+    out = capsys.readouterr().out
+    assert "내보냅니다" not in out

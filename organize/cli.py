@@ -112,6 +112,31 @@ def _resolve_roots(recipe, override: str | None) -> list[Path]:
     return roots
 
 
+def _warn_if_leaving(built) -> None:
+    """파일이 정리 대상 폴더 **밖으로** 나가면 눈에 띄게 알린다.
+
+    폴더 안에서 옮기는 것과 다른 매체로 내보내는 것은 무게가 다르다. USB 를
+    뽑으면 접근이 끊기고, 실수로 엉뚱한 매체에 쏟으면 되돌리기 전까지 파일이
+    여기 없다. 화면에서 구분되지 않으면 사용자는 같은 일로 읽는다.
+
+    **아무것도 안 나갈 때는 띄우지 않는다.** 매번 뜨는 경고는 안 보게 된다.
+    """
+    나가는것: dict[Path, int] = {}
+    for a in built.plan.actions:
+        if a.kind == "mkdir" or a.dst is None:
+            continue
+        if a.dst.is_relative_to(built.root):
+            continue
+        for base in built.external:
+            if a.dst.is_relative_to(base):
+                나가는것[base] = 나가는것.get(base, 0) + 1
+                break
+    for base in sorted(나가는것, key=str):
+        print("\n  ⚠ 이 정리는 파일을 정리 대상 폴더 밖으로 내보냅니다.")
+        print(f"      보낼 곳: {base}   ({나가는것[base]}개)")
+        print(f"      되돌리기 전까지 이 파일들은 원래 폴더에 없습니다.")
+
+
 def _print_plan(built, verbose: bool) -> dict:
     counts = built.plan.counts()
     for i, (block, n) in enumerate(built.per_block, 1):
@@ -124,6 +149,8 @@ def _print_plan(built, verbose: bool) -> dict:
             label = _KIND_LABEL.get(a.kind, a.kind)
             name = a.src.name if a.src else ""
             print(f"    {label:<6} {name} → {a.dst}    {a.reason}")
+
+    _warn_if_leaving(built)
 
     print()
     print(f"  총계  이동 {counts.get('move', 0)} · 격리 {counts.get('quarantine', 0)}"

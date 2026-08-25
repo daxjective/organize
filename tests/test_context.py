@@ -265,3 +265,31 @@ def test_claim_name_does_not_rescan_the_folder_on_every_call():
         ctx.claim_name("01_Docs", f"파일{i:02d}.txt")
 
     assert calls <= 1, f"같은 폴더를 {calls}번 훑었다 — 한 번이면 된다"
+
+
+def test_claim_name_sees_files_already_at_an_external_place(tmp_path):
+    """백업 위치에 **이미 있는 이름**을 미리보기가 봐야 한다.
+
+    `claim_name` 은 정리 대상 폴더 안만 훑는다. 백업 위치(USB·SD카드)는
+    비어 있는 것으로 보여, 이미 같은 이름이 있어도 미리보기가 "그대로 간다"
+    고 말한다. 실제로는 실행기가 `claim_path` 로 비켜 놓아 `_(1)` 이 붙는다
+    — **덮어쓰지는 않지만 미리보기가 거짓말을 한다.**
+    """
+    usb = tmp_path / "USB"
+    usb.mkdir()
+    (usb / "보고서.pdf").write_bytes("이미 있던 것".encode("utf-8"))
+
+    ctx = Context(root=tmp_path / "작업", entries=[], today=TODAY, run_id="r1",
+                  external={"백업": usb})
+
+    got = ctx.claim_name("@백업", "보고서.pdf")
+
+    assert got != "보고서.pdf", "이미 있는 이름을 그대로 쓰겠다고 하면 안 된다"
+    assert got == "보고서_(1).pdf"
+
+
+def test_claim_name_handles_an_external_place_that_is_not_there_yet(tmp_path):
+    """USB 가 안 꽂혀 있어도 미리보기는 죽지 않는다 — 비어 있는 것으로 본다."""
+    ctx = Context(root=tmp_path / "작업", entries=[], today=TODAY, run_id="r1",
+                  external={"백업": tmp_path / "안꽂힌USB"})
+    assert ctx.claim_name("@백업", "보고서.pdf") == "보고서.pdf"

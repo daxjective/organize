@@ -103,7 +103,7 @@ class Context:
         # 진짜 다운로드 폴더에서는 미리보기 한 번에 몇 분이다.
         taken = self._claimed.get(key)
         if taken is None:
-            taken = {e.path.name.casefold() for e in self.files_at(rel)}
+            taken = self._names_at(rel)
             self._claimed[key] = taken
         stem, suffix = Path(name).stem, Path(name).suffix
         candidate, n = name, 0
@@ -112,6 +112,40 @@ class Context:
             candidate = f"{stem}_({n}){suffix}"
         taken.add(candidate.casefold())
         return candidate
+
+    def external_folder(self, rel: str) -> Path | None:
+        """`@백업` · `@백업/2026` 을 실제 경로로 푼다. 못 풀면 None.
+
+        **경로 계산은 여기 한 곳에서만 한다.** 목적지를 정하는 곳(dest_folder)과
+        이름을 잡는 곳(claim_name)이 각자 계산하면, 둘이 다른 폴더를 보게 되는
+        순간 미리보기가 거짓말을 한다. 이 프로젝트가 이미 겪은 실패다
+        ("이름을 잡는 곳이 하나여야 한다").
+
+        등록되지 않은 이름은 None 을 준다 — 여기서 예외를 던지지 않는 이유는,
+        부르는 쪽마다 할 말이 다르기 때문이다(목적지는 거부해야 하고, 이름표는
+        그냥 비어 있는 것으로 보면 된다).
+        """
+        if not rel.startswith("@"):
+            return None
+        name, _, tail = rel[1:].partition("/")
+        base = self.external.get(name)
+        if base is None:
+            return None
+        folder = Path(os.path.normpath(base / tail)) if tail else Path(os.path.normpath(base))
+        return folder if folder.is_relative_to(base) else None
+
+    def _names_at(self, rel: str) -> set[str]:
+        """그 폴더에 이미 있는 파일 이름들(소문자). 이름표의 출발점이다."""
+        external = self.external_folder(rel)
+        if external is not None:
+            try:
+                return {p.name.casefold() for p in external.iterdir() if p.is_file()}
+            except OSError:
+                # USB 가 안 꽂혔거나 읽을 수 없다. 미리보기는 죽지 않아야 하므로
+                # 비어 있는 것으로 본다. 실제로 쓸 때는 claim_path 가 원자적으로
+                # 다시 잡으므로 덮어쓸 위험은 없다.
+                return set()
+        return {e.path.name.casefold() for e in self.files_at(rel)}
 
     def files_at(self, rel: str) -> list[FileEntry]:
         return [e for e in self.all_files() if self.rel_of(e) == rel]

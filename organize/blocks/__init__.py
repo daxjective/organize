@@ -82,17 +82,17 @@ def _external_folder(ctx: Context, rel: str, *, block: str) -> Path:
         raise OrganizeError(
             f"'{block}' 작업의 목적지에 이름이 없습니다: {rel}",
             hint="'@백업' 처럼 등록한 이름을 적어 주세요.")
-    base = ctx.external.get(name)
-    if base is None:
+    if name not in ctx.external:
         raise OrganizeError(
             f"'{block}' 작업이 보내려는 '@{name}' 위치가 등록되어 있지 않습니다.",
             hint=f"먼저 등록해 주세요:\n    organize paths --set {name}=<경로>\n"
                  f"    organize paths --pick {name}   (탐색기에서 고르기)")
-    # 등록된 곳 **아래**로만 간다. tail 에 '..' 가 섞여 등록한 곳 밖으로
-    # 새는 것까지 여기서 막는다 — 등록은 그 폴더를 허락한 것이지 그 위를
-    # 허락한 것이 아니다.
-    folder = Path(os.path.normpath(base / tail)) if tail else Path(os.path.normpath(base))
-    if not folder.is_relative_to(base):
+    # 경로 계산은 Context 한 곳에서만 한다. 여기서 따로 계산하면 이름을 잡는
+    # 곳(claim_name)과 다른 폴더를 보게 되는 순간 미리보기가 거짓말을 한다.
+    # 등록된 곳 **아래**가 아니면(tail 에 '..' 등) None 이 돌아온다 — 등록은
+    # 그 폴더를 허락한 것이지 그 위를 허락한 것이 아니다.
+    folder = ctx.external_folder(rel)
+    if folder is None:
         raise OrganizeError(
             f"'{block}' 작업의 목적지가 '@{name}' 밖을 가리킵니다: {rel}",
             hint="등록한 폴더 안쪽만 쓸 수 있습니다. '..' 는 쓸 수 없습니다.")
