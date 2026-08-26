@@ -1,6 +1,7 @@
 """폴더 고르기 — 창 없이 테스트되는 부분."""
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -78,3 +79,72 @@ def test_asking_without_tkinter_is_a_korean_message(monkeypatch):
         picker.ask_folder()
     assert "tkinter" in ex.value.message
     assert "paths --set" in (ex.value.hint or ""), "창 없이 하는 법을 알려줘야 한다"
+
+
+# ── 폴더를 탐색기로 열기 ─────────────────────────────────────────
+# 실제로 탐색기를 띄우는 부분은 자동으로 확인할 수 없다. **무엇을 부를지**와
+# **못 열 때 어떻게 알리는지**만 여기서 확인한다.
+
+def test_open_command_는_OS_마다_다른_것을_부른다():
+    assert picker.open_command("Darwin") == ["open"]
+    assert picker.open_command("Linux") == ["xdg-open"]
+
+
+def test_open_command_WSL_은_윈도우_탐색기를_부른다():
+    """WSL 의 xdg-open 은 리눅스 파일 관리자를 찾는다 — 눌러도 아무 일이 없다."""
+    assert picker.open_command("Linux", wsl=True) == ["explorer.exe"]
+
+
+def test_open_folder_없는_폴더는_열지_않고_한국어로_알린다(tmp_path):
+    """부르는 쪽이 링크를 안 그려도, 그 사이에 USB 가 뽑혔을 수 있다."""
+    with pytest.raises(OrganizeError) as ex:
+        picker.open_folder(tmp_path / "없는폴더")
+    assert "찾을 수 없습니다" in ex.value.message
+    assert "USB" in (ex.value.hint or ""), "왜 없을 수 있는지 짚어 줘야 한다"
+
+
+def _리눅스인_척(monkeypatch, 부른것):
+    """윈도우도 WSL 도 아닌 척한다.
+
+    셋을 갈라 두지 않으면 테스트가 **개발한 PC 에서만** 도는 것을 확인하게 된다
+    (여기는 WSL 이라 `wslpath` 를 부르러 간다).
+    """
+    monkeypatch.delattr(os, "startfile", raising=False)
+    monkeypatch.setattr(picker, "is_wsl", lambda: False)
+    monkeypatch.setattr(picker.subprocess, "Popen",
+                        lambda cmd, **kw: 부른것.append(cmd))
+
+
+def test_open_folder_여는_프로그램이_없으면_경로를_알려_준다(tmp_path, monkeypatch):
+    """못 열면 손으로라도 갈 수 있어야 한다 — 그러려면 경로가 보여야 한다."""
+    def 없는척(*a, **kw):
+        raise FileNotFoundError("xdg-open")
+
+    monkeypatch.delattr(os, "startfile", raising=False)
+    monkeypatch.setattr(picker, "is_wsl", lambda: False)
+    monkeypatch.setattr(picker.subprocess, "Popen", 없는척)
+
+    with pytest.raises(OrganizeError) as ex:
+        picker.open_folder(tmp_path)
+    assert str(tmp_path) in (ex.value.hint or "")
+
+
+def test_open_folder_열었으면_조용히_돌아온다(tmp_path, monkeypatch):
+    부른것 = []
+    _리눅스인_척(monkeypatch, 부른것)
+
+    picker.open_folder(tmp_path)
+
+    assert 부른것 == [["xdg-open", str(tmp_path)]]
+
+
+def test_open_folder_윈도우에서는_startfile_을_쓴다(tmp_path, monkeypatch):
+    """`explorer` 는 **성공해도 종료 코드 1** 이라 명령으로 부르면 구별이 안 된다."""
+    연것 = []
+    monkeypatch.setattr(os, "startfile", 연것.append, raising=False)
+    monkeypatch.setattr(picker.subprocess, "Popen",
+                        lambda *a, **kw: pytest.fail("startfile 이 있으면 명령을 부르지 않는다"))
+
+    picker.open_folder(tmp_path)
+
+    assert 연것 == [str(tmp_path)]

@@ -12,7 +12,8 @@ from organize import folders
 from organize.folders import FolderInfo
 from organize.gui import (arrange_steps, builtin_places, control_locks, custom_places,
                           dest_text, foot_text, keeps_preview, kind_tabs,
-                          local_place_names, move_item, new_place_error,
+                          local_place_names, move_item, name_width, new_place_error,
+                          openable, place_path_width,
                           profile_folder_names, row_checks, toggle_file_key,
                           undo_label, undo_prompt, _raw_kind)
 from organize.gui_model import Row, _KIND_LABEL
@@ -446,3 +447,112 @@ def test_profile_folder_names_못_읽는_파일도_숨기지_않는다(tmp_path)
     (tmp_path / "깨진것.toml").write_text("이건 = TOML 이 아니다 [[", encoding="utf-8")
     (보일이름, 폴더들, 문제), = profile_folder_names(tmp_path)
     assert 보일이름 == "깨진것" and 폴더들 == [] and 문제
+
+
+# ── 경로를 눌러서 탐색기로 열기 ─────────────────────────────────
+# **눌러도 아무 일이 없는 링크를 그리지 않는 것**이 여기서 지킬 것이다.
+# 그런 링크는 "안 열리는구나" 가 아니라 "도구가 고장났구나" 로 읽힌다.
+
+def test_openable_정상인_폴더는_열_수_있다():
+    assert openable(_info("desktop", "바탕화면", "/home/나/Desktop")) is True
+
+
+def test_openable_비어_있어도_열_수_있다():
+    """개수가 0 인 줄이야말로 열어 봐야 한다 — OneDrive 백업이 켜진 PC 의 신호다."""
+    assert openable(_info("desktop", "바탕화면", "/x", count=0)) is True
+
+
+def test_openable_읽을_수_없는_폴더도_열_수_있다():
+    """권한 문제는 탐색기에서 고친다 — 거기로 보내 주는 자리다."""
+    assert openable(_info("사진", "사진", "/x", count=None, status="읽을 수 없음")) is True
+
+
+def test_openable_없는_폴더는_열_수_없다():
+    assert openable(_info("사진", "사진", "/x", count=None, status="폴더 없음")) is False
+
+
+def test_openable_어디인지_모르는_줄은_열_수_없다():
+    assert openable(_info("desktop", "바탕화면", "@desktop", count=None,
+                          status=folders.UNRESOLVED)) is False
+
+
+def test_builtin_places_열_수_있는_줄에만_진짜_경로가_붙는다():
+    """`path` 는 가운데를 접은 **보여주기용** 글자라 그걸로는 못 연다."""
+    긴것 = "/home/나/" + "아주긴폴더이름" * 6 + "/Desktop"
+    줄 = builtin_places([_info("desktop", "바탕화면", 긴것)], set())[0]
+    assert "…" in 줄.path, "보여주는 글자는 접힌다"
+    assert 줄.open_path == 긴것, "여는 데 쓸 경로는 접지 않은 진짜 경로여야 한다"
+
+
+def test_builtin_places_없는_폴더는_링크로_만들지_않는다():
+    줄 = builtin_places([_info("사진", "사진", "/x", count=None,
+                               status="폴더 없음")], set())[0]
+    assert 줄.open_path == ""
+
+
+def test_custom_places_있는_폴더에만_진짜_경로가_붙는다(tmp_path):
+    (tmp_path / "USB").mkdir()
+    cfg = UserConfig(paths={"백업": [str(tmp_path / "USB")]}, folder_names={})
+    assert custom_places(cfg, set())[0].open_path == str(tmp_path / "USB")
+
+
+def test_custom_places_안_꽂힌_USB는_링크로_만들지_않는다(tmp_path):
+    """등록은 남기되, 눌러도 안 열릴 링크는 그리지 않는다."""
+    cfg = UserConfig(paths={"백업": [str(tmp_path / "없다")]}, folder_names={})
+    줄 = custom_places(cfg, set())[0]
+    assert 줄.alert is True and 줄.open_path == ""
+
+
+def test_name_width_한글은_두_칸씩_잡는다():
+    """`width` 는 영문 글자폭 기준이다 — 한글 6자를 6 으로 잡으면 뒤가 잘린다."""
+    assert name_width(["백업드라이브"]) >= 12
+
+
+def test_name_width_가장_긴_이름에_맞춘다():
+    """숫자를 못 박으면 그보다 긴 이름에서 같은 일이 다시 난다."""
+    좁은것 = name_width(["백업"])
+    넓은것 = name_width(["백업", "외장하드백업드라이브"])
+    assert 넓은것 > 좁은것 == 12
+    assert 넓은것 >= 20, "한글 10자는 20칸쯤 먹는다"
+
+
+def test_name_width_목록이_비어도_칸은_남는다():
+    """줄이 없을 때 0 을 주면 다음에 그릴 때 칸이 무너진다."""
+    assert name_width([]) == 12
+
+
+def test_name_width_영문_이름은_두_배로_잡지_않는다():
+    """'archive' 를 14칸으로 잡으면 이름 칸만 허옇게 남는다."""
+    assert name_width(["archive", "photos", "work"]) == 12
+
+
+def test_place_path_width_이름이_짧으면_경로는_그대로():
+    from organize.gui import _PLACE_PATH
+    assert place_path_width(["백업", "사진"]) == _PLACE_PATH
+
+
+def test_place_path_width_이름이_길어진_만큼_경로가_자리를_내준다():
+    """이름은 못 자르니 경로가 접힌다 — 안 그러면 경로 끝이 잘려 나간다."""
+    from organize.gui import _PLACE_PATH
+    assert place_path_width(["외장하드백업드라이브"]) == _PLACE_PATH - 8
+
+
+def test_place_path_width_아무리_긴_이름이라도_경로_조각은_남긴다():
+    """앞(드라이브)과 끝(폴더 이름)마저 사라지면 무슨 폴더인지 알 수 없다."""
+    assert place_path_width(["아" * 40]) == 24
+
+
+def test_custom_places_긴_이름이_섞이면_그_칸_경로가_다_같이_접힌다(tmp_path):
+    """줄마다 따로 접으면 같은 칸의 경로들이 서로 다른 자리에서 접힌다."""
+    긴폴더 = tmp_path / ("아주긴폴더이름" * 5)
+    긴폴더.mkdir()
+    짧은cfg = UserConfig(paths={"백업": [str(긴폴더)]}, folder_names={})
+    긴cfg = UserConfig(paths={"백업": [str(긴폴더)],
+                              "외장하드백업드라이브": [str(긴폴더)]}, folder_names={})
+
+    짧을때 = custom_places(짧은cfg, set())[0].path
+    길때 = {p.name: p.path for p in custom_places(긴cfg, set())}
+
+    assert len(길때["백업"]) < len(짧을때), "긴 이름이 생기면 경로가 더 접힌다"
+    assert len(길때["백업"]) == len(길때["외장하드백업드라이브"]), \
+        "같은 칸이면 같은 자리에서 접혀야 한다"

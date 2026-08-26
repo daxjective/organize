@@ -98,6 +98,15 @@ def mono_font(size: int = MONO_SIZE, *, weight: str = "normal") -> tuple:
     return (family, size, "bold") if weight == "bold" else (family, size)
 
 
+def link_font(size: int = MONO_SIZE) -> tuple:
+    """눌러서 탐색기로 여는 경로 글자.
+
+    **밑줄까지 있어야 누를 수 있는 줄로 보인다.** 색만 강조색으로 바꾸면
+    "여기는 값이 다르구나" 로 읽히지, 누를 수 있다는 신호가 되지 않는다.
+    """
+    return (*mono_font(size), "underline")
+
+
 # ── ttk 스타일 ───────────────────────────────────────────────────
 def _shade(color: str, factor: float) -> str:
     """색을 조금 어둡게/밝게. 눌렀을 때의 색은 시안이 정해 두지 않았다.
@@ -168,6 +177,14 @@ def apply_theme(window) -> None:
                     font=small, padding=(4, 2), relief="flat", borderwidth=0)
     style.map("Link.TButton", background=[("active", BG), ("pressed", BG)],
               foreground=[("active", ACCENT)])
+
+    # 대화상자의 글자 입력칸. **OS 기본 모양을 그대로 두지 않는다** — 창은
+    # Finder 톤인데 입력칸만 회색 네모면 딴 프로그램에서 뜬 창처럼 보인다.
+    style.configure("TEntry", fieldbackground=SURFACE, foreground=TEXT,
+                    insertcolor=TEXT, bordercolor=LINE,
+                    lightcolor=LINE, darkcolor=LINE, padding=6)
+    style.map("TEntry", bordercolor=[("focus", ACCENT)],
+              lightcolor=[("focus", ACCENT)], darkcolor=[("focus", ACCENT)])
 
 
 def traffic_lights(parent, *, bg: str = BG, size: int = 11, gap: int = 7):

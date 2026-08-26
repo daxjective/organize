@@ -240,6 +240,22 @@ def dest_text(dest: str, root) -> str:
     return _short(Path(dest))
 
 
+def openable(info) -> bool:
+    """이 줄의 폴더를 탐색기로 **열 수 있는가**. 화면 1·3 이 같이 쓴다.
+
+    **비어 있는 폴더도 연다** — 오히려 그때 열어 봐야 "여기가 맞나" 를 확인할
+    수 있다(OneDrive 백업이 켜진 PC 는 진짜 바탕화면이 다른 곳이라 0 으로 뜬다).
+    권한 때문에 못 읽는 폴더도 연다 — 탐색기에서 고치라고 보내는 자리다.
+
+    **못 여는 곳을 링크로 그리지 않으려고** 있는 함수다. 눌러도 아무 일이 없는
+    링크는 "안 열리는구나" 가 아니라 "도구가 고장났구나" 로 읽힌다.
+    """
+    if not getattr(info, "path", None):
+        return False
+    # 어디인지 모르는 줄(UNRESOLVED)과 그 폴더가 없는 줄만 못 연다.
+    return info.status not in (folders.UNRESOLVED, "폴더 없음")
+
+
 # ── 화면 3 이 쓰는 것 (역시 위젯을 모른다) ───────────────────────
 
 # 설정 화면의 경로 칸 길이. 표 기본값(56)보다 짧다 — 오른쪽에 상태 글자와
@@ -258,6 +274,42 @@ class Place(NamedTuple):
     note: str        # 오른쪽에 적을 말. 문제 없으면 "정상" 또는 빈 칸
     alert: bool      # 빨갛게 + [다시 지정] 을 붙일 줄인가
     pinned: bool     # 이 PC 에서 직접 지정한 것인가(config.local.json 에 있는가)
+    # 탐색기로 열 **진짜 경로**. 빈 글자면 링크로 만들지 않는다.
+    # `path` 는 가운데를 접은 **보여주기용 글자**라 그걸로는 열 수 없다 —
+    # 둘을 하나로 쓰면 긴 경로에서만 안 열리는, 찾기 어려운 결함이 된다.
+    open_path: str = ""
+
+
+def name_width(labels) -> int:
+    """설정 화면의 이름 칸을 **몇 글자폭**으로 잡을까.
+
+    tkinter 의 `width` 는 **영문 글자폭** 기준이라 한글은 한 글자가 두 칸쯤
+    먹는다. 12 로 못 박아 뒀더니 「백업드라이브」(6자 = 12칸)가 딱 걸려 뒤가
+    잘리고 옆 경로와 붙어 보였다. 숫자를 조금 키우는 것으로는 같은 일이 더 긴
+    이름에서 다시 난다 — **그 목록에서 가장 긴 이름**에 맞춘다.
+
+    이름은 사용자가 지은 것이라 자르면 안 된다. 대신 `_PLACE_PATH` 로 이미
+    접혀 있는 경로 쪽이 자리를 내준다.
+    """
+    def 폭(s: str) -> int:
+        # U+2E80 위쪽은 한글·한자·이모지 — 폭이 대략 두 배다.
+        return sum(2 if ord(c) > 0x2E80 else 1 for c in s)
+
+    return max([12, *(폭(str(l)) for l in labels)])
+
+
+def place_path_width(labels) -> int:
+    """경로를 **몇 글자로 접을까**. 이름 칸이 넓어진 만큼 경로가 자리를 내준다.
+
+    한 줄의 가로폭은 정해져 있다. 이름을 안 자르기로 했으니(`name_width`)
+    누군가는 자리를 내줘야 하는데, **경로가 그쪽이다** — 가운데를 접어도
+    앞(드라이브)과 끝(폴더 이름)은 남아서 알아볼 수 있기 때문이다.
+
+    이걸 안 하면 「외장하드백업드라이브」를 등록한 순간 그 칸의 **모든 줄에서**
+    경로 끝이 한두 글자씩 잘린다(실측: 캡처에서 'Archive' 가 'Archiv' 로 났다).
+    """
+    남는것 = _PLACE_PATH - max(0, name_width(labels) - 12)
+    return max(24, 남는것)      # 너무 접으면 앞뒤 조각마저 사라진다
 
 
 def local_place_names(repo_root: Path) -> set[str]:
@@ -284,10 +336,12 @@ def builtin_places(infos, pinned: set[str]) -> list[Place]:
 
     `home` 은 뺀다 — 홈 전체는 정리 대상이 아니고, 목록에 두면 겁만 준다.
     """
+    # 접을 길이는 **이 칸 전체**를 보고 정한다. 줄마다 따로 정하면 같은 칸의
+    # 경로들이 서로 다른 자리에서 접혀 목록으로 안 읽힌다.
+    쓸것 = [i for i in infos if i.builtin and i.name != "home"]
+    접을길이 = place_path_width([i.label for i in 쓸것])
     out = []
-    for info in infos:
-        if not info.builtin or info.name == "home":
-            continue
+    for info in 쓸것:
         if info.hidden_duplicate_of:
             # 개수와 대상 목록에서는 뺀 줄이다(같은 폴더를 두 번 셀 이유가 없다).
             # **여기서까지 빼면 이름이 조용히 사라진다** — 그러면 [기본 위치로]
@@ -295,18 +349,20 @@ def builtin_places(infos, pinned: set[str]) -> list[Place]:
             # 잘못된 상태는 아니므로 빨갛게 하지 않고, 회색으로 이유만 적는다.
             먼저 = LABEL_OF.get(info.hidden_duplicate_of, info.hidden_duplicate_of)
             out.append(Place(name=info.name, label=info.label,
-                             path=_short(info.path, _PLACE_PATH),
+                             path=_short(info.path, 접을길이),
                              note=f"「{먼저}」와 같은 폴더입니다 — 한 번만 셉니다",
-                             alert=False, pinned=info.name in pinned))
+                             alert=False, pinned=info.name in pinned,
+                             open_path=str(info.path) if openable(info) else ""))
             continue
         문제 = _문제인가(info)
         # 이름이 안 풀린 줄은 경로 자리에 적을 것이 없다 — `custom_places` 와
         # 같은 모양으로 '—' 를 두고 자리를 이유에 내준다(안 그러면 긴 이유가
         # 경로 칸을 밀어 '@d' 처럼 잘린 글자만 남는다. 실측: 캡처에서 그렇게 됐다).
-        경로 = "—" if info.status == folders.UNRESOLVED else _short(info.path, _PLACE_PATH)
+        경로 = "—" if info.status == folders.UNRESOLVED else _short(info.path, 접을길이)
         out.append(Place(name=info.name, label=info.label, path=경로,
                          note=_why(info) if 문제 else "정상",
-                         alert=문제, pinned=info.name in pinned))
+                         alert=문제, pinned=info.name in pinned,
+                         open_path=str(info.path) if openable(info) else ""))
     return out
 
 
@@ -318,10 +374,10 @@ def custom_places(cfg, pinned: set[str]) -> list[Place]:
 
     **폴더가 없다고 등록을 지우지 않는다.** USB·SD카드는 안 꽂혀 있을 수 있다.
     """
+    이름들 = [n for n in sorted(cfg.paths) if n not in BUILTIN]
+    접을길이 = place_path_width(이름들)
     out = []
-    for name in sorted(cfg.paths):
-        if name in BUILTIN:
-            continue
+    for name in 이름들:
         try:
             path = resolve_alias(f"@{name}", cfg)
         except AliasNotDefined as e:
@@ -329,9 +385,10 @@ def custom_places(cfg, pinned: set[str]) -> list[Place]:
             out.append(Place(name, name, "—", e.message, True, name in pinned))
             continue
         있음 = path.is_dir()
-        out.append(Place(name, name, _short(path, _PLACE_PATH),
+        out.append(Place(name, name, _short(path, 접을길이),
                          "" if 있음 else "없음 · 다시 지정",
-                         not 있음, name in pinned))
+                         not 있음, name in pinned,
+                         str(path) if 있음 else ""))
     return out
 
 
@@ -631,13 +688,18 @@ class App:
             self.status_var.set(self._count_summary)
 
     def _folder_row(self, parent, info):
-        """한 줄: 이름 · 꼬리 경로 · 전체 경로(작게) · 개수(크게)."""
+        """한 줄: 이름 · 꼬리 경로 · 전체 경로(눌러서 열기) · 개수(크게)."""
         ttk = self.ttk
         row = ttk.Frame(parent, style="Card.TFrame")
+        # 이름 칸은 **줄마다 같은 자리에서 끝나되 글자를 자르지 않는다.**
+        # 예전에는 `width=7`(영문 7자폭)로 못 박았는데 한글 4자가 그보다 넓어
+        # 「바탕화면」·「다운로드」의 뒤가 잘리고 옆 경로와 붙어 보였다. 칸의
+        # **최소폭**만 정하고, 오른쪽 여백으로 경로와 떼어 놓는다.
+        row.columnconfigure(0, minsize=100)
         row.columnconfigure(1, weight=1)
 
-        ttk.Label(row, text=info.label, style="CardName.TLabel", width=7,
-                  ).grid(row=0, column=0, sticky="w")
+        ttk.Label(row, text=info.label, style="CardName.TLabel", anchor="w",
+                  ).grid(row=0, column=0, sticky="w", padx=(0, 12))
         ttk.Label(row, text=_tail(info.path), style="CardPath.TLabel",
                   ).grid(row=0, column=1, sticky="w")
 
@@ -647,8 +709,11 @@ class App:
                   anchor="e", width=5).grid(row=0, column=2, rowspan=2,
                                             sticky="e", padx=(12, 0))
 
-        ttk.Label(row, text=_short(info.path), style="CardFull.TLabel",
-                  ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(1, 0))
+        # 전체 경로를 **눌러서 여는 링크**로. 글자만 봐서는 그 폴더가 내가 아는
+        # 그 폴더인지 알 수 없다 — 열어 봐야 안다. 개수가 0 인 줄이야말로 그렇다.
+        self._path_link(row, text=_short(info.path), size=8,
+                        folder=str(info.path) if openable(info) else "",
+                        ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(1, 0))
         if 문제:
             ttk.Label(row, text=_why(info), style="CardAlert.TLabel",
                       wraplength=480, justify="left",
@@ -882,10 +947,8 @@ class App:
         return 보일글자
 
     def _save_recipe(self) -> None:
-        from tkinter import simpledialog
-
-        name = simpledialog.askstring("레시피 저장", "이 조합을 무슨 이름으로 저장할까요?",
-                                      parent=self.window)
+        name = self._ask_text("레시피 저장", "이 조합을 무슨 이름으로 저장할까요?",
+                              example="예: 내 바탕화면 정리")
         if not name:
             # 알리지 않으면 상태줄에 직전 "저장했습니다" 가 남아, 방금 저장된
             # 것처럼 읽힌다.
@@ -1217,13 +1280,12 @@ class App:
             self._show_messages("되돌리기 결과", result.messages)
 
     def _show_messages(self, 제목: str, messages: list) -> None:
-        from tkinter import messagebox
         # 다 보여주면 대화상자가 화면 밖으로 나간다. 앞 20 줄만 보이고 나머지는
         # 몇 줄이 더 있는지 알린다 — 있다는 사실 자체를 숨기지 않는다.
         본문 = "\n".join(messages[:20])
         if len(messages) > 20:
             본문 += f"\n… 그 밖에 {len(messages) - 20}줄"
-        messagebox.showinfo(제목, 본문, parent=self.window)
+        self._notice(제목, 본문)
 
     # ── 결과 표 ──────────────────────────────────────────────────
     def _table_area(self, parent):
@@ -1463,8 +1525,9 @@ class App:
         내장 = builtin_places(self._infos, pinned)
         if not 내장:
             self._settings_line(칸, "폴더를 확인하는 중입니다…")
+        폭 = name_width([p.label for p in 내장])
         for place in 내장:
-            self._place_row(칸, place, builtin=True)
+            self._place_row(칸, place, builtin=True, width=폭)
 
         # ② 내가 추가한 위치 — 탐색기를 쓰는 유일한 자리
         칸 = self._settings_group(
@@ -1473,8 +1536,9 @@ class App:
         추가 = custom_places(cfg, pinned)
         if not 추가:
             self._settings_line(칸, "아직 없습니다. 아래 [+ 위치 추가] 로 등록하세요.")
+        폭 = name_width([p.label for p in 추가])
         for place in 추가:
-            self._place_row(칸, place, builtin=False)
+            self._place_row(칸, place, builtin=False, width=폭)
         줄 = tk.Frame(칸, bg=theme.SURFACE)
         줄.pack(fill="x", pady=(8, 0))
         ttk.Button(줄, text="+ 위치 추가", style="Tiny.Ghost.TButton",
@@ -1516,14 +1580,19 @@ class App:
                       font=theme.body_font(9), anchor="w", justify="left",
                       wraplength=740).pack(fill="x", pady=(6, 0))
 
-    def _place_row(self, parent, place, *, builtin: bool) -> None:
-        """위치 한 줄. 오른쪽 버튼을 **먼저** 붙인다 — 경로가 길어도 밀려나지 않게."""
+    def _place_row(self, parent, place, *, builtin: bool, width: int) -> None:
+        """위치 한 줄. 오른쪽 버튼을 **먼저** 붙인다 — 경로가 길어도 밀려나지 않게.
+
+        `width` 는 그 칸 전체에서 가장 긴 이름에 맞춘 값이다(`name_width`).
+        줄마다 따로 재면 이름 칸이 들쭉날쭉해져 목록으로 안 읽힌다.
+        """
         tk, ttk = self.tk, self.ttk
         줄 = tk.Frame(parent, bg=theme.SURFACE)
         줄.pack(fill="x", pady=3)
 
         tk.Label(줄, text=place.label, bg=theme.SURFACE, fg=theme.TEXT,
-                 font=theme.body_font(), width=12, anchor="w").pack(side="left")
+                 font=theme.body_font(), width=width, anchor="w",
+                 ).pack(side="left", padx=(0, 10))
 
         if builtin:
             # 정상인 줄에는 버튼을 두지 않는다 — 고칠 것이 없는데 고치는 단추가
@@ -1555,9 +1624,12 @@ class App:
             tk.Label(줄, text=place.note, bg=theme.SURFACE,
                      fg=(theme.TRASH if place.alert else theme.MUTED),
                      font=theme.body_font(9)).pack(side="right", padx=(10, 0))
-        tk.Label(줄, text=place.path, bg=theme.SURFACE,
-                 fg=(theme.TRASH if place.alert else theme.FAINT),
-                 font=theme.mono_font(9), anchor="w").pack(side="left", fill="x", expand=True)
+        # 여기도 **눌러서 여는 링크**다 — 안 그러면 경로를 눈으로 읽고 탐색기
+        # 주소창에 손으로 옮겨 적어야 한다. 없는 폴더는 링크가 아니라 빨간 글자로
+        # 남는다(눌러도 아무 일이 없는 링크를 그리지 않는다).
+        self._path_link(줄, text=place.path, folder=place.open_path, size=9,
+                        plain_fg=(theme.TRASH if place.alert else theme.FAINT),
+                        ).pack(side="left", fill="x", expand=True, padx=(0, 8))
 
     # ── 화면 3 의 조작 — 고른 즉시 저장된다 ─────────────────────
     def _pick_place(self, name: str, label: str) -> None:
@@ -1581,13 +1653,10 @@ class App:
 
     def _add_place(self) -> None:
         """이름을 묻고 → 탐색기 → 저장. 이름이 이상하면 한국어로 알린다."""
-        from tkinter import simpledialog
-
         with self._reporting("위치 추가"):
             self._need_picker()
-            name = simpledialog.askstring(
-                "위치 추가", "이 위치를 무슨 이름으로 부를까요?  (예: 백업드라이브)",
-                parent=self.window)
+            name = self._ask_text("위치 추가", "이 위치를 무슨 이름으로 부를까요?",
+                                  example="예: 백업드라이브")
             if name is None:
                 self.status_var.set("위치 추가를 취소했습니다.")
                 return
@@ -1670,6 +1739,37 @@ class App:
         ttk.Label(줄, text=제목, style="Title.TLabel").pack(side="left", padx=(12, 0))
         return 줄            # 화면 2 가 오른쪽 끝에 링크를 하나 더 얹는다
 
+    def _path_link(self, parent, *, text: str, folder: str, size: int,
+                   plain_fg: str = theme.FAINT, bg: str = theme.SURFACE):
+        """경로 글자 하나. `folder` 가 있으면 **눌러서 탐색기로 여는 링크**가 된다.
+
+        `folder` 가 빈 글자면(어디인지 모르거나 폴더가 없는 줄) 보통 글자로
+        둔다 — 눌러도 아무 일이 없는 링크는 "안 열리네" 가 아니라 "고장났네"
+        로 읽힌다.
+
+        **배치는 하지 않고 위젯만 돌려준다** — 화면 1 은 grid, 화면 3 은 pack 이라
+        여기서 정할 수 없다.
+        """
+        tk = self.tk
+        if not folder:
+            return tk.Label(parent, text=text, bg=bg, fg=plain_fg,
+                            font=theme.mono_font(size), anchor="w")
+        lab = tk.Label(parent, text=text, bg=bg, fg=theme.ACCENT,
+                       font=theme.link_font(size), anchor="w", cursor="hand2")
+        lab.bind("<Button-1>", lambda _e, p=folder: self._open_folder(p))
+        return lab
+
+    def _open_folder(self, folder: str) -> None:
+        """링크를 눌렀을 때. 못 열면 한국어로 알리고 **창은 살아 있다.**
+
+        여는 동안 기다리지 않는다 — `picker.open_folder` 가 띄우기만 하고 곧장
+        돌아온다. 무슨 일이 있었는지는 상태줄에 남긴다: 탐색기가 다른 창 뒤에서
+        뜨면 눌러도 아무 일이 없는 것처럼 보이기 때문이다.
+        """
+        with self._reporting("폴더 열기"):
+            picker.open_folder(Path(folder))
+            self.status_var.set(f"탐색기에서 열었습니다 — {_short(Path(folder))}")
+
     def _card(self, parent):
         """판 하나. 얇은 테두리를 두른 밝은 면.
 
@@ -1681,28 +1781,51 @@ class App:
                              highlightthickness=1,
                              highlightbackground=theme.LINE, highlightcolor=theme.LINE)
 
-    # ── 물어보기 (버튼 글자가 한국어여야 한다) ───────────────────
-    def _confirm(self, title: str, body: str) -> bool:
-        """[예]/[아니오] 로 묻는다. 예를 누르면 True.
+    # ── 대화상자 (버튼 글자가 한국어여야 한다) ───────────────────
+    # 묻는 창을 **전부 우리가 그린다.** `messagebox`·`simpledialog` 는 버튼이
+    # [OK]/[Cancel] 로 뜨고 테마가 안 먹는다 — tkinter 에 그 글자를 바꾸는 표준
+    # 방법이 없다. 이 도구는 오류도 안내도 전부 한국어이고 창은 Finder 톤인데,
+    # 정작 "정말 실행할까요" 와 "무슨 이름으로 부를까요" 만 영어에 회색 네모면
+    # 되돌리기 가장 어려운 순간에 사용자가 낯선 창을 마주하게 된다.
+    #
+    # **묻는 내용과 동작은 바뀌지 않는다** — 글자와 창만 우리가 그린다.
 
-        `messagebox.askyesno` 를 쓰지 않는 이유는 하나다 — 버튼이 **[Yes]/[No]**
-        로 뜬다. tkinter 에는 그 글자를 바꾸는 표준 방법이 없다. 이 도구는
-        오류도 안내도 전부 한국어인데 정작 "정말 실행할까요" 를 묻는 자리만
-        영어면, 되돌리기 가장 어려운 순간에 사용자가 낯선 글자를 누르게 된다.
+    def _dialog(self, title: str):
+        """대화상자의 껍데기. 톤을 정하는 곳은 **여기 하나다.**
 
-        **묻는 내용과 동작은 바뀌지 않는다** — 글자와 창만 우리가 그린다.
+        (창, 내용이 들어갈 프레임) 을 돌려준다. 가운데 맞추기와 붙잡기(grab)는
+        내용을 다 채운 뒤 `_show_dialog` 가 한다 — 크기가 정해져야 가운데를
+        계산할 수 있기 때문이다.
         """
         tk, ttk = self.tk, self.ttk
-        답 = {"예": False}
-
         win = tk.Toplevel(self.window)
         win.title(title)
         win.configure(bg=theme.BG)
         win.transient(self.window)
         win.resizable(False, False)
-
         몸 = ttk.Frame(win, padding=(22, 18))
         몸.pack(fill="both", expand=True)
+        return win, 몸
+
+    def _show_dialog(self, win, focus=None) -> None:
+        """부모 창 가운데에 놓고, 닫힐 때까지 기다린다."""
+        win.update_idletasks()
+        가로 = max(0, (self.window.winfo_width() - win.winfo_width()) // 2)
+        win.geometry(f"+{self.window.winfo_rootx() + 가로}"
+                     f"+{self.window.winfo_rooty() + 110}")
+        if focus is not None:
+            focus.focus_set()
+        try:
+            win.grab_set()      # 묻는 동안 뒤 화면이 바뀌면 확인한 것과 달라진다
+        except self.tk.TclError:
+            pass                # 창을 아직 못 잡는 환경 — 물어보는 일 자체는 그대로 된다
+        self.window.wait_window(win)
+
+    def _confirm(self, title: str, body: str) -> bool:
+        """[예]/[아니오] 로 묻는다. 예를 누르면 True."""
+        ttk = self.ttk
+        답 = {"예": False}
+        win, 몸 = self._dialog(title)
         ttk.Label(몸, text=body, style="Lead.TLabel", wraplength=440,
                   justify="left").pack(anchor="w")
         줄 = ttk.Frame(몸)
@@ -1722,29 +1845,85 @@ class App:
         win.bind("<Return>", lambda _e: 끝(True))
         win.bind("<Escape>", lambda _e: 끝(False))
         win.protocol("WM_DELETE_WINDOW", lambda: 끝(False))
-
-        win.update_idletasks()
-        가로 = max(0, (self.window.winfo_width() - win.winfo_width()) // 2)
-        win.geometry(f"+{self.window.winfo_rootx() + 가로}"
-                     f"+{self.window.winfo_rooty() + 110}")
-        예.focus_set()
-        try:
-            win.grab_set()      # 묻는 동안 뒤 화면이 바뀌면 확인한 것과 달라진다
-        except tk.TclError:
-            pass                # 창을 아직 못 잡는 환경 — 물어보는 일 자체는 그대로 된다
-        self.window.wait_window(win)
+        self._show_dialog(win, 예)
         return 답["예"]
+
+    def _ask_text(self, title: str, prompt: str, *, example: str = "") -> str | None:
+        """글자 하나를 묻는다. **취소하면 None.**
+
+        빈 글자와 취소를 구별한다 — 취소는 None, [확인] 은 칸에 적힌 그대로다.
+        빈 이름을 막는 일은 부르는 쪽이 한다(`new_place_error` 가 한국어 이유를
+        준다). 여기서 같이 막으면 판단이 두 곳으로 갈라진다.
+        """
+        tk, ttk = self.tk, self.ttk
+        답: dict = {"값": None}
+        win, 몸 = self._dialog(title)
+        ttk.Label(몸, text=prompt, style="Lead.TLabel", wraplength=380,
+                  justify="left").pack(anchor="w")
+        if example:
+            ttk.Label(몸, text=example, style="Faint.TLabel").pack(anchor="w", pady=(2, 0))
+
+        var = tk.StringVar()
+        칸 = ttk.Entry(몸, textvariable=var, width=32, font=theme.body_font())
+        칸.pack(fill="x", pady=(10, 0))
+
+        줄 = ttk.Frame(몸)
+        줄.pack(fill="x", pady=(18, 0))
+
+        def 끝(값) -> None:
+            답["값"] = 값
+            win.destroy()
+
+        ttk.Button(줄, text="취소", style="Ghost.TButton",
+                   command=lambda: 끝(None)).pack(side="right")
+        ttk.Button(줄, text="확인", style="Primary.TButton",
+                   command=lambda: 끝(var.get())).pack(side="right", padx=(0, 10))
+
+        # Enter 는 확인, Esc 는 취소. **창을 그냥 닫아도 취소다.**
+        win.bind("<Return>", lambda _e: 끝(var.get()))
+        win.bind("<Escape>", lambda _e: 끝(None))
+        win.protocol("WM_DELETE_WINDOW", lambda: 끝(None))
+        self._show_dialog(win, 칸)
+        return 답["값"]
+
+    def _notice(self, title: str, body: str, *, alert: bool = False) -> None:
+        """읽고 [확인] 만 누르는 창. 오류도 여기로 나온다.
+
+        창이 이미 닫히는 중이면 조용히 넘긴다 — 알리려다 죽으면 정작 무슨 일이
+        있었는지 아무도 못 본다.
+        """
+        ttk = self.ttk
+        try:
+            if not self.window.winfo_exists():
+                return
+            win, 몸 = self._dialog(title)
+        except self.tk.TclError:
+            return
+        if alert:
+            # 무엇이 잘못됐는지 **한 줄로 먼저** 보인다. 본문은 검게 둔다 —
+            # 여러 줄을 다 빨갛게 칠하면 정작 어디가 문제인지 안 읽힌다.
+            ttk.Label(몸, text=f"⚠ {title}", style="Alert.TLabel",
+                      font=theme.body_font(11, weight="bold"),
+                      ).pack(anchor="w", pady=(0, 6))
+        ttk.Label(몸, text=body, style="Lead.TLabel", wraplength=440,
+                  justify="left").pack(anchor="w")
+        줄 = ttk.Frame(몸)
+        줄.pack(fill="x", pady=(18, 0))
+        확인 = ttk.Button(줄, text="확인", style="Primary.TButton", command=win.destroy)
+        확인.pack(side="right")
+        win.bind("<Return>", lambda _e: win.destroy())
+        win.bind("<Escape>", lambda _e: win.destroy())
+        self._show_dialog(win, 확인)
 
     # ── 오류를 창으로 ────────────────────────────────────────────
     def _report(self, what: str, exc: BaseException) -> None:
-        from tkinter import messagebox
         if isinstance(exc, OrganizeError):
             몸 = exc.message + (f"\n\n{exc.hint}" if exc.hint else "")
         else:
             # 파이썬 예외 원문을 그대로 보여주지 않는다(전역 규칙).
             몸 = (f"{what} 중 예상치 못한 오류가 났습니다.\n\n"
                   "디스크 상태나 쓰기 권한을 확인해 주세요.")
-        messagebox.showerror(what, 몸, parent=self.window)
+        self._notice(what, 몸, alert=True)
         self.status_var.set(f"{what} 실패 — 위 안내를 확인해 주세요.")
 
     class _Reporting:
