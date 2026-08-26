@@ -398,6 +398,62 @@ def test_a_missing_medium_is_not_reported_as_a_deleted_file(tmp_path):
     assert str(usb) in hint, "안 보이는 것 중 가장 위(마운트 지점)를 짚어야 한다"
 
 
+# --- root **안쪽** 하위폴더를 지운 것은 매체 없음이 아니다 ---
+
+def test_deleting_a_subfolder_inside_root_is_not_a_missing_medium(tmp_path):
+    """`root/01_Docs` 를 지운 것을 "USB 를 다시 꽂아 주세요" 로 안내하면 안 된다.
+
+    매체 판정을 넣으면서 "안 보이는 최상단이 root 안쪽인지" 를 안 봤다.
+    그래서 정리가 만든 평범한 하위폴더를 사용자가 지우기만 해도 undo 가
+    **영영** 막혔다 — `undone` 이 안 찍히니 `latest_run_id` 가 계속 그
+    실행을 집어 이전 실행까지 가린다. 꽂을 USB 도 없다. 실측한 결함이다.
+
+    옳은 동작은 옛 코드와 같다: 그 항목만 "옮기려는 파일이 없습니다" 로 닫고
+    나머지는 정상 되돌린다.
+    """
+    import shutil
+
+    a, c = tmp_path / "a.pdf", tmp_path / "c.jpg"
+    a.write_bytes(b"A")
+    c.write_bytes(b"C")
+    run_plan(tmp_path, [
+        Action("mkdir", None, tmp_path / "01_Docs", "폴더", "route"),
+        Action("move", a, tmp_path / "01_Docs" / "a.pdf", "이동", "route"),
+        Action("mkdir", None, tmp_path / "02_Media", "폴더", "route"),
+        Action("move", c, tmp_path / "02_Media" / "c.jpg", "이동", "route"),
+    ])
+    shutil.rmtree(tmp_path / "01_Docs")            # 사용자가 폴더째 지웠다
+
+    result = undo(tmp_path)
+
+    why = [row["why"] for row in result.failed]
+    assert any("옮기려는 파일이 없습니다" in w for w in why), why
+    assert not any("저장 매체를 찾을 수 없습니다" in w for w in why), why
+    assert c.read_bytes() == b"C", "나머지 항목은 정상 되돌아가야 한다"
+    assert not (tmp_path / "02_Media").exists()
+    log = json.loads((tmp_path / ".organize" / "runs" / "r1.json").read_text(encoding="utf-8"))
+    assert log.get("undone_at"), "다시 해 봐야 소용없는 항목이 실행을 붙들면 안 된다"
+    assert latest_run_id(tmp_path) is None, \
+        "root 안쪽을 지운 것 때문에 undo 가 영영 막히면 안 된다"
+
+
+def test_a_nested_folder_deleted_inside_root_is_also_not_a_missing_medium(tmp_path):
+    """두 단계 안쪽(`root/02_Media/사진`)이 통째로 사라져도 마찬가지다."""
+    import shutil
+
+    src = tmp_path / "사진.jpg"
+    src.write_bytes(b"IMG")
+    run_plan(tmp_path, [
+        Action("mkdir", None, tmp_path / "02_Media" / "사진", "폴더", "route"),
+        Action("move", src, tmp_path / "02_Media" / "사진" / "사진.jpg", "이동", "route"),
+    ])
+    shutil.rmtree(tmp_path / "02_Media")           # 위 단계까지 통째로 지웠다
+
+    why = [row["why"] for row in undo(tmp_path).failed]
+    assert not any("저장 매체를 찾을 수 없습니다" in w for w in why), why
+    assert latest_run_id(tmp_path) is None
+
+
 def test_a_folder_the_run_created_on_a_missing_medium_is_removed_on_retry(tmp_path):
     """매체가 없을 때 mkdir 항목에 도장을 찍으면, 다시 꽂아도 빈 폴더가 남는다."""
     root = tmp_path / "정리대상"
