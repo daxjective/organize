@@ -283,8 +283,11 @@ def builtin_places(infos, pinned: set[str]) -> list[Place]:
         if not info.builtin or info.name == "home":
             continue
         문제 = _문제인가(info)
-        out.append(Place(name=info.name, label=info.label,
-                         path=_short(info.path, _PLACE_PATH),
+        # 이름이 안 풀린 줄은 경로 자리에 적을 것이 없다 — `custom_places` 와
+        # 같은 모양으로 '—' 를 두고 자리를 이유에 내준다(안 그러면 긴 이유가
+        # 경로 칸을 밀어 '@d' 처럼 잘린 글자만 남는다. 실측: 캡처에서 그렇게 됐다).
+        경로 = "—" if info.status == folders.UNRESOLVED else _short(info.path, _PLACE_PATH)
+        out.append(Place(name=info.name, label=info.label, path=경로,
                          note=_why(info) if 문제 else "정상",
                          alert=문제, pinned=info.name in pinned))
     return out
@@ -891,6 +894,12 @@ class App:
         if info is None:
             return
         with self._reporting("대상 고르기"):
+            if info.status == folders.UNRESOLVED:
+                # 목록에는 남긴다(사라지면 고칠 방법도 사라진다) — 다만 어디인지
+                # 모르는 곳을 정리 대상으로 삼을 수는 없다.
+                raise OrganizeError(
+                    f"'{info.label}' 이 어느 폴더인지 확인할 수 없어 대상으로 고를 수 없습니다.",
+                    hint="[설정 · 폴더 위치] 에서 이 위치를 다시 지정해 주세요.")
             before = self._settings_fingerprint()
             self.session.set_root(info.path)
             self.target_var.set(text)
@@ -1750,6 +1759,10 @@ def _문제인가(info) -> bool:
 
 def _why(info) -> str:
     """줄 옆에 적을 **짧은** 이유. 긴 설명은 카드 아래에 한 번만 적는다."""
+    if info.status == folders.UNRESOLVED:
+        # 이 줄만은 길어도 그대로 적는다 — "확인할 수 없습니다" 만 보여 주면
+        # 무엇을 고쳐야 하는지 알 수 없다(순환 별칭인지, 없는 이름인지).
+        return getattr(info, "problem", "") or folders.UNRESOLVED
     if info.status == "폴더 없음":
         return "폴더가 없습니다"
     if info.status == "읽을 수 없음":

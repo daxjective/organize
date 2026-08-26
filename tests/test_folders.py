@@ -125,9 +125,28 @@ def test_경로를_함께_준다(tmp_path):
     assert 바탕.path == tmp_path / "Desktop"
 
 
-def test_풀_수_없는_이름은_건너뛴다_창이_죽으면_안_된다(tmp_path):
-    """가리키는 이름이 돌고 도는 설정이 있어도 첫 화면은 떠야 한다."""
+def test_풀_수_없는_이름도_줄로_남는다_창이_죽지도_말고_지우지도_말_것(tmp_path):
+    """가리키는 이름이 돌고 돌아도 첫 화면은 뜨고, **그 줄은 사라지지 않는다.**
+
+    예전에는 조용히 건너뛰었다. 그러면 화면 1·화면 3·대상 드롭다운에서 그
+    이름이 아무 말 없이 사라지고, 화면 3 의 [다시 지정]·[기본 위치로] 버튼까지
+    같이 사라져 **창만으로는 고칠 방법이 없어진다.** 실측한 결함이다.
+    """
     cfg = 설정(tmp_path, {"고리": "@고리"})
-    이름들 = [f.name for f in folders.overview(cfg)]
-    assert "고리" not in 이름들
-    assert "desktop" in 이름들
+    표 = {f.name: f for f in folders.overview(cfg)}
+    assert "desktop" in 표                          # 목록 전체가 죽으면 안 된다
+    assert "고리" in 표, "이름이 조용히 사라지면 안 된다"
+    assert 표["고리"].status == folders.UNRESOLVED
+    assert 표["고리"].count is None
+    assert "돌고" in 표["고리"].problem, "무엇이 문제인지 한국어로 실어야 한다"
+
+
+def test_내장_이름이_순환_별칭이면_그_줄이_사라지지_않고_이유를_단다(tmp_path):
+    """손편집 설정의 `{"desktop": ["@desktop"]}` — 실측한 그 모양 그대로."""
+    cfg = 설정(tmp_path, {"desktop": ["@desktop"]})
+    표 = {f.name: f for f in folders.overview(cfg)}
+    assert "desktop" in 표, "바탕화면 줄이 사라지면 다시 지정할 방법도 없다"
+    assert 표["desktop"].status == folders.UNRESOLVED
+    assert 표["desktop"].builtin is True             # 화면 1 이 이 줄을 그린다
+    assert [f.name for f in folders.overview(cfg)].count("desktop") == 1, \
+        "내장 목록과 등록 목록에 둘 다 있어도 줄은 하나여야 한다"

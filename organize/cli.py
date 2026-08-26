@@ -616,7 +616,18 @@ def _cmd_doctor(args) -> int:
         if p not in checked_folders:
             checked_folders.append(p)
     for name in sorted(cfg.paths):
-        p = resolve_alias(f"@{name}", cfg)
+        try:
+            p = resolve_alias(f"@{name}", cfg)
+        except AliasNotDefined as e:
+            # **doctor 는 복구 도구다.** 여기서 예외가 새면 아래의 0바이트 잔해
+            # 점검·미완료 기록 점검이 통째로 안 돈다 — 무엇이 잘못됐는지 알아내려고
+            # 부른 명령이 설정 한 줄 때문에 죽는 것이다. 실측한 결함이다.
+            # 위의 내장 이름 루프처럼 넘어가되, 사용자가 **직접 등록한** 이름이
+            # 안 풀리는 것이므로 조용히 넘어가지 않고 이유를 적는다.
+            print(f"    @{name:<9} {e.message}")
+            if e.hint:
+                print(f"               {e.hint}")
+            continue
         print(f"    @{name:<9} {str(p):<44} 파일 {count_text(p)}")
         if p not in checked_folders:
             checked_folders.append(p)
@@ -625,7 +636,11 @@ def _cmd_doctor(args) -> int:
     # 실행이 끊겼을 때 사용자가 그 사실을 알 방법이 한 군데도 없다.
     extra: list[Path] = []
     if getattr(args, "root", None):
-        extra.append(resolve_alias(args.root, cfg))
+        try:
+            extra.append(resolve_alias(args.root, cfg))
+        except AliasNotDefined as e:
+            # --root 에 안 풀리는 이름을 줬다고 점검 전체가 죽으면 안 된다.
+            print(f"\n  {e.message}")
     extra.extend(_recent_roots())
     shown = 0
     for p in extra:
@@ -773,12 +788,25 @@ def _cmd_paths(args) -> int:
     # — `doctor` 가 checked_folders 로 막아 둔 것과 같은 문제다.
     찍은이름: list[str] = []
     for name in BUILTIN:
-        print(f"  @{name:<10} {resolve_alias(f'@{name}', cfg)}")
+        try:
+            print(f"  @{name:<10} {resolve_alias(f'@{name}', cfg)}")
+        except AliasNotDefined:
+            # 내장 이름이 안 풀리는 경우는 하나뿐이다 — 사용자가 같은 이름을
+            # cfg.paths 에 등록했는데 그 값이 안 풀리는 것. 아래 루프가 **그
+            # 이름을 이유와 함께** 찍으므로 여기서는 넘어간다(조용히 사라지지 않는다).
+            continue
         찍은이름.append(name)
     for name in sorted(cfg.paths):
         if name in 찍은이름:
             continue
-        print(f"  @{name:<10} {resolve_alias(f'@{name}', cfg)}")
+        try:
+            print(f"  @{name:<10} {resolve_alias(f'@{name}', cfg)}")
+        except AliasNotDefined as e:
+            # 첫 줄에서 죽어 나머지를 못 보게 하지 않는다. 어느 이름이 문제인지
+            # 아는 것이 이 명령의 목적이다.
+            print(f"  @{name:<10} {e.message}")
+            if e.hint:
+                print(f"              {e.hint}")
         찍은이름.append(name)
     print("\n  위치를 바꾸려면:")
     print("      organize paths --set <이름>=<경로>")

@@ -21,6 +21,10 @@ LABEL = {"home": "홈", "desktop": "바탕화면", "downloads": "다운로드",
 # 앞에 '—' 를 붙인다 — 이 문장은 사용자가 이미 보던 것이라 바꾸지 않는다.
 _NO_FOLDER_TEXT = "— 폴더 없음"
 
+# 이름이 **아예 안 풀리는** 줄의 status. "폴더 없음"(어디인지는 아는데 그
+# 폴더가 없다)과 다른 일이라 글자를 따로 둔다. 창이 이 값을 보고 빨갛게 칠한다.
+UNRESOLVED = "위치를 확인할 수 없습니다"
+
 
 @dataclass(frozen=True)
 class FolderInfo:
@@ -28,8 +32,12 @@ class FolderInfo:
     label: str           # "바탕화면" — LABEL 에 없으면 name 그대로
     path: Path
     count: int | None    # 파일 개수. 폴더가 없거나 못 읽으면 None
-    status: str          # "" · "폴더 없음" · "읽을 수 없음"
+    status: str          # "" · "폴더 없음" · "읽을 수 없음" · UNRESOLVED
     builtin: bool        # 내장 별칭인가
+    # 이름이 안 풀린 이유(한국어 한 줄). UNRESOLVED 인 줄에만 들어 있다.
+    # 화면이 그대로 보여 준다 — "확인할 수 없습니다" 만으로는 무엇을 고쳐야
+    # 할지 알 수 없기 때문이다.
+    problem: str = ""
 
 
 def count_files(path: Path) -> tuple[int | None, str]:
@@ -62,16 +70,31 @@ def overview(cfg: UserConfig) -> list[FolderInfo]:
 
     같은 경로가 두 번 나오면 뒤엣것은 넣지 않는다 — `@photos` 가 사진 폴더를
     가리킬 때 같은 폴더를 두 줄로 셀 이유가 없다.
+
+    **안 풀리는 이름도 줄로 남긴다.** 예전에는 조용히 건너뛰었다. 손편집 설정에
+    `{"desktop": ["@desktop"]}` 같은 순환 별칭이 들어가면 바탕화면 줄이 화면
+    1·화면 3·대상 드롭다운에서 **아무 말 없이 사라졌고**, 그 줄이 사라지면서
+    [다시 지정] 버튼까지 같이 사라져 창만으로는 고칠 방법이 없었다. 실측한 결함이다.
     """
     out: list[FolderInfo] = []
     seen: set[Path] = set()
+    # 내장 이름을 사용자가 등록하면 아래 목록에 **두 번** 들어온다. 풀리는 줄은
+    # `seen`(경로)이 걸러 주지만, 안 풀리는 줄은 경로가 없어 그냥 두면 같은
+    # 이름이 두 줄로 나온다.
+    이름본것: set[str] = set()
 
     for name in (*BUILTIN, *sorted(cfg.paths)):
+        if name in 이름본것:
+            continue
+        이름본것.add(name)
         try:
             path = resolve_alias(f"@{name}", cfg)
-        except AliasNotDefined:
-            # 이름이 안 풀려도 목록 전체가 죽으면 안 된다. 첫 화면이 못 뜨는
-            # 것보다, 그 한 줄이 빠지는 편이 낫다(무엇이 잘못됐는지는 doctor 가 말한다).
+        except AliasNotDefined as e:
+            # 어디를 가리키는지 모르므로 경로 자리에는 이름 그대로를 적는다.
+            out.append(FolderInfo(name=name, label=LABEL.get(name, name),
+                                  path=Path(f"@{name}"), count=None,
+                                  status=UNRESOLVED, builtin=name in BUILTIN,
+                                  problem=e.message))
             continue
         if path in seen:
             continue

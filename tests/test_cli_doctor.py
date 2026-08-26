@@ -404,3 +404,45 @@ def test_doctor_and_paths_still_work_when_the_config_has_pins(
     assert "pins" in capsys.readouterr().out
     assert cli.main(["paths"]) == 0
     assert "pins" in capsys.readouterr().out
+
+
+def test_doctor_survives_a_circular_alias_and_still_runs_every_check(
+        project, tmp_path, capsys, monkeypatch):
+    """**doctor 는 복구 도구다.** 설정 한 줄이 깨졌다고 진단이 죽으면 안 된다.
+
+    손편집 설정에 `{"desktop": ["@desktop"]}` 을 넣으면 그 자리에서 죽어,
+    0바이트 잔해 점검·미완료 기록 점검이 **실행조차 되지 않았다.** 실측한 결함이다.
+    """
+    repo, work = project
+    monkeypatch.setattr(userconfig, "builtin_path",
+                        lambda name: work if name == "downloads" else tmp_path / name)
+    (repo / "config.local.json").write_text(
+        '{"paths": {"desktop": ["@desktop"], "보관": "%s"}}' % (tmp_path / "보관"),
+        encoding="utf-8")
+
+    assert cli.main(["doctor"]) == 0
+    out = capsys.readouterr().out
+    assert "돌고" in out, "어느 이름이 문제인지 조용히 넘어가면 안 된다"
+    assert "@desktop" in out
+    assert "보관" in out, "문제 뒤의 줄도 계속 나와야 한다"
+    assert "0바이트" in out, "뒤쪽 점검이 통째로 안 도는 것이 이 결함의 핵심이었다"
+    assert "완료되지 않은 실행 기록" in out
+
+
+def test_paths_survives_a_circular_alias_and_lists_every_name(
+        project, tmp_path, capsys, monkeypatch):
+    """`organize paths` 가 **첫 줄에서** 죽던 자리."""
+    repo, work = project
+    monkeypatch.setattr(userconfig, "builtin_path",
+                        lambda name: work if name == "downloads" else tmp_path / name)
+    (repo / "config.local.json").write_text(
+        '{"paths": {"desktop": ["@desktop"], "보관": "%s"}}' % (tmp_path / "보관"),
+        encoding="utf-8")
+
+    assert cli.main(["paths"]) == 0
+    out = capsys.readouterr().out
+    assert "@downloads" in out, "첫 줄에서 죽으면 안 된다"
+    assert "돌고" in out and "@desktop" in out
+    assert "보관" in out
+    줄머리 = [ln for ln in out.splitlines() if ln.startswith("  @desktop")]
+    assert len(줄머리) == 1, f"같은 이름을 두 번 찍지 않는다: {줄머리}"
