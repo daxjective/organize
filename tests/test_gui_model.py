@@ -890,3 +890,107 @@ def test_폴더_생성_줄에도_이름이_붙는다(repo, work):
     assert all(r.name for r in 폴더), \
         f"이름이 빈 줄이 있다: {[r.name for r in 폴더]}"
     assert "01_Docs" in [r.name for r in 폴더], "만들 폴더 이름을 적는다"
+
+
+# ── 저장할 때 폴더도 같이 기억한다 ──────────────────────────────
+# 예전에는 roots=[] 로 폴더를 버렸다. 그래서 딸려 온 레시피(폴더 있음)와 내가
+# 저장한 것(폴더 없음)이 같은 드롭다운에 섞여, 하나는 대상을 바꾸고 하나는
+# 안 바꿨다. 어느 쪽인지 화면에 표시도 없었다.
+
+def test_root_spec_등록된_폴더는_이름으로_적는다(tmp_path):
+    """절대 경로를 박으면 PC 를 옮기는 순간 그 조합이 죽는다."""
+    from organize.gui_model import root_spec
+    from organize.userconfig import UserConfig
+
+    usb = tmp_path / "USB"
+    usb.mkdir()
+    cfg = UserConfig(paths={"백업": [str(usb)]}, folder_names={})
+
+    assert root_spec(usb, cfg) == "@백업"
+
+
+def test_root_spec_등록_안_된_폴더는_경로_그대로(tmp_path):
+    """적을 이름이 없다. 그 사실은 부르는 쪽이 사용자에게 알린다."""
+    from organize.gui_model import root_spec
+    from organize.userconfig import UserConfig
+
+    아무데나 = tmp_path / "한번쓰고말것"
+    아무데나.mkdir()
+
+    assert root_spec(아무데나, UserConfig(paths={}, folder_names={})) == str(아무데나)
+
+
+def test_root_spec_안_골랐으면_빈_글자():
+    from organize.gui_model import root_spec
+    from organize.userconfig import UserConfig
+
+    assert root_spec(None, UserConfig(paths={}, folder_names={})) == ""
+
+
+def test_저장한_조합이_폴더를_같이_들고_있다(repo, work):
+    """이름 붙여 저장하는 이유는 '다음에 똑같이 하려고' 다 — 폴더가 빠지면
+    매번 다시 골라야 한다."""
+    import json
+
+    s = Session(repo_root=repo)
+    s.set_root(work)
+    s.set_recipe("정리")
+
+    path = s.save_recipe("내조합")
+    저장된것 = json.loads(path.read_text(encoding="utf-8"))
+
+    assert 저장된것["roots"], "폴더를 버리면 안 된다"
+    assert str(work) in 저장된것["roots"][0] or 저장된것["roots"][0].startswith("@")
+
+
+def test_저장한_조합을_다시_고르면_그_폴더로_돌아온다(repo, work):
+    """저장 → 다른 폴더로 옮김 → 다시 고름. 그때 원래 폴더를 가리켜야 한다."""
+    s = Session(repo_root=repo)
+    s.set_root(work)
+    s.set_recipe("정리")
+    s.save_recipe("내조합")
+
+    assert s.recipe_root_label("내조합"), "어느 폴더용인지 화면이 말할 수 있어야 한다"
+
+
+def test_폴더를_안_골랐으면_저장에_폴더가_안_들어간다(repo):
+    """없는 것을 지어내지 않는다."""
+    s = Session(repo_root=repo)
+    s.set_recipe("정리")
+
+    assert s.saved_roots() == []
+
+
+def test_recipe_root_label_폴더가_없는_조합은_빈_글자(repo):
+    """모르면 아무 말도 안 하는 편이, 틀린 폴더 이름을 적는 것보다 낫다."""
+    s = Session(repo_root=repo)
+    s.set_recipe("정리")
+    s.save_recipe("폴더없는조합")
+
+    assert s.recipe_root_label("폴더없는조합") == ""
+
+
+def test_등록_안_된_폴더로_저장하면_경로_그대로_들어간다(repo, work):
+    """다른 PC 에서 안 맞는다 — 그 사실은 저장 창이 미리 알린다."""
+    s = Session(repo_root=repo)
+    s.set_root(work)
+    s.set_recipe("정리")
+
+    (적힌것,) = s.saved_roots()
+
+    assert not 적힌것.startswith("@"), "등록 안 된 폴더에는 붙일 이름이 없다"
+    assert 적힌것 == str(work)
+
+
+def test_등록된_폴더로_저장하면_이름으로_들어간다(repo, tmp_path):
+    """@이름 으로 적어야 다른 PC 에서도 그 PC 의 폴더를 가리킨다."""
+    usb = tmp_path / "USB"
+    usb.mkdir()
+    (repo / "config.local.json").write_text(
+        json.dumps({"paths": {"백업": str(usb)}}, ensure_ascii=False), encoding="utf-8")
+
+    s = Session(repo_root=repo)
+    s.set_root(usb)
+    s.set_recipe("정리")
+
+    assert s.saved_roots() == ["@백업"]

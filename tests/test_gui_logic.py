@@ -14,7 +14,7 @@ from organize.gui import (arrange_steps, builtin_places, control_locks, custom_p
                           dest_text, foot_text, keeps_preview, kind_tabs,
                           local_place_names, move_item, name_width, new_place_error,
                           openable, place_path_width,
-                          KIND_LABEL,
+                          KIND_LABEL, HELP_SECTIONS, why_disabled, recipe_display,
                           profile_folder_names, row_checks, toggle_file_key,
                           undo_label, undo_prompt, _raw_kind)
 from organize.gui_model import Row, _KIND_LABEL
@@ -189,8 +189,8 @@ def test_foot_text_잘렸어도_손대지_않음_설명은_그대로_남는다()
     # 경고를 얹느라 원래 있던 설명이 밀려나면 안 된다.
     말 = foot_text({"extract": 2, "mkdir": 1}, skipped=5, hidden=10)
     assert "손대지 않음 5개" in 말
-    assert "압축 안에서 나올 파일" in 말
-    assert "폴더 생성은 파일이 아니라" in 말
+    assert "압축 안에서 나올 파일" in 말, \
+        "눈앞의 줄에 체크박스가 없는 이유는 도움말이 아니라 여기 있어야 한다"
 
 
 # ── 일이 도는 동안 무엇이 잠기는가 ───────────────────────────────
@@ -583,13 +583,79 @@ def test_요약줄이_이름표를_글자로_다시_적지_않는다():
 
 
 def test_보류가_손대지_않음과_헷갈리지_않게_짚어_준다():
-    """둘 다 '아무 일 없었다' 로 읽힌다 — 보류는 실제로 폴더를 옮기는 것이다."""
+    """둘 다 '아무 일 없었다' 로 읽힌다 — 보류는 실제로 폴더를 옮기는 것이다.
+
+    이 설명은 표 아래가 아니라 **[?] 도움말**에 있다. 매번 보이는 자리에 두면
+    줄이 네댓 문장으로 불어나 정작 숫자와 ⚠ 경고가 묻힌다.
+    """
+    도움말 = " ".join(줄 for _, 줄들 in HELP_SECTIONS for 줄 in 줄들)
+
+    assert "다릅니다" in 도움말 and "손대지 않음" in 도움말
+    assert "되돌리기" in 도움말, "되살릴 수 있다는 것까지 말해야 안심한다"
+
+
+def test_표_아래에는_설명이_아니라_이번_실행의_숫자만_남는다():
+    """설명까지 늘어놓으면 매번 달라지는 숫자가 그 안에 묻힌다."""
     말 = foot_text({"move": 3, "quarantine": 2}, skipped=9)
 
-    assert "손대지 않은 것이 아닙니다" in 말
-    assert "되돌리기" in 말, "되살릴 수 있다는 것까지 말해야 안심한다"
+    assert "손대지 않음 9개" in 말
+    assert "지우지 않고" not in 말, "보류가 무엇인지는 도움말이 설명한다"
 
 
-def test_보류가_없으면_그_설명은_띄우지_않는다():
-    """매번 뜨는 설명은 안 읽게 된다."""
-    assert "손대지 않은 것이 아닙니다" not in foot_text({"move": 3}, skipped=9)
+def test_도움말이_할_일_다섯_가지를_다_설명한다():
+    """체크박스만 보고는 무엇을 하는 작업인지 알 수 없다."""
+    from organize import catalog
+
+    도움말 = " ".join(줄 for _, 줄들 in HELP_SECTIONS for 줄 in 줄들)
+    빠진것 = [e.label for e in catalog.catalog() if e.label not in 도움말]
+
+    assert not 빠진것, f"도움말에 없는 작업: {빠진것}"
+
+
+# ── 버튼이 왜 꺼졌는지 ──────────────────────────────────────────
+# "미리보기를 눌러도 아무 동작이 없다" — 사실은 눌리지 않는 것인데, 회색 버튼만
+# 보고 그 이유를 알아낼 방법이 화면에 하나도 없었다.
+
+def test_why_disabled_폴더를_안_골랐으면_그것부터():
+    assert "정리할 폴더" in why_disabled(
+        busy=False, has_root=False, has_steps=True, can_apply=False)
+
+
+def test_why_disabled_할_일이_없으면_그것부터():
+    assert "할 일" in why_disabled(
+        busy=False, has_root=True, has_steps=False, can_apply=False)
+
+
+def test_why_disabled_둘_다_없으면_폴더를_먼저_짚는다():
+    """세 줄을 한꺼번에 늘어놓으면 지금 무엇을 해야 하는지가 오히려 안 보인다."""
+    말 = why_disabled(busy=False, has_root=False, has_steps=False, can_apply=False)
+    assert "정리할 폴더" in 말 and "할 일" not in 말
+
+
+def test_why_disabled_도는_중에는_기다리라고_한다():
+    """고장이 아니라 진행 중이라는 것을 말해야 한다."""
+    말 = why_disabled(busy=True, has_root=False, has_steps=False, can_apply=False)
+    assert "끝나면" in 말
+
+
+def test_why_disabled_다_갖췄으면_아무_말도_안_한다():
+    """누를 수 있는데 이유를 적어 두면 그게 더 헷갈린다."""
+    assert why_disabled(busy=False, has_root=True, has_steps=True,
+                        can_apply=True) == ""
+
+
+def test_why_disabled_미리보기_전이면_그렇게_말한다():
+    말 = why_disabled(busy=False, has_root=True, has_steps=True, can_apply=False)
+    assert "미리보기" in 말
+
+
+# ── 조합이 어느 폴더용인지 미리 보이기 ──────────────────────────
+
+def test_recipe_display_폴더가_있으면_같이_보인다():
+    """고른 뒤에야 상태줄에 나오면 놀란다. 목록에서 미리 보이면 놀랄 일이 아니다."""
+    assert recipe_display("다운로드 정리", "다운로드") == "다운로드 정리 → 다운로드"
+
+
+def test_recipe_display_폴더가_없으면_이름만():
+    """모르면 아무 말도 안 하는 편이, 틀린 폴더 이름을 적는 것보다 낫다."""
+    assert recipe_display("내조합", "") == "내조합"

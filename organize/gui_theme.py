@@ -178,6 +178,14 @@ def apply_theme(window) -> None:
     style.map("Link.TButton", background=[("active", BG), ("pressed", BG)],
               foreground=[("active", ACCENT)])
 
+    # [?] 도움말. **흐린 회색으로 두면 아무도 못 찾는다** — 여기 뒤에 설명을
+    # 숨겨 놓고 눈에 안 띄게 두면 숨긴 것과 같다(실측: 캡처에서 안 보였다).
+    style.configure("Help.TButton", background=ACCENT_BG, foreground=ACCENT,
+                    font=body_font(10, weight="bold"), padding=(7, 1),
+                    relief="flat", borderwidth=0)
+    style.map("Help.TButton",
+              background=[("active", SUNKEN), ("pressed", SUNKEN)])
+
     # 대화상자의 글자 입력칸. **OS 기본 모양을 그대로 두지 않는다** — 창은
     # Finder 톤인데 입력칸만 회색 네모면 딴 프로그램에서 뜬 창처럼 보인다.
     style.configure("TEntry", fieldbackground=SURFACE, foreground=TEXT,

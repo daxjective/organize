@@ -16,6 +16,7 @@ from datetime import date, datetime
 from pathlib import Path
 
 from organize import catalog
+from organize.aliases import BUILTIN
 # 종류 이름표는 `core.action` 이 하나만 갖고 있다(창·명령줄이 같은 말을 쓰도록).
 from organize.core.action import KIND_LABEL as _KIND_LABEL
 from organize.core.executor import execute, prepare_runlog, write_runlog
@@ -56,6 +57,29 @@ class PreviewView:
         return (" · ".join(f"{_KIND_LABEL[k]} {c.get(k, 0)}"
                            for k in ("move", "quarantine", "mkdir", "extract"))
                 + f" · 손대지 않음 {self.skipped}")
+
+
+def root_spec(root: Path | None, cfg) -> str:
+    """정리할 폴더를 레시피에 **무엇으로 적을까**. 등록된 이름이 있으면 `@이름`.
+
+    절대 경로를 박아 두면 PC 를 옮기는 순간 그 조합이 죽는다 — 이 도구가
+    존재하는 이유가 이식성이다. `@downloads` 로 적어 두면 새 PC 에서는 그 PC 의
+    다운로드를 가리킨다.
+
+    **내장 이름을 먼저 본다.** 어느 PC 에나 있는 이름이라 가장 잘 옮겨 간다.
+    등록되지 않은 폴더(그 자리에서 직접 고른 것)는 적을 이름이 없으니 경로
+    그대로 적는다 — 그 사실은 부르는 쪽이 사용자에게 알린다.
+    """
+    if root is None:
+        return ""
+    같은가 = os.path.realpath(root)
+    for name in (*BUILTIN, *sorted(cfg.paths)):
+        try:
+            if os.path.realpath(resolve_alias(f"@{name}", cfg)) == 같은가:
+                return f"@{name}"
+        except (AliasNotDefined, OSError):
+            continue          # 안 풀리는 이름은 그냥 건너뛴다. 여기서 알릴 일은 아니다
+    return str(root)
 
 
 def landing_folders(done, root: Path) -> list[tuple[str, int, str]]:
@@ -160,6 +184,32 @@ class Session:
     def recipe_names(self) -> list[str]:
         return list_recipes(self.repo_root / "recipes")
 
+    def saved_roots(self) -> list[str]:
+        """지금 고른 폴더를 레시피에 적을 형태로. 아직 안 골랐으면 빈 목록."""
+        if self._root is None:
+            return []
+        return [root_spec(self._root, load_config(self.repo_root))]
+
+    def recipe_root_label(self, name: str) -> str:
+        """그 조합이 **어느 폴더용인지**. 드롭다운에 미리 적으려고 쓴다.
+
+        못 풀거나 안 적혀 있으면 빈 글자다 — 모르면 아무 말도 안 하는 편이,
+        틀린 폴더 이름을 적어 두는 것보다 낫다.
+        """
+        try:
+            recipe = load_recipe(find_recipe(self.repo_root / "recipes", name))
+            if not recipe.roots:
+                return ""
+            spec = recipe.roots[0]
+            if spec.startswith("@"):
+                # 이름 그대로가 사람이 부르는 말이다(`@downloads` → "다운로드").
+                from organize.folders import LABEL
+                이름 = spec[1:].partition("/")[0]
+                return LABEL.get(이름, 이름)
+            return Path(spec).name or spec
+        except (OrganizeError, AliasNotDefined, OSError):
+            return ""
+
     def set_root(self, folder: Path | str | None) -> None:
         """정리할 폴더를 정한다. **진짜 바뀌었을 때만** 본 것을 버린다.
 
@@ -239,9 +289,16 @@ class Session:
         return [copy.deepcopy(step) for step in self._steps if step not in catalog_steps]
 
     def save_recipe(self, name: str, *, overwrite: bool = False) -> Path:
-        """지금 steps 를 레시피 JSON 으로 저장하고 저장한 경로를 돌려준다.
+        """지금 steps 와 **정리할 폴더**를 레시피 JSON 으로 저장한다.
 
-        roots 는 빈 리스트로 저장한다 — 대상 폴더는 화면에서 따로 고른다.
+        예전에는 `roots=[]` 로 폴더를 버렸다. 그래서 딸려 온 레시피 셋(폴더가
+        박혀 있다)과 내가 저장한 것(폴더가 없다)이 **같은 드롭다운에 섞여 있는데
+        하나는 대상을 바꾸고 하나는 안 바꿨다.** 어느 쪽인지 화면에 표시도
+        없었다 — "레시피를 고르면 대상이 자동으로 박히는 구조인가" 라는 질문이
+        나온 뿌리다.
+
+        이름을 붙여 저장하는 이유는 **다음에 똑같이 하려고** 이므로, 폴더도 같이
+        기억한다. 등록된 폴더는 `@이름` 으로 적어 다른 PC 에서도 살아 있게 한다.
         """
         if not name or not name.strip():
             raise OrganizeError("레시피 이름을 입력해 주세요.",
@@ -267,7 +324,8 @@ class Session:
                 hint="덮어쓰려면 같은 이름으로 다시 저장을 눌러 주세요.")
 
         try:
-            write_recipe_file(path, Recipe(name=name, roots=[], steps=list(self._steps)))
+            write_recipe_file(path, Recipe(name=name, roots=self.saved_roots(),
+                                           steps=list(self._steps)))
         except OSError as e:
             # 파이썬 예외 원문을 그대로 보여주지 않는다 — 윈도우 예약어(con,
             # nul), 너무 긴 이름, 권한 없음을 한꺼번에 덮는 한국어 메시지로 바꾼다.

@@ -40,7 +40,10 @@ _ONEDRIVE = "OneDrive 백업이 켜져 있으면 실제 폴더가 다른 곳일 
 _NO_RECIPE = "(직접 고름)"
 _NO_TARGET = "(고르지 않음)"
 _LOADING = "(폴더 확인 중…)"
-_NO_RECIPE_FILES = "(저장된 레시피 없음)"
+_NO_RECIPE_FILES = "(저장된 조합 없음)"
+# 목록에 없는 폴더를 그 자리에서 집는 줄. **맨 아래에 둔다** — 등록한 폴더가
+# 먼저 보여야 하고, 이건 그것들로 안 될 때 쓰는 것이다.
+_PICK_FOLDER = "+ 폴더 직접 고르기…"
 
 # 표에 한 번에 그리는 줄 수의 한계. 다운로드 폴더는 수천 개일 수 있고, 줄마다
 # 위젯을 서너 개 만들면 창이 몇 초씩 멈춘다(체크 하나 끌 때마다 다시 그린다).
@@ -163,6 +166,38 @@ def control_locks(*, busy: bool, can_preview: bool, can_apply: bool, can_undo: b
     }
 
 
+def why_disabled(*, busy: bool, has_root: bool, has_steps: bool,
+                 can_apply: bool) -> str:
+    """세 버튼이 **왜 꺼져 있는지** 한 줄로. 누를 수 있으면 빈 글자.
+
+    `control_locks` 는 켜고 끄기만 할 뿐 이유를 말하지 않았다. 그래서
+    "[미리보기] 를 눌러도 아무 동작이 없다" 가 된다 — 사실은 눌리지 않는
+    것인데, **꺼졌다는 것과 왜 꺼졌는지는 다른 정보다.** 회색 버튼만 보고
+    그 이유를 알아낼 방법이 화면에 하나도 없었다.
+
+    **가장 앞선 이유 하나만** 말한다. 세 줄을 한꺼번에 늘어놓으면 지금 무엇을
+    해야 하는지가 오히려 안 보인다 — 순서대로 하나씩 짚어 준다.
+    """
+    if busy:
+        return "지금 하는 일이 끝나면 다시 누를 수 있습니다."
+    if not has_root:
+        return "먼저 [정리할 폴더] 를 골라 주세요."
+    if not has_steps:
+        return "[할 일] 을 하나 이상 켜 주세요."
+    if not can_apply:
+        return "[미리보기] 를 눌러 무엇이 어디로 가는지 확인한 뒤에 실행할 수 있습니다."
+    return ""
+
+
+def recipe_display(name: str, root_label: str) -> str:
+    """드롭다운에 적을 조합 이름. 폴더가 딸려 있으면 **고르기 전에** 보인다.
+
+    조합을 고르면 정리할 폴더까지 같이 바뀐다. 그 사실이 고른 **뒤에야**
+    상태줄에 나오면 놀란다 — 목록에서 미리 보이면 놀랄 일이 아니다.
+    """
+    return f"{name} → {root_label}" if root_label else name
+
+
 def undo_label(root, targets: dict) -> str:
     """되돌릴 폴더를 **사람이 부르는 이름**으로. 등록된 이름이 있으면 그것.
 
@@ -209,25 +244,55 @@ def foot_text(counts: dict, skipped: int, hidden: int = 0) -> str:
     잘렸다는 안내가 여기 있어야 한다. 표 맨 끝에 두면 250줄일 때 4233px 중 맨
     아래라 200줄을 내려야 보이고, 못 본 사람은 "전부 봤다" 고 믿고 [실행] 을
     누른다. 그래서 **잘린 이유를 맨 앞에** 적는다.
+
+    **이번 실행의 사실만 적는다.** "보류가 무엇인가" 같은 **설명은 [?] 도움말로**
+    옮겼다. 설명까지 여기 늘어놓으면 줄이 네댓 문장으로 불어나, 정작 매번
+    달라지는 숫자와 ⚠ 경고가 그 안에 묻힌다.
+
+    다만 **지금 화면에서 이상해 보이는 것**은 여기 남긴다 — 체크박스가 없는
+    줄을 보고 있는 사람에게 "도움말을 열어 보라"고 하는 것은 불친절하다.
     """
     말 = []
     if hidden:
         말.append(f"⚠ 이 탭의 {hidden}줄은 표에 그리지 않았습니다 — 너무 많으면"
                  " 창이 멈춥니다. 탭 숫자와 아래 개수는 안 그린 줄까지 다 셉니다.")
     말.append(f"손대지 않음 {skipped}개 (여기에 뺀 파일도 들어갑니다).")
-    if counts.get("quarantine"):
-        # **'보류' 와 '손대지 않음' 은 다른 일이다.** 둘 다 "아무 일 없었다" 로
-        # 읽히기 쉬워서, 보류가 실제로는 **폴더를 옮기는 것**이라고 못박는다.
-        말.append(f"'{KIND_LABEL['quarantine']}' 는 손대지 않은 것이 아닙니다 —"
-                 " 지우지 않고 .organize/trash 로 옮겨 두는 것이며,"
-                 " [되돌리기] 로 제자리에 되살릴 수 있습니다.")
     if counts.get("extract"):
-        # 누를 수 없는 이유를 모르면 고장으로 읽힌다.
-        말.append("압축 안에서 나올 파일에는 체크박스가 없습니다 — 아직 디스크에"
+        # 누를 수 없는 이유를 모르면 고장으로 읽힌다. 눈앞의 줄에 대한 말이라 남긴다.
+        말.append("압축 안에서 나올 파일은 체크할 수 없습니다 — 아직 디스크에"
                  " 없어서 뺄 수가 없습니다. 빼려면 그 압축 파일의 체크를 끄세요.")
-    if counts.get("mkdir"):
-        말.append("폴더 생성은 파일이 아니라 따로 셉니다.")
     return "  ".join(말)
+
+
+# 화면 2 의 [?] 가 여는 도움말. **글자를 여기 모아 둔다** — 창을 그리는 코드
+# 사이에 흩어 두면 무엇을 설명하고 있는지 한눈에 안 보이고, 말이 바뀔 때
+# 빠뜨린다. (제목, 줄들) 의 목록이다.
+HELP_SECTIONS: list[tuple[str, list[str]]] = [
+    ("할 일", [
+        "압축 해제 — zip 안의 파일을 꺼냅니다. 원본 압축 파일은 남습니다.",
+        "중복 제거 — 내용이 똑같은 파일을 찾아 하나만 남기고 나머지를 보류합니다.",
+        "종류별 분류 — 확장자를 보고 01_Docs · 02_Media 같은 폴더로 나눕니다.",
+        "캡처·사진 분리 — 02_Media 안을 촬영정보(EXIF)로 사진과 캡처로 가릅니다.",
+        "연도별 분류 — 사진을 찍은 해마다 폴더를 만들어 나눕니다.",
+        "켠 것은 위에서부터 순서대로 실행됩니다. ▲▼ 로 순서를 바꿀 수 있습니다.",
+    ]),
+    ("결과 읽는 법", [
+        "이동 — 정리할 폴더 안에서 자리를 옮긴 파일입니다.",
+        f"{KIND_LABEL['quarantine']} — 지운 것이 아닙니다. .organize/trash 로 옮겨 두는"
+        " 것이며, [되돌리기] 로 제자리에 되살릴 수 있습니다.",
+        "폴더 생성 — 만들어질 폴더입니다. 파일이 아니라서 따로 셉니다.",
+        "손대지 않음 — 규칙에 걸리지 않아 그대로 둔 파일입니다. 체크를 꺼서"
+        " 직접 뺀 파일도 여기 들어갑니다.",
+        "'보류' 와 '손대지 않음' 은 다릅니다 — 보류는 폴더가 옮겨졌고,"
+        " 손대지 않음은 있던 자리 그대로입니다.",
+    ]),
+    ("미리보기 · 실행 · 되돌리기", [
+        "미리보기 — 무엇이 어디로 갈지 계산만 합니다. 파일을 하나도 건드리지 않습니다.",
+        "실행 — 미리보기에서 본 그 계획을 그대로 수행합니다. 보지 않고는 실행할 수 없습니다.",
+        "되돌리기 — 마지막 실행을 통째로 제자리에 돌려놓습니다.",
+        "표의 체크를 끄면 그 파일은 이번 실행에서 빠지고, 계획을 처음부터 다시 세웁니다.",
+    ]),
+]
 
 
 def dest_text(dest: str, root) -> str:
@@ -510,6 +575,10 @@ class App:
         self.step_vars: dict = {}
         self.step_rows: dict = {}
         self.targets: dict = {}         # 드롭다운 글자 → FolderInfo
+        # 이번 창에서 직접 고른 폴더들. 등록하지 않았으므로 창을 닫으면 사라진다 —
+        # 목록에 남겨 두는 이유는 **다시 고를 수 있어야** 하기 때문이다.
+        self._picked_history: dict = {}
+        self._picked_target = None      # 지금 쓰는 것이 직접 고른 폴더인가
         self.view = None                # 마지막 미리보기 결과(PreviewView)
         self.tab_kind: str | None = None
 
@@ -735,25 +804,28 @@ class App:
 
     # ── 화면 2 — 메인 ────────────────────────────────────────────
     def _build_main(self, parent) -> None:
-        """레시피·대상·작업·미리보기 표.
+        """저장한 조합 · 정리할 폴더 · 할 일 · 미리보기 표.
 
-        **경로 입력창도 [찾아보기] 도 없다.** 대상은 이름 드롭다운이다 — 시안의
-        핵심 문장이 "경로를 칠 일이 없다" 이고, 탐색기는 화면 3 에서만 쓴다.
+        경로를 **손으로 칠 일은 없다.** 폴더는 이름 드롭다운에서 고르고, 목록에
+        없는 폴더는 맨 아래 [+ 폴더 직접 고르기…] 로 탐색기에서 집는다. 손으로
+        쓴 경로만 막으면 오타로 파일이 흩어지는 일은 생기지 않는다.
         """
         tk, ttk = self.tk, self.ttk
         머리 = self._header(parent, "organize")
         # **변수로 들고 있는다.** 이 링크도 도는 동안 꺼야 하는데, 붙잡아 두지
         # 않으면 끌 방법이 없다(▲▼ 가 남았던 것과 같은 이유다).
-        self.btn_settings = ttk.Button(머리, text="설정 · 폴더 위치", style="Link.TButton",
+        # 이름이 "설정 · 폴더 위치" 였을 때는 아래 체크박스 칸도 「설정」이라
+        # 같은 말이 두 곳을 가리켰다. 이제 칸은 「할 일」, 링크는 「폴더 위치 설정」.
+        self.btn_settings = ttk.Button(머리, text="폴더 위치 설정", style="Link.TButton",
                                        command=lambda: self._go("settings"))
         self.btn_settings.pack(side="right")
 
-        # ── 레시피 · 대상 ─────────────────────────────────────
+        # ── 저장한 조합 · 정리할 폴더 ─────────────────────────
         위 = ttk.Frame(parent)
         위.pack(fill="x", pady=(14, 0))
         위.columnconfigure(2, weight=1)          # 가운데를 비워 [저장] 을 오른쪽 끝으로
 
-        ttk.Label(위, text="레시피", width=6).grid(row=0, column=0, sticky="w")
+        ttk.Label(위, text="저장한 조합", width=10).grid(row=0, column=0, sticky="w")
         self.recipe_var = tk.StringVar(value=_NO_RECIPE)
         self.recipe_menu = self._dropdown(위, self.recipe_var)
         self.recipe_menu.grid(row=0, column=1, sticky="w")
@@ -761,10 +833,18 @@ class App:
                                    command=self._save_recipe)
         self.btn_save.grid(row=0, column=3, sticky="e", padx=(10, 0))
 
-        ttk.Label(위, text="대상", width=6).grid(row=1, column=0, sticky="w", pady=(8, 0))
+        ttk.Label(위, text="정리할 폴더", width=10).grid(row=1, column=0, sticky="w",
+                                                   pady=(8, 0))
         self.target_var = tk.StringVar(value=_LOADING)
         self.target_menu = self._dropdown(위, self.target_var)
         self.target_menu.grid(row=1, column=1, sticky="w", pady=(8, 0))
+        # 직접 고른 폴더를 쓰고 있을 때만 나타난다. 자주 쓸 것 같으면 그때
+        # 등록하면 된다 — 쓰기도 전에 이름부터 지으라고 하지 않는다.
+        self.btn_remember = ttk.Button(위, text="이 폴더 기억하기",
+                                       style="Tiny.Ghost.TButton",
+                                       command=self._remember_target)
+        self.btn_remember.grid(row=1, column=3, sticky="e", padx=(10, 0))
+        self.btn_remember.grid_remove()
 
         # 레시피에 목록에 없는 작업이 섞여 있을 때만 보이는 줄. **조용히 넘어가지
         # 않는다** — 체크 하나를 건드리는 순간 그 작업들이 빠지는데, 미리 말해
@@ -774,8 +854,16 @@ class App:
         self.unmatched_note.grid(row=2, column=0, columnspan=4, sticky="w", pady=(6, 0))
         self.unmatched_note.grid_remove()
 
-        # ── 설정(작업 체크박스) ───────────────────────────────
-        ttk.Label(parent, text="설정", style="Lead.TLabel").pack(anchor="w", pady=(14, 4))
+        # ── 할 일(작업 체크박스) ──────────────────────────────
+        제목줄 = ttk.Frame(parent)
+        제목줄.pack(fill="x", pady=(14, 4))
+        ttk.Label(제목줄, text="할 일", style="Lead.TLabel").pack(side="left")
+        # 긴 설명은 여기 뒤에 숨긴다. 표 아래에 늘어놓으면 매번 달라지는 숫자와
+        # ⚠ 경고가 그 안에 묻힌다.
+        ttk.Button(제목줄, text="?", style="Help.TButton",
+                   command=self._show_help).pack(side="left", padx=(8, 0))
+        ttk.Label(제목줄, text="켠 것을 위에서부터 순서대로 실행합니다",
+                  style="Faint.TLabel").pack(side="left", padx=(10, 0))
         판 = self._card(parent)
         판.pack(fill="x")
         self.step_box = tk.Frame(판, bg=theme.SURFACE)
@@ -806,6 +894,12 @@ class App:
         self.btn_undo = ttk.Button(줄, text="되돌리기", style="Ghost.TButton",
                                    command=self._do_undo)
         self.btn_undo.pack(side="left", padx=(10, 0))
+        # **꺼진 이유를 버튼 바로 옆에 적는다.** 회색 버튼만 보고는 고장인지
+        # 아직 뭔가 덜 한 것인지 알 수 없다 — "미리보기를 눌러도 아무 동작이
+        # 없다" 가 그래서 나왔다.
+        self.why_note = ttk.Label(줄, style="Faint.TLabel", wraplength=460,
+                                  justify="left")
+        self.why_note.pack(side="left", padx=(14, 0))
 
         # ── 결과 ──────────────────────────────────────────────
         결과 = ttk.Frame(parent)
@@ -826,7 +920,7 @@ class App:
         self._draw_steps()
         self._push_steps(quiet=True)
         self._refresh_recipes()
-        self._clear_result("정리할 대상을 고르고 [미리보기] 를 눌러 주세요.")
+        self._clear_result("[정리할 폴더] 를 고르고 [미리보기] 를 눌러 주세요.")
 
     # ── 설정이 바뀌면 **반드시 여기를 지난다** ───────────────────
     def _settings_fingerprint(self) -> tuple:
@@ -908,35 +1002,38 @@ class App:
 
     # ── 레시피 ───────────────────────────────────────────────────
     def _refresh_recipes(self, select: str | None = None) -> None:
-        with self._reporting("레시피 목록"):
+        with self._reporting("조합 목록"):
             names = self.session.recipe_names()
-        self._fill_dropdown(self.recipe_menu,
-                            [(n, (lambda n=n: self._on_recipe(n)), False) for n in names])
+        # **고르기 전에** 어느 폴더용인지 보인다. 고른 뒤에야 상태줄에 나오면
+        # "왜 폴더가 멋대로 바뀌지" 가 된다 — 그것이 이 화면의 가장 큰 혼란이었다.
+        self._fill_dropdown(self.recipe_menu, [
+            (recipe_display(n, self.session.recipe_root_label(n)),
+             (lambda n=n: self._on_recipe(n)), False) for n in names])
         if select:
             self.recipe_var.set(select)
         elif not names:
             self.recipe_var.set(_NO_RECIPE_FILES)
 
     def _on_recipe(self, name: str) -> None:
-        with self._reporting("레시피 고르기"):
+        with self._reporting("조합 고르기"):
             # `_follow_recipe_root` 가 대상까지 옮길 수 있으므로 **그 전에** 지문을
             # 뜬다. 레시피와 대상 중 하나라도 바뀌면 미리보기가 무효다.
             before = self._settings_fingerprint()
             self.session.set_recipe(name)
-            self.recipe_var.set(name)
+            self.recipe_var.set(recipe_display(name, self.session.recipe_root_label(name)))
             self._sync_steps_from_session()
             옮김 = self._follow_recipe_root(name)
-            말 = (f"레시피 '{name}' 을 불러왔습니다."
-                 + (f"  대상을 {옮김} 으로 옮겼습니다." if 옮김 else "")
+            말 = (f"'{name}' 조합을 불러왔습니다."
+                 + (f"  정리할 폴더를 「{옮김}」 으로 옮겼습니다." if 옮김 else "")
                  + "  [미리보기] 를 눌러 주세요.")
             # 같은 레시피를 다시 고른 것뿐이면 표도 [실행] 도 건드리지 않는다.
             if not self._after_change(before, 말):
-                self.status_var.set(f"레시피 '{name}' 은 이미 고른 것입니다"
+                self.status_var.set(f"'{name}' 은 이미 고른 조합입니다"
                                     " — 미리보기를 그대로 둡니다.")
         self._sync_buttons()
 
     def _follow_recipe_root(self, name: str) -> str | None:
-        """레시피의 `roots` 첫 번째가 풀리면 대상을 거기로 옮긴다.
+        """조합의 `roots` 첫 번째가 풀리면 [정리할 폴더] 를 거기로 옮긴다.
 
         **조용히 바꾸지 않는다** — 드롭다운 글자가 같이 바뀌고, 옮겼다는 말을
         상태줄에 남긴다. 안 풀리는 이름이면 대상을 건드리지 않는다.
@@ -960,14 +1057,25 @@ class App:
         return 보일글자
 
     def _save_recipe(self) -> None:
-        name = self._ask_text("레시피 저장", "이 조합을 무슨 이름으로 저장할까요?",
-                              example="예: 내 바탕화면 정리")
+        # **폴더가 어떻게 저장되는지 미리 말한다.** 등록된 폴더는 `@이름` 이라
+        # 다른 PC 에서도 살아 있지만, 직접 고른 폴더는 이 PC 의 경로 그대로다 —
+        # 저장한 뒤에야 알게 되면 다른 PC 에서 왜 안 되는지 알 방법이 없다.
+        딸려갈것 = self.session.saved_roots()
+        곁들임 = ""
+        if 딸려갈것:
+            if 딸려갈것[0].startswith("@"):
+                곁들임 = f"정리할 폴더({딸려갈것[0]})도 같이 저장됩니다."
+            else:
+                곁들임 = ("정리할 폴더도 같이 저장됩니다. 이 폴더는 등록되어 있지 않아"
+                       " 경로 그대로 저장되며, 다른 PC 에서는 맞지 않습니다.")
+        name = self._ask_text("조합 저장", "이 조합을 무슨 이름으로 저장할까요?",
+                              example=곁들임 or "예: 내 바탕화면 정리")
         if not name:
             # 알리지 않으면 상태줄에 직전 "저장했습니다" 가 남아, 방금 저장된
             # 것처럼 읽힌다.
-            self.status_var.set("레시피 저장을 취소했습니다.")
+            self.status_var.set("저장을 취소했습니다.")
             return
-        with self._reporting("레시피 저장"):
+        with self._reporting("조합 저장"):
             try:
                 path = self.session.save_recipe(name)
             except OrganizeError:
@@ -977,52 +1085,111 @@ class App:
                 if not 있는것.is_file():
                     raise
                 if not self._confirm(
-                        "레시피 저장",
-                        f"'{name.strip()}' 레시피가 이미 있습니다. 덮어쓸까요?"):
+                        "조합 저장",
+                        f"'{name.strip()}' 조합이 이미 있습니다. 덮어쓸까요?"):
                     self.status_var.set("저장하지 않았습니다.")
                     return
                 path = self.session.save_recipe(name, overwrite=True)
             self._refresh_recipes(select=path.stem)
-            self.status_var.set(f"레시피 '{path.stem}' 으로 저장했습니다.")
+            self.status_var.set(f"'{path.stem}' 조합으로 저장했습니다.")
 
     # ── 대상 ─────────────────────────────────────────────────────
     def _fill_targets(self, infos) -> None:
-        """대상 드롭다운을 채운다. **폴더가 없는 것도 목록에 남긴다**(회색으로)."""
+        """정리할 폴더 드롭다운을 채운다. **폴더가 없는 것도 목록에 남긴다**(회색으로).
+
+        등록한 폴더는 여기 전부 나온다. 목록에 없는 폴더는 맨 아래
+        [+ 폴더 직접 고르기…] 로 그 자리에서 집는다 — 한 번 쓰고 말 폴더 하나에
+        설정 화면을 왕복시키지 않는다.
+        """
         self.targets = {}
         items = []
         for info in infos:
             text = info.label if not info.status else f"{info.label} — {info.status}"
             self.targets[text] = info
             items.append((text, (lambda t=text: self._pick_target(t)), bool(info.status)))
+        # 이번 창에서 직접 고른 폴더도 목록에 남긴다 — 다시 고를 수 있어야 한다.
+        for text, info in self._picked_history.items():
+            self.targets[text] = info
+            items.append((text, (lambda t=text: self._pick_target(t)), False))
+        items.append((_PICK_FOLDER, self._pick_any_folder, False))
         self._fill_dropdown(self.target_menu, items)
         if self.target_var.get() == _LOADING:
-            self.target_var.set(_NO_TARGET if items else "(등록된 폴더 없음)")
+            self.target_var.set(_NO_TARGET)
+
+    def _pick_any_folder(self) -> None:
+        """[+ 폴더 직접 고르기…] — 등록하지 않고 이번 창에서만 쓰는 폴더.
+
+        **손으로 경로를 치게 하지 않는다.** 탐색기에서 고르므로 오타가 생길
+        자리가 없다. 등록(이름 짓기)은 자주 쓸 것 같을 때 [이 폴더 기억하기] 로
+        나중에 하면 된다 — 쓰기도 전에 이름부터 지으라고 하지 않는다.
+        """
+        with self._reporting("폴더 고르기"):
+            self._need_picker()
+            chosen = picker.ask_folder(title="정리할 폴더를 고르세요")
+            if chosen is None:
+                self.status_var.set("고르지 않았습니다 — 아무것도 바꾸지 않았습니다.")
+                return
+            text = f"{chosen.name or str(chosen)}  (직접 고름)"
+            self._picked_history[text] = folders.FolderInfo(
+                name=text, label=text, path=chosen, count=None, status="",
+                builtin=False)
+            self._picked_target = chosen
+            self.targets[text] = self._picked_history[text]
+            before = self._settings_fingerprint()
+            self.session.set_root(chosen)
+            self.target_var.set(text)
+            self._after_change(before, f"정리할 폴더: {_short(chosen)}")
+        self._start_counting(force=True)      # 목록에 새 줄을 넣어 다시 그린다
+        self._sync_buttons()
+
+    def _remember_target(self) -> None:
+        """직접 고른 폴더에 이름을 붙여 정식 등록한다."""
+        폴더 = self._picked_target
+        if 폴더 is None:
+            return
+        with self._reporting("폴더 기억하기"):
+            name = self._ask_text("폴더 기억하기",
+                                  f"이 폴더를 무슨 이름으로 부를까요?\n\n  {_short(폴더)}",
+                                  example="예: 작업폴더")
+            if name is None:
+                self.status_var.set("등록하지 않았습니다 — 이번 실행에는 그대로 쓸 수 있습니다.")
+                return
+            cfg = load_config(self.repo_root)
+            문제 = new_place_error(name, cfg)
+            if 문제:
+                raise OrganizeError(문제, hint="다른 이름으로 다시 눌러 주세요.")
+            이름 = name.strip()
+            picker.store_picked_path(self.repo_root, 이름, 폴더)
+            self._picked_target = None        # 이제 등록된 폴더다
+            self.status_var.set(f"'{이름}' 으로 등록했습니다 — 이제 목록에 남습니다.")
+        self._start_counting(force=True)
+        self._sync_buttons()
 
     def _pick_target(self, text: str) -> None:
         info = self.targets.get(text)
         if info is None:
             return
-        with self._reporting("대상 고르기"):
+        with self._reporting("폴더 고르기"):
             if info.status == folders.UNRESOLVED:
                 # 목록에는 남긴다(사라지면 고칠 방법도 사라진다) — 다만 어디인지
                 # 모르는 곳을 정리 대상으로 삼을 수는 없다.
                 raise OrganizeError(
-                    f"'{info.label}' 이 어느 폴더인지 확인할 수 없어 대상으로 고를 수 없습니다.",
-                    hint="[설정 · 폴더 위치] 에서 이 위치를 다시 지정해 주세요.")
+                    f"'{info.label}' 이 어느 폴더인지 확인할 수 없어 정리할 폴더로 고를 수 없습니다.",
+                    hint="[폴더 위치 설정] 에서 이 위치를 다시 지정해 주세요.")
             before = self._settings_fingerprint()
             self.session.set_root(info.path)
             self.target_var.set(text)
             # 같은 폴더를 다시 골랐으면 표도 [실행] 도 그대로 둔다. 무조건
             # 지우면 표만 비고 [실행] 은 켜진 채로 남아, 확인 대화상자의 요약이
             # 빈칸으로 뜬다.
-            if not self._after_change(before, f"대상: {info.path}"):
-                self.status_var.set(f"대상: {info.path}"
-                                    "  — 이미 고른 대상입니다. 미리보기를 그대로 둡니다.")
+            if not self._after_change(before, f"정리할 폴더: {info.path}"):
+                self.status_var.set(f"정리할 폴더: {info.path}"
+                                    "  — 이미 고른 폴더입니다. 미리보기를 그대로 둡니다.")
         self._sync_buttons()
 
     # ── 작업 체크박스 + ▲▼ ──────────────────────────────────────
     def _sync_steps_from_session(self) -> None:
-        """세션의 steps 를 체크박스에 그대로 옮긴다(레시피를 고른 뒤)."""
+        """세션의 steps 를 체크박스에 그대로 옮긴다(조합을 고른 뒤)."""
         켠것 = self.session.checked_ids()
         self.step_order = arrange_steps([e.id for e in self.entries], 켠것)
         self.step_selected = None
@@ -1033,7 +1200,7 @@ class App:
         남은것 = self.session.unmatched_steps()
         if 남은것:
             self.unmatched_note.config(
-                text=f"이 레시피에는 목록에 없는 작업 {len(남은것)}개가 있습니다"
+                text=f"이 조합에는 목록에 없는 할 일 {len(남은것)}개가 있습니다"
                      " — 체크를 건드리면 그 작업은 빠집니다.")
             self.unmatched_note.grid()
         else:
@@ -1156,6 +1323,17 @@ class App:
         상태 = "normal" if on["steps"] else "disabled"
         for _줄, cb, _요약 in self.step_rows.values():
             cb.configure(state=상태)
+        # 켜고 끄는 것만으로는 부족하다 — **왜** 꺼졌는지도 같이 적는다.
+        self.why_note.config(text=why_disabled(
+            busy=self._busy,
+            has_root=self.session.root is not None,
+            has_steps=bool(self.session.checked_ids()),
+            can_apply=self.session.can_apply))
+        # 직접 고른 폴더를 쓰는 중일 때만 [이 폴더 기억하기] 를 보여준다.
+        if self._picked_target and not self._busy:
+            self.btn_remember.grid()
+        else:
+            self.btn_remember.grid_remove()
 
     def _do_preview(self) -> None:
         self._run_job("미리보기", self.session.preview, self._preview_done,
@@ -1784,7 +1962,7 @@ class App:
         self._fill_settings()
 
     def _close_settings(self) -> None:
-        """화면 2 로 돌아가면서 **대상 드롭다운을 새로 고친다.**
+        """화면 2 로 돌아가면서 **[정리할 폴더] 드롭다운을 새로 고친다.**
 
         방금 등록한 위치가 바로 안 보이면 사용자는 등록이 안 된 줄 안다.
         """
@@ -1951,6 +2129,35 @@ class App:
         win.protocol("WM_DELETE_WINDOW", lambda: 끝(None))
         self._show_dialog(win, 칸)
         return 답["값"]
+
+    def _show_help(self) -> None:
+        """[?] — 무엇이 무엇인지 한 창에 모아 보여준다.
+
+        **글자는 `HELP_SECTIONS` 에 있다.** 여기는 그리기만 한다 — 설명이 창을
+        그리는 코드 사이에 흩어지면 무엇을 설명하고 있는지 한눈에 안 보이고,
+        말이 바뀔 때 한 군데를 빠뜨린다.
+        """
+        tk, ttk = self.tk, self.ttk
+        win, 몸 = self._dialog("도움말")
+        for i, (제목, 줄들) in enumerate(HELP_SECTIONS):
+            ttk.Label(몸, text=제목, style="Lead.TLabel",
+                      ).pack(anchor="w", pady=(0 if not i else 14, 6))
+            판 = self._card(몸)
+            판.pack(fill="x")
+            for j, 줄 in enumerate(줄들):
+                tk.Label(판, text=f"· {줄}", bg=theme.SURFACE, fg=theme.TEXT,
+                         font=theme.body_font(9), anchor="w", justify="left",
+                         wraplength=520).pack(fill="x", padx=12,
+                                              pady=(10 if not j else 4,
+                                                    10 if j == len(줄들) - 1 else 0))
+
+        줄 = ttk.Frame(몸)
+        줄.pack(fill="x", pady=(18, 0))
+        확인 = ttk.Button(줄, text="확인", style="Primary.TButton", command=win.destroy)
+        확인.pack(side="right")
+        win.bind("<Return>", lambda _e: win.destroy())
+        win.bind("<Escape>", lambda _e: win.destroy())
+        self._show_dialog(win, 확인)
 
     def _notice(self, title: str, body: str, *, alert: bool = False) -> None:
         """읽고 [확인] 만 누르는 창. 오류도 여기로 나온다.
