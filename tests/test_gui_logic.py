@@ -379,6 +379,21 @@ def test_new_place_error_슬래시는_막는다():
     assert new_place_error("백업\\사진", UserConfig()) is not None
 
 
+def test_new_place_error_내장_이름은_막는다():
+    """cfg.paths 만 보면 내장 이름이 그대로 통과한다 — 저장하면 `resolve_alias`
+    가 사용자 값을 먼저 보기 때문에 **그 내장 폴더가 조용히 옮겨간다.**
+
+    화면은 "저장했습니다" 라고 답하는데 '내가 추가한 위치' 에는 안 생기고,
+    대신 '바탕화면' 줄의 경로가 바뀐다. 다음 정리에서 화면이 말한 폴더가 아닌
+    폴더의 파일이 움직인다. 실측한 결함이다.
+    """
+    for 이름 in ("desktop", "downloads", "documents", "pictures", "music",
+                "videos", "home"):
+        말 = new_place_error(이름, UserConfig())
+        assert 말 and 이름 in 말, f"{이름} 을 막지 않았다: {말}"
+        assert "다른 이름" in 말, f"무엇을 하면 되는지 알려야 한다: {말}"
+
+
 def test_new_place_error_멀쩡한_이름은_통과한다():
     assert new_place_error("  백업드라이브  ", UserConfig()) is None
 

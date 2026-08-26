@@ -331,6 +331,16 @@ def new_place_error(name: str, cfg) -> str | None:
     if "/" in 이름 or "\\" in 이름:
         # `@백업/사진` 의 뒷부분과 구분이 안 된다 — 등록해도 영영 안 풀린다.
         return "이름에 / 나 \\ 를 쓸 수 없습니다."
+    if 이름 in BUILTIN:
+        # **cfg.paths 만 보면 안 된다.** 내장 이름은 아직 cfg.paths 에 없으므로
+        # 위 검사를 그대로 통과하는데, 저장하면 `resolve_alias` 가 사용자 값을
+        # 먼저 보기 때문에 **그 내장 폴더가 조용히 그리로 옮겨간다.** 화면에는
+        # "저장했습니다" 라고 답하면서 '내가 추가한 위치' 에는 안 생기고,
+        # 대신 '바탕화면' 줄의 경로가 바뀐다 — 사용자는 자기가 만든 이름이
+        # 어디로 갔는지 알 방법이 없다. 다음 정리에서 **화면이 말한 폴더가
+        # 아닌 폴더의 파일이 움직인다.** 실측한 결함이다.
+        return (f"'{이름}' 은 이미 자동으로 찾은 위치 이름입니다 — 다른 이름을 쓰거나, "
+                "'자동으로 찾은 위치' 칸의 [다시 지정] 으로 그 폴더를 바꿔 주세요.")
     if 이름 in cfg.paths:
         return f"'{이름}' 은 이미 있는 이름입니다 — 그 줄의 [찾아보기] 로 경로만 바꿀 수 있습니다."
     return None
@@ -1567,7 +1577,8 @@ class App:
             cfg = load_config(self.repo_root)
             문제 = new_place_error(name, cfg)
             if 문제:
-                raise OrganizeError(문제, hint="[+ 위치 추가] 를 다시 눌러 주세요.")
+                raise OrganizeError(
+                    문제, hint="다른 이름으로 [+ 위치 추가] 를 다시 눌러 주세요.")
             이름 = name.strip()
             chosen = picker.ask_folder(title=f"'{이름}' 으로 쓸 폴더를 고르세요")
             if chosen is None:
