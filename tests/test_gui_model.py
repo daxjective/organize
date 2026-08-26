@@ -15,7 +15,7 @@ import pytest
 
 from organize import catalog
 from organize.errors import OrganizeError
-from organize.gui_model import Session
+from organize.gui_model import Session, landing_folders
 from organize.recipes import load_recipe
 
 
@@ -823,3 +823,70 @@ def test_invalidate_keeps_what_the_user_chose(repo, work):
     assert s.recipe_name == "정리"
     assert s.excluded_keys() == {key}
     assert s.can_preview, "다시 [미리보기] 를 누를 수 있어야 한다"
+
+
+# ── 실행 결과를 폴더별로 묶기 ───────────────────────────────────
+# 파일 113개를 하나씩 늘어놓으면 어디로 갔는지 오히려 안 보인다. 사람이 실행
+# 뒤에 하는 일은 "그 폴더에 잘 들어갔나" 를 열어 보는 것이다.
+
+def test_landing_folders_들어간_폴더별로_센다():
+    root = Path("/정리할곳")
+    done = [{"kind": "move", "final": "/정리할곳/01_Docs/가.pdf"},
+            {"kind": "move", "final": "/정리할곳/01_Docs/나.pdf"},
+            {"kind": "move", "final": "/정리할곳/02_Media/사진.jpg"}]
+    assert landing_folders(done, root) == [
+        ("01_Docs", 2, "/정리할곳/01_Docs"),
+        ("02_Media", 1, "/정리할곳/02_Media")]
+
+
+def test_landing_folders_폴더_생성은_세지_않는다():
+    """폴더 생성은 파일이 아니다. 섞어 세면 '3개' 가 파일 2 + 폴더 1 이 된다."""
+    root = Path("/정리할곳")
+    done = [{"kind": "mkdir", "final": "/정리할곳/01_Docs"},
+            {"kind": "move", "final": "/정리할곳/01_Docs/가.pdf"}]
+    assert landing_folders(done, root) == [("01_Docs", 1, "/정리할곳/01_Docs")]
+
+
+def test_landing_folders_치운_파일은_한_줄로_묶는다():
+    """`.organize/trash/<실행번호>/…` 안쪽 구조는 사람이 알 바가 아니다."""
+    root = Path("/정리할곳")
+    done = [{"kind": "quarantine", "final": "/정리할곳/.organize/trash/r1/a/가.pdf"},
+            {"kind": "quarantine", "final": "/정리할곳/.organize/trash/r1/b/나.pdf"}]
+    (이름, 개수, 경로), = landing_folders(done, root)
+    assert 개수 == 2
+    assert 경로 == "/정리할곳/.organize/trash/r1", "여러 갈래를 하나로 가리켜야 한다"
+
+
+def test_landing_folders_밖으로_나간_것은_전체_경로로_적는다():
+    """반복되는 앞머리가 아니라, 주의해서 봐야 할 자리다."""
+    done = [{"kind": "move", "final": "/mnt/백업USB/사진/가.jpg"}]
+    (이름, _, _), = landing_folders(done, Path("/정리할곳"))
+    assert 이름 == "/mnt/백업USB/사진"
+
+
+def test_landing_folders_대상_폴더_바로_밑도_이름이_있다():
+    """빈 글자로 두면 목록에 이름 없는 줄이 생겨 무엇인지 알 수 없다."""
+    done = [{"kind": "move", "final": "/정리할곳/가.pdf"}]
+    (이름, _, _), = landing_folders(done, Path("/정리할곳"))
+    assert 이름.strip(), f"이름이 비면 안 된다: {이름!r}"
+
+
+def test_landing_folders_옮긴_것이_없으면_빈_목록():
+    assert landing_folders([], Path("/정리할곳")) == []
+
+
+def test_폴더_생성_줄에도_이름이_붙는다(repo, work):
+    """원본 파일이 없다고 이름 칸을 비우면, 표에 줄만 있고 정체가 안 보인다.
+
+    실측: 「폴더 생성 3」 탭이 이름 칸 세 줄을 전부 빈칸으로 그렸다.
+    """
+    s = Session(repo_root=repo)
+    s.set_root(work)
+    s.set_recipe("정리")
+
+    폴더 = [r for r in s.preview().rows if r.kind == "폴더 생성"]
+
+    assert 폴더, "01_Docs 를 만드는 줄이 있어야 한다"
+    assert all(r.name for r in 폴더), \
+        f"이름이 빈 줄이 있다: {[r.name for r in 폴더]}"
+    assert "01_Docs" in [r.name for r in 폴더], "만들 폴더 이름을 적는다"

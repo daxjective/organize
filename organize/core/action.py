@@ -12,6 +12,18 @@ from typing import Literal
 
 ActionKind = Literal["mkdir", "move", "quarantine", "extract"]
 
+# 종류를 **사람이 부르는 이름**. 여기 하나뿐이다.
+#
+# 예전에는 `cli.py` 와 `gui_model.py` 가 같은 표를 따로 들고 있었다. 그러면
+# 말을 바꿀 때 한쪽만 바뀌어 **창과 명령줄이 다른 말을 한다** — 같은 파일을
+# 두고 창은 "보류", 명령줄은 "격리" 라고 하면 그게 같은 것인지 알 수 없다.
+#
+# `quarantine` 을 "보류" 라 부른다. 지우는 것이 아니라 `.organize/trash/` 로
+# **옮겨 두는 것**이고, [되돌리기] 로 되살릴 수 있기 때문이다. 아무 일도 하지
+# 않은 파일은 이것이 아니라 "손대지 않음" 으로 따로 센다.
+KIND_LABEL: dict[str, str] = {"mkdir": "폴더 생성", "move": "이동",
+                              "quarantine": "보류", "extract": "압축 해제"}
+
 
 @dataclass(frozen=True)
 class Action:

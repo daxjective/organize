@@ -215,6 +215,12 @@ def foot_text(counts: dict, skipped: int, hidden: int = 0) -> str:
         말.append(f"⚠ 이 탭의 {hidden}줄은 표에 그리지 않았습니다 — 너무 많으면"
                  " 창이 멈춥니다. 탭 숫자와 아래 개수는 안 그린 줄까지 다 셉니다.")
     말.append(f"손대지 않음 {skipped}개 (여기에 뺀 파일도 들어갑니다).")
+    if counts.get("quarantine"):
+        # **'보류' 와 '손대지 않음' 은 다른 일이다.** 둘 다 "아무 일 없었다" 로
+        # 읽히기 쉬워서, 보류가 실제로는 **폴더를 옮기는 것**이라고 못박는다.
+        말.append(f"'{KIND_LABEL['quarantine']}' 는 손대지 않은 것이 아닙니다 —"
+                 " 지우지 않고 .organize/trash 로 옮겨 두는 것이며,"
+                 " [되돌리기] 로 제자리에 되살릴 수 있습니다.")
     if counts.get("extract"):
         # 누를 수 없는 이유를 모르면 고장으로 읽힌다.
         말.append("압축 안에서 나올 파일에는 체크박스가 없습니다 — 아직 디스크에"
@@ -1275,8 +1281,47 @@ class App:
             "다시 보려면 [미리보기] 를 눌러 주세요.")
         self.status_var.set(f"옮김 {result.moved} · 폴더 {result.folders}"
                             f" · 실패 {result.failed}")
+        if result.landed:
+            self._show_landed(result)
         if result.messages:
             self._show_messages("실행 결과", result.messages)
+
+    def _show_landed(self, result) -> None:
+        """**어느 폴더에 몇 개가 들어갔는지**를 보여주고, 눌러서 열게 한다.
+
+        옮긴 파일을 하나씩 늘어놓으면(예전 방식) 113줄 중 앞 20줄만 보이고,
+        정작 "그래서 어디로 갔지" 는 안 보인다. 사람이 실행 뒤에 하는 일은
+        **그 폴더를 열어 확인하는 것**이라, 폴더를 바로 열 수 있게 둔다.
+        """
+        tk, ttk = self.tk, self.ttk
+        win, 몸 = self._dialog("실행 결과")
+        ttk.Label(몸, text=f"옮김 {result.moved} · 폴더 생성 {result.folders}"
+                           f" · 실패 {result.failed} · 건너뜀 {result.skipped}",
+                  style="Lead.TLabel").pack(anchor="w")
+        ttk.Label(몸, text="폴더 이름을 눌러 탐색기에서 확인할 수 있습니다.",
+                  style="Faint.TLabel").pack(anchor="w", pady=(2, 10))
+
+        판 = self._card(몸)
+        판.pack(fill="x")
+        for i, (이름, 개수, 경로) in enumerate(result.landed):
+            줄 = tk.Frame(판, bg=theme.SURFACE)
+            줄.pack(fill="x", padx=12, pady=(10 if not i else 6, 0))
+            tk.Label(줄, text=f"{개수}개", bg=theme.SURFACE, fg=theme.MUTED,
+                     font=theme.mono_font(9), anchor="e", width=6).pack(side="right")
+            # 폴더가 그새 없어졌을 수도 있다(사람이 지웠거나 USB 가 뽑혔거나).
+            # 그럴 땐 링크로 그리지 않는다 — `_path_link` 가 알아서 갈라 준다.
+            self._path_link(줄, text=이름, size=10, plain_fg=theme.TEXT,
+                            folder=경로 if Path(경로).is_dir() else "",
+                            ).pack(side="left", fill="x", expand=True)
+        tk.Frame(판, bg=theme.SURFACE, height=10).pack(fill="x")
+
+        줄 = ttk.Frame(몸)
+        줄.pack(fill="x", pady=(18, 0))
+        확인 = ttk.Button(줄, text="확인", style="Primary.TButton", command=win.destroy)
+        확인.pack(side="right")
+        win.bind("<Return>", lambda _e: win.destroy())
+        win.bind("<Escape>", lambda _e: win.destroy())
+        self._show_dialog(win, 확인)
 
     def _undo_done(self, result) -> None:
         self.view = None
@@ -1341,6 +1386,9 @@ class App:
                       font=theme.body_font(), anchor="w", justify="left",
                       wraplength=760).pack(anchor="w", padx=14, pady=14)
         self.foot.config(text="")
+        # 표를 통째로 갈아 끼웠으니 스크롤도 맨 위로. 안 올리면 한 줄짜리 안내를
+        # 아래쪽에서 보게 되어 판이 텅 빈 것처럼 보인다.
+        self.table_canvas.yview_moveto(0)
         # 표를 버렸으면 아래 줄에 남아 있는 옛 미리보기 요약도 거짓이 된다.
         self.status_var.set("")
 
@@ -1401,9 +1449,20 @@ class App:
         return lab
 
     def _pick_tab(self, kind: str) -> None:
+        """탭 하나를 고른다. **표는 맨 위부터 보인다.**
+
+        표를 다시 그려도 스크롤은 있던 자리에 남는다. 「이동 113」에서 아래로
+        내려 본 뒤 「폴더 생성 3」을 누르면, 세 줄짜리 표를 **아래쪽에서** 보게
+        되어 위쪽이 텅 빈 채로 목록이 중간부터 시작하는 것처럼 보인다.
+        실측한 결함이다.
+
+        **여기서만 올린다.** 미리보기를 다시 세울 때마다 올리면, 파일 하나의
+        체크를 끈 사람이 보던 자리를 잃고 맨 위로 튕긴다.
+        """
         self.tab_kind = kind
         if self.view:
             self._draw_result()
+            self.table_canvas.yview_moveto(0)
 
     def _file_row(self, name: str, dest: str, reason: str, 켜짐, key: str,
                   leaving: bool, index: int) -> None:

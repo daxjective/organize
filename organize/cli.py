@@ -10,6 +10,9 @@ from pathlib import Path
 
 from organize import __version__
 from organize.aliases import BUILTIN
+# 종류 이름표(`move` → "이동")는 `core.action` 이 하나만 갖고 있다. 여기서 같은
+# 표를 다시 적으면 창과 명령줄이 같은 파일을 두고 다른 말을 하게 된다.
+from organize.core.action import KIND_LABEL as _KIND_LABEL
 from organize.core.executor import (execute, prepare_runlog, write_json_atomic,
                                     write_runlog)
 from organize.core.runner import build_plan, external_names, make_run_id
@@ -22,8 +25,6 @@ from organize.profiles import normalize_ext
 from organize.recipes import Recipe, find_recipe, list_recipes, load_recipe
 from organize.userconfig import (AliasNotDefined, load_config, refuse_unsupported,
                                  resolve_alias, save_local_path, unsupported_notes)
-
-_KIND_LABEL = {"mkdir": "폴더 생성", "move": "이동", "quarantine": "격리", "extract": "압축 해제"}
 
 
 def repo_root() -> Path:
@@ -140,7 +141,8 @@ def _print_plan(built, verbose: bool) -> dict:
     _warn_if_leaving(built)
 
     print()
-    print(f"  총계  이동 {counts.get('move', 0)} · 격리 {counts.get('quarantine', 0)}"
+    print(f"  총계  {_KIND_LABEL['move']} {counts.get('move', 0)}"
+          f" · {_KIND_LABEL['quarantine']} {counts.get('quarantine', 0)}"
           f" · 폴더 생성 {counts.get('mkdir', 0)} · 압축 해제 {counts.get('extract', 0)}"
           f" · 손대지 않음 {len(built.plan.skipped)}")
     return counts

@@ -14,6 +14,7 @@ from organize.gui import (arrange_steps, builtin_places, control_locks, custom_p
                           dest_text, foot_text, keeps_preview, kind_tabs,
                           local_place_names, move_item, name_width, new_place_error,
                           openable, place_path_width,
+                          KIND_LABEL,
                           profile_folder_names, row_checks, toggle_file_key,
                           undo_label, undo_prompt, _raw_kind)
 from organize.gui_model import Row, _KIND_LABEL
@@ -556,3 +557,39 @@ def test_custom_places_긴_이름이_섞이면_그_칸_경로가_다_같이_접�
     assert len(길때["백업"]) < len(짧을때), "긴 이름이 생기면 경로가 더 접힌다"
     assert len(길때["백업"]) == len(길때["외장하드백업드라이브"]), \
         "같은 칸이면 같은 자리에서 접혀야 한다"
+
+
+# ── 이름표는 한 곳뿐이다 ────────────────────────────────────────
+# 예전에는 cli.py 와 gui_model.py 가 같은 표를 따로 들고 있었다. 말을 바꿀 때
+# 한쪽만 바뀌면 같은 파일을 두고 창은 "보류", 명령줄은 "격리" 라고 한다.
+
+def test_창과_명령줄이_같은_이름표를_쓴다():
+    from organize import cli, gui_model
+    from organize.core.action import KIND_LABEL
+
+    assert cli._KIND_LABEL is KIND_LABEL, "명령줄이 자기 표를 따로 들면 안 된다"
+    assert gui_model._KIND_LABEL is KIND_LABEL, "창도 마찬가지다"
+
+
+def test_요약줄이_이름표를_글자로_다시_적지_않는다():
+    """`summary` 가 '격리' 를 글자로 박아 두면 말을 바꿔도 거기만 옛말로 남는다."""
+    from organize.core.action import KIND_LABEL
+    from organize.gui_model import PreviewView
+
+    말 = PreviewView(counts={"move": 1, "quarantine": 2}, skipped=3).summary
+
+    assert KIND_LABEL["quarantine"] in 말
+    assert "격리" not in 말, "옛말이 남아 있으면 안 된다"
+
+
+def test_보류가_손대지_않음과_헷갈리지_않게_짚어_준다():
+    """둘 다 '아무 일 없었다' 로 읽힌다 — 보류는 실제로 폴더를 옮기는 것이다."""
+    말 = foot_text({"move": 3, "quarantine": 2}, skipped=9)
+
+    assert "손대지 않은 것이 아닙니다" in 말
+    assert "되돌리기" in 말, "되살릴 수 있다는 것까지 말해야 안심한다"
+
+
+def test_보류가_없으면_그_설명은_띄우지_않는다():
+    """매번 뜨는 설명은 안 읽게 된다."""
+    assert "손대지 않은 것이 아닙니다" not in foot_text({"move": 3}, skipped=9)

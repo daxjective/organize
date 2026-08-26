@@ -10,11 +10,14 @@ tkinter 가 없는 환경에서도 로직을 테스트할 수 있고, "미리보
 """
 
 import copy
+import os
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
 
 from organize import catalog
+# 종류 이름표는 `core.action` 이 하나만 갖고 있다(창·명령줄이 같은 말을 쓰도록).
+from organize.core.action import KIND_LABEL as _KIND_LABEL
 from organize.core.executor import execute, prepare_runlog, write_runlog
 from organize.core.runner import BuiltPlan, build_plan, external_names, make_run_id
 from organize.core.undo import latest_run_id, undo as undo_run
@@ -24,14 +27,11 @@ from organize.recipes import (Recipe, find_recipe, list_recipes, load_recipe,
 from organize.userconfig import (AliasNotDefined, load_config, refuse_unsupported,
                                  resolve_alias)
 
-_KIND_LABEL = {"mkdir": "폴더 생성", "move": "이동",
-               "quarantine": "격리", "extract": "압축 해제"}
-
 
 @dataclass
 class Row:
     """표 한 줄. 위젯은 이걸 그대로 그리기만 한다."""
-    kind: str                  # 이동 · 격리 · 폴더 생성 · 압축 해제
+    kind: str                  # 이동 · 보류 · 폴더 생성 · 압축 해제
     name: str                  # 어느 파일
     dest: str                  # 어디로 (전체 경로)
     reason: str                # 왜
@@ -52,9 +52,68 @@ class PreviewView:
     @property
     def summary(self) -> str:
         c = self.counts
-        return (f"이동 {c.get('move', 0)} · 격리 {c.get('quarantine', 0)}"
-                f" · 폴더 생성 {c.get('mkdir', 0)} · 압축 해제 {c.get('extract', 0)}"
-                f" · 손대지 않음 {self.skipped}")
+        # 이름표를 글자로 다시 적지 않는다 — 말이 바뀌면 여기만 옛말로 남는다.
+        return (" · ".join(f"{_KIND_LABEL[k]} {c.get(k, 0)}"
+                           for k in ("move", "quarantine", "mkdir", "extract"))
+                + f" · 손대지 않음 {self.skipped}")
+
+
+def landing_folders(done, root: Path) -> list[tuple[str, int, str]]:
+    """실행 결과를 **어느 폴더에 몇 개** 로 묶는다. (보일 이름, 개수, 진짜 경로).
+
+    파일 113개를 하나씩 늘어놓으면 어디로 갔는지 **오히려 안 보인다.** 실행을
+    마친 사람이 하는 일은 "그 폴더에 잘 들어갔나" 를 열어 보는 것이므로, 폴더
+    단위로 세고 그 폴더를 바로 열 수 있게 진짜 경로도 같이 준다.
+
+    **폴더 생성은 세지 않는다** — 파일이 아니다. 파일이 들어간 폴더라면 아래
+    목록에 이미 나오고, 안 들어갔으면 셀 것이 없다.
+
+    치운 파일(quarantine)은 `.organize/trash/<실행번호>/…` 로 흩어지는데, 그
+    안쪽 구조는 사람이 알 바가 아니다. **한 줄로 묶고** 공통 폴더를 준다.
+    """
+    센것: dict[str, int] = {}
+    경로: dict[str, str] = {}
+    치운것: list[Path] = []
+    for row in done:
+        if row.get("kind") == "mkdir":
+            continue
+        final = row.get("final")
+        if not final:
+            continue
+        if row.get("kind") == "quarantine":
+            치운것.append(Path(final))
+            continue
+        폴더 = Path(final).parent
+        이름 = _어디라고_적을까(폴더, root)
+        센것[이름] = 센것.get(이름, 0) + 1
+        경로[이름] = str(폴더)
+
+    out = [(이름, 센것[이름], 경로[이름]) for 이름 in sorted(센것)]
+    if 치운것:
+        out.append((_KIND_LABEL["quarantine"], len(치운것), _공통폴더(치운것)))
+    return out
+
+
+def _어디라고_적을까(folder: Path, root: Path) -> str:
+    """정리 대상 폴더 안이면 **거기서부터의 상대 경로**만.
+
+    줄마다 `C:\\Users\\나\\Downloads\\` 를 반복하면 정작 다른 부분(어느 폴더로
+    갔는가)이 안 보인다. 밖으로 나간 것은 전체 경로를 적는다 — 그건 반복되는
+    앞머리가 아니라 **주의해서 봐야 할 자리**다.
+    """
+    try:
+        return str(folder.relative_to(root)) or "(정리 대상 폴더 바로 밑)"
+    except ValueError:
+        return str(folder)
+
+
+def _공통폴더(paths: list[Path]) -> str:
+    """여러 파일이 들어간 자리를 **하나로** 가리키는 폴더."""
+    부모들 = [str(p.parent) for p in paths]
+    try:
+        return os.path.commonpath(부모들)
+    except ValueError:
+        return 부모들[0]        # 드라이브가 서로 다르다 — 첫 자리라도 알려준다
 
 
 @dataclass
@@ -68,6 +127,10 @@ class ApplyResult:
     skipped: int = 0
     log_path: Path | None = None
     messages: list[str] = field(default_factory=list)
+    # 파일이 실제로 들어간 자리. (보일 이름, 개수, 진짜 경로) — 창이 이걸
+    # 눌러서 열 수 있는 목록으로 그린다. 숫자만으로는 "잘 됐나" 를 확인할
+    # 방법이 없어서, **확인하러 갈 곳**을 같이 준다.
+    landed: list[tuple[str, int, str]] = field(default_factory=list)
 
 
 @dataclass
@@ -329,7 +392,11 @@ class Session:
                         break
             rows.append(Row(
                 kind=_KIND_LABEL.get(a.kind, a.kind),
-                name=a.src.name if a.src else "",
+                # 폴더 생성에는 **원본 파일이 없다**(`src=None`). 그대로 두면 이름
+                # 칸이 빈 채로 그려져, 표에 줄은 있는데 무엇에 대한 줄인지 안
+                # 보인다(실측: 캡처에서 세 줄이 전부 빈칸으로 났다).
+                # 만들 폴더 이름을 적는다 — 그 줄의 주인공이 그것이다.
+                name=a.src.name if a.src else (a.dst.name if a.dst else ""),
                 dest=str(a.dst) if a.dst else "",
                 reason=a.reason,
                 leaving=leaving,
@@ -373,7 +440,8 @@ class Session:
         out = ApplyResult(
             moved=sum(1 for r in result.done if r.get("kind") != "mkdir"),
             folders=sum(1 for r in result.done if r.get("kind") == "mkdir"),
-            failed=len(result.failed), skipped=len(result.stale))
+            failed=len(result.failed), skipped=len(result.stale),
+            landed=landing_folders(result.done, root))
         try:
             out.log_path = write_runlog(built, result)
         except OrganizeError as e:
