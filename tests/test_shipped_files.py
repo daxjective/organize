@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 
+from organize.core import dates
 from organize.core.runner import build_plan
 from organize.profiles import load_profile
 from organize.recipes import find_recipe, list_recipes, load_recipe
@@ -60,3 +61,73 @@ def test_every_shipped_recipe_actually_builds_a_plan(name, tmp_path):
 @pytest.mark.parametrize("path", sorted(PROFILES.glob("*.toml")), ids=lambda p: p.stem)
 def test_every_shipped_profile_loads(path):
     load_profile(path)
+
+
+# --- 싣고 있는 photos.json 이 **평범한 사진 폴더**에서 진짜로 일하는가 ---
+
+def _camera_jpg(path: Path, *, taken: str) -> Path:
+    """EXIF 에 카메라 정보와 촬영일을 진짜로 박은 jpg. 카메라 사진으로 갈린다."""
+    from PIL import ExifTags, Image
+    path.parent.mkdir(parents=True, exist_ok=True)
+    img = Image.new("RGB", (8, 8), (0, 255, 0))
+    exif = img.getexif()
+    exif[271] = "Canon"                       # Make
+    exif[272] = "EOS R5"                      # Model
+    exif.get_ifd(ExifTags.IFD.Exif)[36867] = taken
+    img.save(path, exif=exif)
+    return path
+
+
+def _screenshot_jpg(path: Path) -> Path:
+    """EXIF 카메라 정보가 없는 jpg — 화면 캡처로 갈린다."""
+    from PIL import Image
+    path.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (8, 8), (0, 0, 255)).save(path)
+    return path
+
+
+def _run_shipped(name: str, root: Path):
+    from organize.core.executor import execute
+    recipe = load_recipe(find_recipe(RECIPES, name))
+    built = build_plan(root, recipe.steps, today=date(2026, 1, 1), run_id="r1",
+                       profiles_dir=PROFILES, now=1e12)
+    return built, execute(built)
+
+
+@pytest.mark.skipif(not dates.HAS_PILLOW, reason="Pillow 없이는 EXIF 를 만들 수 없다")
+def test_shipped_photos_recipe_sorts_a_plain_picture_folder(tmp_path):
+    """`02_Media` 가 **없는** 보통의 사진 폴더에서도 실제로 갈라져야 한다.
+
+    한때 photos.json 이 `route(profile=photos, target="02_Media")` 로 시작해서,
+    사진 폴더 바로 아래 있는 파일은 **손도 안 댔다.** 미리보기는
+    "정리할 것이 없습니다 · 이동 0" 이었고 건너뛴 목록에도 안 나왔다 —
+    이 프로젝트가 여덟 번 물린 "조용한 무작동" 이다. 실측한 결함이다.
+
+    앞에 `route(profile=desktop)`(종류별 분류)를 두면 바로 아래 파일이 먼저
+    02_Media 로 모이고, 그다음 두 단계가 캡처/사진·연도별로 가른다.
+    """
+    _camera_jpg(tmp_path / "루트사진.jpg", taken="2023:03:03 09:00:00")
+    _screenshot_jpg(tmp_path / "루트캡처.jpg")
+    (tmp_path / "루트영상.mp4").write_bytes(b"MP4DATA")
+
+    built, result = _run_shipped("photos", tmp_path)
+
+    assert built.plan.actions, "평범한 사진 폴더에서 계획이 비면 안 된다"
+    assert not result.failed, result.failed
+    assert (tmp_path / "02_Media" / "사진" / "2023" / "루트사진.jpg").is_file()
+    assert (tmp_path / "02_Media" / "캡처" / "루트캡처.jpg").is_file()
+    assert (tmp_path / "02_Media" / "영상" / "루트영상.mp4").is_file()
+    assert not (tmp_path / "루트사진.jpg").exists(), "제자리에 남으면 무작동이다"
+
+
+@pytest.mark.skipif(not dates.HAS_PILLOW, reason="Pillow 없이는 EXIF 를 만들 수 없다")
+def test_shipped_photos_recipe_still_sorts_files_already_under_02_media(tmp_path):
+    """옛 시나리오 — 이미 `02_Media` 아래 있는 파일도 그대로 갈려야 한다."""
+    _camera_jpg(tmp_path / "02_Media" / "미디어사진.jpg", taken="2021:11:11 09:00:00")
+    _screenshot_jpg(tmp_path / "02_Media" / "미디어캡처.jpg")
+
+    _, result = _run_shipped("photos", tmp_path)
+
+    assert not result.failed, result.failed
+    assert (tmp_path / "02_Media" / "사진" / "2021" / "미디어사진.jpg").is_file()
+    assert (tmp_path / "02_Media" / "캡처" / "미디어캡처.jpg").is_file()

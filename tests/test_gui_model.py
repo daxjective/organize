@@ -416,10 +416,14 @@ def test_set_recipe_photos_matches_the_catalog_exactly(real_recipes_repo):
 
     기준은 카탈로그다(시안이 정한 값이고 다른 화면 요소가 이미 그걸 전제한다).
     레시피를 카탈로그에 맞춘다.
+
+    세 단계다 — 앞에 route_kind(종류별 분류)가 있어야 사진 폴더 **바로 아래**
+    있는 파일이 02_Media 로 모인다. 그게 없으면 02_Media 가 없는 보통의 사진
+    폴더에서 아무 일도 안 일어난다(아래 엔진 테스트가 그것을 못박는다).
     """
     s = Session(repo_root=real_recipes_repo)
     s.set_recipe("photos")
-    assert s.checked_ids() == ["route_photos", "by_date_year"]
+    assert s.checked_ids() == ["route_kind", "route_photos", "by_date_year"]
     assert s.unmatched_steps() == []
 
 
@@ -431,7 +435,8 @@ def test_shipped_photos_recipe_carries_the_catalog_steps_verbatim():
     steps = json.loads(
         (Path(__file__).resolve().parent.parent / "recipes" / "photos.json")
         .read_text(encoding="utf-8"))["steps"]
-    assert steps == [catalog.by_id(i).step for i in ("route_photos", "by_date_year")]
+    assert steps == [catalog.by_id(i).step
+                     for i in ("route_kind", "route_photos", "by_date_year")]
 
 
 def test_a_step_the_catalog_does_not_know_is_previewed_exactly_as_written(
