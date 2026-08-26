@@ -674,11 +674,17 @@ class App:
             if r:                                 # 줄 사이 얇은 선 — Finder 의 목록 느낌
                 ttk.Frame(self.folder_card, style="Line.TFrame", height=1).grid(
                     row=r * 2 - 1, column=0, sticky="ew", padx=16)
+            # 줄이 세로로 쌓이므로 **덩어리 사이를 더 벌린다** — 안 벌리면
+            # 어디까지가 한 폴더인지 눈으로 끊기지 않는다.
             self._folder_row(self.folder_card, info).grid(
-                row=r * 2, column=0, sticky="ew", padx=16, pady=9)
+                row=r * 2, column=0, sticky="ew", padx=16, pady=12)
         문제수 = sum(1 for f in infos if _문제인가(f))
         if 문제수:
-            self._alert_note.pack(side="bottom", fill="x", pady=(10, 0))
+            # **판(`folder_card`)보다 먼저 자리를 잡아야 한다.** 판이 남는 자리를
+            # 다 가져가는(expand) 쪽이라, 뒤에 붙이면 줄이 길어졌을 때 이 안내가
+            # 버튼줄 위로 밀려 겹쳐 보인다(실측: 줄을 세로로 쌓자 바로 그랬다).
+            self._alert_note.pack(side="bottom", fill="x", pady=(10, 0),
+                                  before=self.folder_card)
         self._count_summary = (f"폴더 {len(infos)}곳을 확인했습니다."
                                + (f"  그중 {문제수}곳은 비어 있거나 없습니다."
                                   if 문제수 else ""))
@@ -688,36 +694,37 @@ class App:
             self.status_var.set(self._count_summary)
 
     def _folder_row(self, parent, info):
-        """한 줄: 이름 · 꼬리 경로 · 전체 경로(눌러서 열기) · 개수(크게)."""
+        """한 줄이 아니라 **한 덩어리** — 이름 / 꼬리 경로 / 전체 경로(눌러서 열기).
+
+        이름과 경로를 가로로 나란히 두면 좁은 칸에 둘을 욱여넣게 되어, 이름이
+        잘리거나 경로와 붙어 보인다. **세로로 쌓으면 칸을 다툴 일이 없다** —
+        이름도 경로도 각자 한 줄을 다 쓴다. 개수만 오른쪽에 크게 둔다.
+        """
         ttk = self.ttk
         row = ttk.Frame(parent, style="Card.TFrame")
-        # 이름 칸은 **줄마다 같은 자리에서 끝나되 글자를 자르지 않는다.**
-        # 예전에는 `width=7`(영문 7자폭)로 못 박았는데 한글 4자가 그보다 넓어
-        # 「바탕화면」·「다운로드」의 뒤가 잘리고 옆 경로와 붙어 보였다. 칸의
-        # **최소폭**만 정하고, 오른쪽 여백으로 경로와 떼어 놓는다.
-        row.columnconfigure(0, minsize=100)
-        row.columnconfigure(1, weight=1)
+        row.columnconfigure(0, weight=1)
 
         ttk.Label(row, text=info.label, style="CardName.TLabel", anchor="w",
-                  ).grid(row=0, column=0, sticky="w", padx=(0, 12))
+                  ).grid(row=0, column=0, sticky="w")
         ttk.Label(row, text=_tail(info.path), style="CardPath.TLabel",
-                  ).grid(row=0, column=1, sticky="w")
+                  ).grid(row=1, column=0, sticky="w", pady=(3, 0))
 
         문제 = _문제인가(info)
+        # 개수는 세 줄 옆에서 **가운데**에 선다. 어느 줄에 붙이면 그 줄만 커 보인다.
         ttk.Label(row, text=("—" if info.count is None else str(info.count)),
                   style="CardAlertCount.TLabel" if 문제 else "CardCount.TLabel",
-                  anchor="e", width=5).grid(row=0, column=2, rowspan=2,
+                  anchor="e", width=5).grid(row=0, column=1, rowspan=3,
                                             sticky="e", padx=(12, 0))
 
         # 전체 경로를 **눌러서 여는 링크**로. 글자만 봐서는 그 폴더가 내가 아는
         # 그 폴더인지 알 수 없다 — 열어 봐야 안다. 개수가 0 인 줄이야말로 그렇다.
         self._path_link(row, text=_short(info.path), size=8,
                         folder=str(info.path) if openable(info) else "",
-                        ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(1, 0))
+                        ).grid(row=2, column=0, sticky="w", pady=(2, 0))
         if 문제:
             ttk.Label(row, text=_why(info), style="CardAlert.TLabel",
                       wraplength=480, justify="left",
-                      ).grid(row=2, column=0, columnspan=3, sticky="w", pady=(3, 0))
+                      ).grid(row=3, column=0, columnspan=2, sticky="w", pady=(4, 0))
         return row
 
     # ── 화면 2 — 메인 ────────────────────────────────────────────
