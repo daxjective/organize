@@ -935,3 +935,51 @@ def test_paths_lists_a_registered_builtin_name_only_once(project, tmp_path, caps
     줄들 = [line for line in out.splitlines() if line.strip().startswith("@desktop")]
     assert len(줄들) == 1, f"@desktop 이 한 번만 나와야 한다: {줄들}"
     assert str(내가고른것) in 줄들[0], "등록한 값이 이겨야 한다"
+
+
+# ── 한글 윈도우에서 출력이 죽지 않게 ────────────────────────────
+# 한글 윈도우의 기본 출력 인코딩은 cp949 다. 출력을 파일로 받으면 `—` 하나에
+# 명령이 통째로 죽었다(실측: PS> python -m organize doctor > 로그.txt).
+
+class _흐름:
+    """`reconfigure` 를 받은 그대로 적어 두는 가짜 출력."""
+
+    def __init__(self, 터질까=None):
+        self.받은것 = None
+        self.터질까 = 터질까
+
+    def reconfigure(self, **kw):
+        if self.터질까:
+            raise self.터질까
+        self.받은것 = kw
+
+
+def test_출력을_UTF8_로_못_박는다(monkeypatch):
+    out, err = _흐름(), _흐름()
+    monkeypatch.setattr(cli.sys, "stdout", out)
+    monkeypatch.setattr(cli.sys, "stderr", err)
+
+    cli._한글이_깨지지_않게()
+
+    assert out.받은것 == {"encoding": "utf-8", "errors": "replace"}
+    assert err.받은것 == {"encoding": "utf-8", "errors": "replace"}, "오류도 한글이다"
+
+
+def test_바꿀_수_없는_글자_하나에_결과_전체를_잃지_않는다(monkeypatch):
+    """`errors='replace'` 를 빼면 글자 하나 때문에 명령이 죽는다."""
+    out = _흐름()
+    monkeypatch.setattr(cli.sys, "stdout", out)
+    monkeypatch.setattr(cli.sys, "stderr", _흐름())
+
+    cli._한글이_깨지지_않게()
+
+    assert out.받은것["errors"] == "replace"
+
+
+@pytest.mark.parametrize("터질것", [AttributeError, OSError, ValueError])
+def test_다시_맞출_수_없는_흐름이어도_죽지_않는다(monkeypatch, 터질것):
+    """파이프·리다이렉션이 아닌 자리(테스트 캡처 등)에서도 명령은 그대로 돌아야 한다."""
+    monkeypatch.setattr(cli.sys, "stdout", _흐름(터질까=터질것("안 된다")))
+    monkeypatch.setattr(cli.sys, "stderr", _흐름(터질까=터질것("안 된다")))
+
+    cli._한글이_깨지지_않게()          # 예외가 나면 이 줄에서 죽는다

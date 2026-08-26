@@ -942,7 +942,31 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _한글이_깨지지_않게() -> None:
+    """출력을 UTF-8 로 못 박는다. **안 하면 명령이 죽는다.**
+
+    한글 윈도우의 기본 출력 인코딩은 cp949 다. 콘솔에 그대로 찍을 때는 파이썬이
+    UTF-16 으로 내보내 괜찮지만, **파일로 받거나 파이프로 넘기면** cp949 로
+    바뀌어 `—`(긴 줄표) 하나에 `UnicodeEncodeError` 로 통째로 죽는다.
+
+        PS> python -m organize doctor > 로그.txt
+        UnicodeEncodeError: 'cp949' codec can't encode character '\\u2014'
+
+    실측한 결함이다. 이 도구의 출력은 전부 한국어이고 안내문에 `—`·`·`·「」가
+    섞여 있어서, 언제 어디서 터질지 미리 알 수 없다.
+
+    `errors="replace"` 를 같이 준다 — 바꿀 수 없는 글자 하나 때문에 **결과 전체를
+    잃는 것**보다 그 글자만 `?` 로 나오는 편이 낫다.
+    """
+    for 흐름 in (sys.stdout, sys.stderr):
+        try:
+            흐름.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, OSError, ValueError):
+            pass          # 다시 맞출 수 없는 흐름이다. 여기서 죽을 일은 아니다
+
+
 def main(argv: list[str] | None = None) -> int:
+    _한글이_깨지지_않게()
     argv = sys.argv[1:] if argv is None else argv
     parser = build_parser()
     try:
