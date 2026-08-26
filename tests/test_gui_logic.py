@@ -207,10 +207,12 @@ def test_도는_동안에는_하나도_안_눌린다():
     assert on == {k: False for k in on}, on
 
 
-def test_잠기는_것에_대상_레시피_체크박스_순서바꾸기가_모두_들어간다():
+def test_잠기는_것에_대상_레시피_체크박스_순서바꾸기_설정링크가_모두_들어간다():
     # 하나라도 빠지면 그 조작만 결함으로 남는다 — 이번 결함이 정확히 그 모양이었다.
+    # 'settings' 가 빠져 있어서, 미리보기가 도는 중에 [설정 · 폴더 위치] 로
+    # 들어가 **정리 중인 바로 그 대상의 등록을 [지우기] 로 지울 수 있었다.**
     assert set(_locks()) >= {"preview", "apply", "undo", "save",
-                             "recipe", "target", "steps", "order"}
+                             "recipe", "target", "steps", "order", "settings"}
 
 
 def test_일이_끝나면_전부_다시_켜진다():

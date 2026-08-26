@@ -141,8 +141,10 @@ def control_locks(*, busy: bool, can_preview: bool, can_apply: bool, can_undo: b
     대상을 바꾸면 화면은 다운로드를 가리키는데 되돌아가는 것은 바탕화면이었다.
 
     **일이 도는 동안(`busy`)은 전부 꺼진다.** 세 버튼만이 아니라 대상·레시피·
-    작업 체크박스·▲▼·[저장] 까지다. 도는 동안 바뀔 수 있는 것이 하나라도
-    남으면, 끝난 뒤 화면이 말하는 것과 실제로 벌어진 일이 갈라진다.
+    작업 체크박스·▲▼·[저장]·[설정 · 폴더 위치] 링크까지다. 도는 동안 바뀔 수
+    있는 것이 하나라도 남으면, 끝난 뒤 화면이 말하는 것과 실제로 벌어진 일이
+    갈라진다. 링크만 열어 뒀더니 미리보기가 도는 중에 화면 3 으로 들어가
+    **정리 중인 바로 그 대상의 등록을 [지우기] 로 지울 수 있었다.** 실측했다.
 
     `busy` 가 아닐 때 켜지는 근거는 **오직 세션의 `can_*`** 와 "고를 것이
     있는가" 다. 드롭다운은 항목이 없으면 눌러도 빈 메뉴가 뜰 뿐이다.
@@ -157,6 +159,7 @@ def control_locks(*, busy: bool, can_preview: bool, can_apply: bool, can_undo: b
         "target": 살아있음 and has_targets,
         "steps": 살아있음,        # 작업 체크박스
         "order": 살아있음,        # ▲▼
+        "settings": 살아있음,     # [설정 · 폴더 위치] 링크 — 여기서 대상을 지울 수 있다
     }
 
 
@@ -634,8 +637,11 @@ class App:
         """
         tk, ttk = self.tk, self.ttk
         머리 = self._header(parent, "organize")
-        ttk.Button(머리, text="설정 · 폴더 위치", style="Link.TButton",
-                   command=lambda: self._go("settings")).pack(side="right")
+        # **변수로 들고 있는다.** 이 링크도 도는 동안 꺼야 하는데, 붙잡아 두지
+        # 않으면 끌 방법이 없다(▲▼ 가 남았던 것과 같은 이유다).
+        self.btn_settings = ttk.Button(머리, text="설정 · 폴더 위치", style="Link.TButton",
+                                       command=lambda: self._go("settings"))
+        self.btn_settings.pack(side="right")
 
         # ── 레시피 · 대상 ─────────────────────────────────────
         위 = ttk.Frame(parent)
@@ -1027,9 +1033,9 @@ class App:
 
         여기서 따로 판단하면 규칙이 두 곳이 되고, 어긋나는 순간 미리보기를 안 본
         채로 실행이 눌린다. 일이 도는 동안(`_busy`)은 세 버튼뿐 아니라 대상·
-        레시피·작업 체크박스·▲▼·[저장] 까지 **전부** 끈다 — 하나라도 열어 두면
-        도는 사이에 그것만 바뀌어, 끝난 뒤 화면이 가리키는 폴더와 실제로
-        손댄 폴더가 갈라진다.
+        레시피·작업 체크박스·▲▼·[저장]·[설정 · 폴더 위치] 링크까지 **전부** 끈다
+        — 하나라도 열어 두면 도는 사이에 그것만 바뀌어, 끝난 뒤 화면이 가리키는
+        폴더와 실제로 손댄 폴더가 갈라진다.
         """
         on = control_locks(busy=self._busy,
                            can_preview=self.session.can_preview,
@@ -1039,7 +1045,8 @@ class App:
                            has_targets=getattr(self.target_menu, "has_items", False))
         for btn, key in ((self.btn_preview, "preview"), (self.btn_apply, "apply"),
                          (self.btn_undo, "undo"), (self.btn_save, "save"),
-                         (self.btn_up, "order"), (self.btn_down, "order")):
+                         (self.btn_up, "order"), (self.btn_down, "order"),
+                         (self.btn_settings, "settings")):
             btn.state(["!disabled"] if on[key] else ["disabled"])
         for mb, key in ((self.recipe_menu, "recipe"), (self.target_menu, "target")):
             mb.configure(state="normal" if on[key] else "disabled")
