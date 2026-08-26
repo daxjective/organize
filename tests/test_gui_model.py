@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from organize import profiles
+from organize import catalog
 from organize.errors import OrganizeError
 from organize.gui_model import Session
 from organize.recipes import load_recipe
@@ -406,32 +406,57 @@ def test_set_recipe_desktop_matches_the_catalog_exactly(real_recipes_repo):
     assert s.unmatched_steps() == []
 
 
-def test_set_recipe_photos_does_not_match_the_catalog_but_previews_as_written(
-        real_recipes_repo, tmp_path, monkeypatch):
-    """recipes/photos.json 의 step 은 카탈로그와 target 이 달라 알아보면 안 된다.
+def test_set_recipe_photos_matches_the_catalog_exactly(real_recipes_repo):
+    """recipes/photos.json 도 카탈로그와 dict 완전 일치해야 한다.
 
-    그리고 못 알아봤다고 버리면 안 된다 — 미리보기는 레시피에 적힌 target
-    ("사진") 그대로 계획을 세워야 한다. 카탈로그 값("02_Media/사진")을 대신
-    쓰면 화면과 실제가 갈라진다.
+    예전에는 target 이 없거나("route") "사진" 이라("by_date") 둘 다 못
+    알아봤다. 그래서 화면에서 '사진 정리' 를 고르면 **체크박스가 전부 꺼진
+    채** 뜨는데 미리보기는 두 단계를 실제로 돌았다 — 화면이 말하는 것과
+    실행되는 것이 갈라지는, 이 프로젝트가 가장 경계하는 모양이다.
+
+    기준은 카탈로그다(시안이 정한 값이고 다른 화면 요소가 이미 그걸 전제한다).
+    레시피를 카탈로그에 맞춘다.
     """
-    monkeypatch.setattr(profiles, "has_exif_camera", lambda p: True)
-
-    work = tmp_path / "사진작업"
-    work.mkdir()
-    old_file(work / "고양이.jpg")
-
     s = Session(repo_root=real_recipes_repo)
     s.set_recipe("photos")
-    assert s.unmatched_steps(), "target 이 다르므로 알아보면 안 된다"
+    assert s.checked_ids() == ["route_photos", "by_date_year"]
+    assert s.unmatched_steps() == []
+
+
+def test_shipped_photos_recipe_carries_the_catalog_steps_verbatim():
+    """저장소가 **실제로 싣고 있는** 파일이 카탈로그와 같은지 못박는다.
+
+    위 테스트는 복사본을 보므로, 원본이 손으로 고쳐져 어긋나는 것은 못 잡는다.
+    """
+    steps = json.loads(
+        (Path(__file__).resolve().parent.parent / "recipes" / "photos.json")
+        .read_text(encoding="utf-8"))["steps"]
+    assert steps == [catalog.by_id(i).step for i in ("route_photos", "by_date_year")]
+
+
+def test_a_step_the_catalog_does_not_know_is_previewed_exactly_as_written(
+        repo, work):
+    """못 알아본 step 이라고 버리거나 카탈로그 값으로 바꿔치면 안 된다.
+
+    미리보기는 레시피에 적힌 그대로 계획을 세워야 한다 — 안 그러면 화면이
+    보여준 것과 실제로 벌어지는 일이 갈라진다.
+    """
+    (repo / "recipes" / "손으로쓴것.json").write_text(json.dumps({
+        "name": "손으로쓴것", "roots": [],
+        "steps": [{"block": "route", "profile": "desktop", "target": "받은것"}],
+    }, ensure_ascii=False), encoding="utf-8")
+    old_file(work / "받은것" / "보고서.pdf")
+
+    s = Session(repo_root=repo)
+    s.set_recipe("손으로쓴것")
+    assert s.checked_ids() == [], "target 이 다르므로 알아보면 안 된다"
+    assert s.unmatched_steps() == [
+        {"block": "route", "profile": "desktop", "target": "받은것"}]
 
     s.set_root(work)
-    view = s.preview()
-
-    dests = [r.dest.replace("\\", "/") for r in view.rows if r.dest]
-    assert any("/사진" in d or d.endswith("사진") for d in dests), \
-        "레시피에 적힌 target('사진') 그대로 움직여야 한다"
-    assert not any("02_Media" in d for d in dests), \
-        "카탈로그 값이 아니라 레시피에 적힌 값을 그대로 써야 한다"
+    dests = [r.dest.replace("\\", "/") for r in s.preview().rows if r.dest]
+    assert dests and all("받은것/" in d for d in dests), \
+        f"레시피에 적힌 target('받은것') 그대로 움직여야 한다: {dests}"
 
 
 def test_unmatched_steps_returns_a_copy_not_the_live_dict(repo):

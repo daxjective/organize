@@ -30,7 +30,7 @@ python -m organize undo --root @desktop       방금 실행을 되돌린다
 |---|---|---|
 | `desktop` | `@desktop` (바탕화면) | 중복 치우기 → 종류별 폴더로 분류 |
 | `downloads` | `@downloads` (다운로드) | 중복 치우기 → 종류별 폴더로 분류 |
-| `photos` | `@pictures` (사진) | 사진/캡처/영상으로 나눈 뒤 사진은 연도별로 |
+| `photos` | `@pictures` (사진) | `02_Media` 안을 사진/캡처/영상으로 나눈 뒤 사진은 연도별로 |
 
 `photos` 의 사진·캡처 구분은 EXIF 촬영정보로 한다 — **`Pillow` 가 없으면 그 두 규칙은
 아무 파일도 분류하지 못한다.** `organize doctor` 가 그 사실을 알려준다.

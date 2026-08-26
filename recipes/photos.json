@@ -2,7 +2,7 @@
   "name": "사진 정리",
   "roots": ["@pictures"],
   "steps": [
-    { "block": "route", "profile": "photos" },
-    { "block": "by_date", "target": "사진", "layout": "{year}" }
+    { "block": "route", "profile": "photos", "target": "02_Media" },
+    { "block": "by_date", "target": "02_Media/사진", "layout": "{year}" }
   ]
 }
