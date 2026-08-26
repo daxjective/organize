@@ -254,9 +254,16 @@ def undo(root: Path, run_id: str | None = None) -> ExecResult:
             try:
                 if kind == "mkdir":
                     folder = Path(item["final"])
-                    if folder.is_dir() and not any(folder.iterdir()):
-                        folder.rmdir()                   # 비어 있을 때만 지운다
-                        result.done.append({"kind": "rmdir", "final": str(folder)})
+                    if folder.is_dir():
+                        if not any(folder.iterdir()):
+                            folder.rmdir()               # 비어 있을 때만 지운다
+                            result.done.append({"kind": "rmdir", "final": str(folder)})
+                    elif _missing_medium(folder) is not None:
+                        # 폴더가 없는 게 아니라 **매체가 통째로 안 보인다.** 여기서
+                        # '끝났다' 고 찍으면 매체를 다시 꽂아도 이 폴더는 영영
+                        # 안 치워지고, 되돌리기가 끝난 자리에 빈 폴더만 남는다.
+                        result.failed.append(_failure(kind, item, "", None))
+                        continue                         # undone 을 찍지 않는다
                     item["undone"] = True
                     continue
 
@@ -282,20 +289,16 @@ def undo(root: Path, run_id: str | None = None) -> ExecResult:
             except OrganizeError as e:
                 # hint 를 버리지 않는다 — executor.py 와 같은 이유다.
                 item["undone"] = _nothing_left_to_undo(item)
-                result.failed.append({
-                    "kind": kind, "src": item.get("final"), "why": e.message, "hint": e.hint,
-                })
+                result.failed.append(_failure(kind, item, e.message, e.hint))
             except (OSError, KeyError):
                 # 손상된 기록(필요한 키가 없음)도 여기서 받는다. 파이썬 예외
                 # 원문을 그대로 보여주지 않는다 — hint 자리에 예외 원문을 넣지
                 # 말라는 전역 규칙과 같은 이유다.
                 name = Path(item.get("final") or "").name
                 item["undone"] = _nothing_left_to_undo(item)
-                result.failed.append({
-                    "kind": kind, "src": item.get("final"),
-                    "why": f"되돌리지 못했습니다: {name}",
-                    "hint": "대상 위치의 쓰기 권한이나 파일이 다른 프로그램에서 열려있는지 확인해 주세요.",
-                })
+                result.failed.append(_failure(
+                    kind, item, f"되돌리지 못했습니다: {name}",
+                    "대상 위치의 쓰기 권한이나 파일이 다른 프로그램에서 열려있는지 확인해 주세요."))
     finally:
         # 예상 못 한 예외로 빠져나가더라도 **어디까지 되돌렸는지는 반드시 남긴다.**
         # 안 남기면 다음 시도가 이미 되돌린 것을 또 되돌리려 들어 실패만 쌓인다.
@@ -318,6 +321,56 @@ def undo(root: Path, run_id: str | None = None) -> ExecResult:
     return result
 
 
+def _missing_medium(final: Path) -> Path | None:
+    """되돌릴 자리의 **부모 폴더가 통째로 안 보이는가.** 보이면 None.
+
+    "파일이 지워졌다" 와 "USB 를 뽑았다" 는 전혀 다른 일인데, 그 자리에 파일이
+    없다는 사실만으로는 구분이 안 된다. 부모 폴더까지 같이 없어졌다면 그건
+    사용자가 파일 하나를 지운 것이 아니라 **매체가 통째로 안 보이는 것**이다.
+
+    안 보일 때는 '안 보이는 것 중 가장 위' 를 돌려준다. USB 를 뽑으면 마운트
+    지점부터 통째로 사라지므로, 그 지점을 알려 줘야 사용자가 **무엇을 다시
+    꽂아야 하는지** 안다 — 맨 안쪽 폴더 이름만 보여 주면 알 수 없다.
+    """
+    parent = final.parent
+    try:
+        if parent.exists():
+            return None                  # 매체는 있다 — 파일만 없는 것이다
+    except OSError:
+        return None                      # 확인조차 못 했으면 매체 탓으로 돌리지 않는다
+    top = parent
+    for ancestor in parent.parents:
+        try:
+            if ancestor.exists():
+                break
+        except OSError:
+            break
+        top = ancestor
+    return top
+
+
+def _failure(kind: str, item: dict, why: str, hint: str | None) -> dict:
+    """실패 한 줄. **매체가 통째로 안 보이는 경우만은 다른 말을 한다.**
+
+    "옮기려는 파일이 없습니다 / 미리보기 이후에 파일이 지워졌을 수 있습니다" 는
+    사용자가 파일을 지웠다는 뜻으로 읽힌다. USB 를 뽑아 뒀을 뿐인데 그렇게
+    말하면 파일이 사라진 줄 안다 — 실제로는 매체 안에 멀쩡히 있다.
+    """
+    final = item.get("final")
+    try:
+        medium = _missing_medium(Path(final)) if final else None
+    except (TypeError, ValueError, OSError):
+        medium = None
+    if medium is None:
+        return {"kind": kind, "src": final, "why": why, "hint": hint}
+    return {
+        "kind": kind, "src": final,
+        "why": f"저장 매체를 찾을 수 없습니다: {Path(final).name}",
+        "hint": f"'{medium}' 이 보이지 않습니다. USB·외장하드라면 다시 꽂은 뒤 "
+                "같은 명령을 한 번 더 실행하면 남은 것만 되돌립니다.",
+    }
+
+
 def _nothing_left_to_undo(item: dict) -> bool:
     """되돌릴 대상이 그 자리에 아예 없는가 — 그렇다면 다시 시도해도 결과가 같다.
 
@@ -325,11 +378,23 @@ def _nothing_left_to_undo(item: dict) -> bool:
     그 실행을 영원히 '되돌릴 게 남은 실행' 으로 만든다. 그러면 `organize undo`
     가 매번 그 실행만 집어 **이전 실행을 영영 못 보게 가린다.** 다시 해 봐야
     소용없는 항목은 '끝난 것' 으로 기록한다.
+
+    **그러나 매체가 없어서 못 한 것은 '끝난 것' 이 아니다.** 예전에는 파일이
+    그 자리에 있는지만 봤다. USB 를 뽑은 채 되돌리면 항목마다 도장이 찍히고,
+    모두 찍히면 `undone_at` 까지 박혀 그 실행은 **영영 되돌릴 수 없게** 된다 —
+    파일은 USB 안에 멀쩡히 있는데도. 실측한 결함이다. 매체가 안 보이면
+    '아직 남았다' 로 두어 다시 꽂고 한 번 더 시도할 수 있게 한다.
     """
     try:
-        return not Path(item["final"]).exists()
-    except (KeyError, OSError):
+        final = Path(item["final"])
+    except (KeyError, TypeError, ValueError):
         return True                      # 경로조차 알 수 없으면 더 할 수 있는 게 없다
+    try:
+        if final.exists():
+            return False                 # 아직 그 자리에 있다 — 원인을 고치면 된다
+    except OSError:
+        return True
+    return _missing_medium(final) is None
 
 
 def _tidy_our_own_bookkeeping(root: Path, run_id: str) -> None:

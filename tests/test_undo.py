@@ -331,6 +331,90 @@ def test_a_target_that_vanished_does_not_hold_the_run_forever(tmp_path):
         "다시 시도해도 소용없는 항목이 실행을 붙들면 안 된다"
 
 
+# --- 매체(USB·외장하드)가 없어서 못 한 것은 '끝난 것' 이 아니다 ---
+
+def _run_onto(root, medium, name="중요문서.pdf"):
+    """`root` 의 파일 하나를 `medium`(등록된 바깥 위치) 안으로 내보낸다.
+
+    `external` 을 줘야 실행기가 root 밖 목적지를 허락한다 — 이 도구를 만든
+    이유가 USB·외장하드로 내보내는 백업이다.
+    """
+    src = root / name
+    src.write_bytes(b"DATA")
+    b = BuiltPlan(root=root, run_id="r1", external=[medium], plan=Plan(actions=[
+        Action("mkdir", None, medium / "01_Docs", "폴더", "route"),
+        Action("move", src, medium / "01_Docs" / name, "이동", "route"),
+    ]))
+    result = execute(b)
+    assert not result.failed, result.failed
+    write_runlog(b, result)
+    return src
+
+
+def test_a_run_onto_a_missing_medium_can_still_be_undone_after_it_comes_back(tmp_path):
+    """USB 를 뽑은 채 되돌리면 **실패로 남아야 한다** — 도장을 찍으면 안 된다.
+
+    예전에는 `Path(final).exists()` 만 봤다. 매체가 안 보이면 항목마다
+    `undone` 이 찍히고, 모두 찍히면 `undone_at` 까지 박혀 그 실행은 **영영**
+    되돌릴 수 없었다. 파일은 USB 안에 멀쩡히 있는데도. 실측한 결함이다.
+    """
+    root = tmp_path / "정리대상"
+    root.mkdir()
+    usb = tmp_path / "usb"
+    (usb / "백업").mkdir(parents=True)
+    src = _run_onto(root, usb / "백업")
+    assert not src.exists()
+
+    usb.rename(tmp_path / "뽑힘")                    # USB 를 뽑았다
+    result = undo(root)
+    assert not result.done and result.failed
+    assert latest_run_id(root) is not None, \
+        "매체가 없어서 못 한 것뿐인데 '되돌릴 것이 없다' 로 만들면 안 된다"
+
+    (tmp_path / "뽑힘").rename(usb)                  # 다시 꽂았다
+    result = undo(root)
+    assert not result.failed
+    assert src.read_bytes() == b"DATA"
+    assert latest_run_id(root) is None               # 이번엔 정말로 끝났다
+
+
+def test_a_missing_medium_is_not_reported_as_a_deleted_file(tmp_path):
+    """"옮기려는 파일이 없습니다" 는 사용자가 지웠다는 뜻으로 읽힌다.
+
+    USB 를 뽑아 뒀을 뿐인데 그렇게 말하면 파일이 사라진 줄 안다. 안내는
+    **무엇을 다시 꽂아야 하는지**(마운트 지점)를 가리켜야 한다.
+    """
+    root = tmp_path / "정리대상"
+    root.mkdir()
+    usb = tmp_path / "usb"
+    (usb / "백업" / "깊은곳").mkdir(parents=True)
+    _run_onto(root, usb / "백업" / "깊은곳")
+    usb.rename(tmp_path / "뽑힘")
+
+    why = [row["why"] for row in undo(root).failed]
+    assert any("저장 매체를 찾을 수 없습니다" in w for w in why), why
+    assert not any("옮기려는 파일이 없습니다" in w for w in why), why
+    hint = undo(root).failed[0]["hint"]
+    assert str(usb) in hint, "안 보이는 것 중 가장 위(마운트 지점)를 짚어야 한다"
+
+
+def test_a_folder_the_run_created_on_a_missing_medium_is_removed_on_retry(tmp_path):
+    """매체가 없을 때 mkdir 항목에 도장을 찍으면, 다시 꽂아도 빈 폴더가 남는다."""
+    root = tmp_path / "정리대상"
+    root.mkdir()
+    usb = tmp_path / "usb"
+    (usb / "백업").mkdir(parents=True)
+    _run_onto(root, usb / "백업")
+
+    usb.rename(tmp_path / "뽑힘")
+    undo(root)
+    (tmp_path / "뽑힘").rename(usb)
+    undo(root)
+
+    assert not (usb / "백업" / "01_Docs").exists(), \
+        "되돌리기가 끝났으면 이 실행이 만든 빈 폴더도 없어야 한다"
+
+
 # --- 되돌린 뒤 우리가 만든 장부만 치운다 ---
 
 def test_undo_tidies_our_own_manifest_but_never_user_files(tmp_path):
