@@ -246,6 +246,9 @@ def dest_text(dest: str, root) -> str:
 # 버튼 둘이 더 붙어서, 길면 서로 밀고 들어온다(실측: 캡처에서 그렇게 됐다).
 _PLACE_PATH = 46
 
+# 별칭 이름 → 사람이 부르는 이름. `folders.LABEL` 그대로다(표를 두 벌 만들지 않는다).
+LABEL_OF = folders.LABEL
+
 
 class Place(NamedTuple):
     """설정 화면의 위치 한 줄. **무엇을 적을지만 정한다** — 그리는 일은 창이 한다."""
@@ -284,6 +287,17 @@ def builtin_places(infos, pinned: set[str]) -> list[Place]:
     out = []
     for info in infos:
         if not info.builtin or info.name == "home":
+            continue
+        if info.hidden_duplicate_of:
+            # 개수와 대상 목록에서는 뺀 줄이다(같은 폴더를 두 번 셀 이유가 없다).
+            # **여기서까지 빼면 이름이 조용히 사라진다** — 그러면 [기본 위치로]
+            # 도 같이 사라져 창만으로는 되돌릴 방법이 없다. 실측한 결함이다.
+            # 잘못된 상태는 아니므로 빨갛게 하지 않고, 회색으로 이유만 적는다.
+            먼저 = LABEL_OF.get(info.hidden_duplicate_of, info.hidden_duplicate_of)
+            out.append(Place(name=info.name, label=info.label,
+                             path=_short(info.path, _PLACE_PATH),
+                             note=f"「{먼저}」와 같은 폴더입니다 — 한 번만 셉니다",
+                             alert=False, pinned=info.name in pinned))
             continue
         문제 = _문제인가(info)
         # 이름이 안 풀린 줄은 경로 자리에 적을 것이 없다 — `custom_places` 와
@@ -554,6 +568,8 @@ class App:
             # 홈은 뺀다 — 홈 전체 파일 개수는 정리 대상이 아니고, 숫자가 크면
             # 겁만 준다. 나머지는 다 싣는다: 화면 1 은 내장만 골라 쓰고,
             # 화면 2 의 대상 드롭다운은 등록한 이름까지 필요하다.
+            # 화면 3 은 dedup 으로 뺀 줄까지 받아야 "왜 안 보이는지" 를 말할 수
+            # 있다. 개수·대상 목록에서 거르는 일은 `folders.visible()` 이 한다.
             infos = [f for f in folders.overview(load_config(self.repo_root))
                      if f.name != "home"]
             self._inbox.put(("ok", infos))
@@ -569,9 +585,10 @@ class App:
         self._pending_counts = max(0, self._pending_counts - 1)
         if kind == "ok":
             self._infos = payload
-            self._fill_folders([f for f in payload if f.builtin])
-            self._fill_targets(payload)
-            self._fill_settings()
+            보일것 = folders.visible(payload)
+            self._fill_folders([f for f in 보일것 if f.builtin])
+            self._fill_targets(보일것)
+            self._fill_settings()          # 화면 3 만은 뺀 줄까지 받는다
         else:
             self._folder_note("폴더를 세지 못했습니다.")
             self.target_var.set(_NO_TARGET)

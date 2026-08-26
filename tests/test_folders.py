@@ -101,13 +101,43 @@ def test_내장인지_아닌지_표시한다(tmp_path):
     assert 표["보관"] is False
 
 
-def test_같은_경로가_두_번_나오면_뒤엣것은_빠진다(tmp_path):
-    """`@photos` 가 사진 폴더를 가리키면 같은 폴더를 두 줄로 보여줄 이유가 없다."""
+def test_같은_경로가_두_번_나오면_뒤엣것은_세지_않는다(tmp_path):
+    """`@photos` 가 사진 폴더를 가리키면 같은 폴더를 두 줄로 **셀** 이유가 없다."""
     폴더(tmp_path / "Pictures", 1)
     cfg = 설정(tmp_path, {"photos": str(tmp_path / "Pictures")})
-    이름들 = [f.name for f in folders.overview(cfg)]
+    이름들 = [f.name for f in folders.visible(folders.overview(cfg))]
     assert "pictures" in 이름들
     assert "photos" not in 이름들
+
+
+def test_같은_경로라_뺀_줄도_왜_뺐는지를_싣고_돌아온다(tmp_path):
+    """**빼는 것과 없애는 것은 다르다.**
+
+    화면 3 의 [다시 지정] 으로 '문서' 를 다운로드와 같은 폴더로 고르면, 저장은
+    되는데 '문서' 줄이 화면 1·화면 3·대상 드롭다운에서 **아무 말 없이 사라졌다.**
+    [기본 위치로] 버튼도 같이 사라져 **창만으로는 되돌릴 방법이 없었다.**
+    실측한 결함이다. 거르는 일은 `visible()` 이 하고, `overview()` 는 왜 걸렀는지
+    까지 실어 돌려준다.
+    """
+    한폴더 = 폴더(tmp_path / "한폴더", 3)
+    cfg = 설정(tmp_path, {"downloads": str(한폴더), "documents": str(한폴더)})
+    표 = {f.name: f for f in folders.overview(cfg)}
+
+    assert 표["documents"].hidden_duplicate_of == "downloads"
+    assert 표["downloads"].hidden_duplicate_of is None
+    # 같은 폴더이므로 개수도 같아야 한다 — 다시 세지 않고 먼저 센 값을 쓴다.
+    assert 표["documents"].count == 표["downloads"].count == 3
+    assert "documents" not in [f.name for f in folders.visible(folders.overview(cfg))]
+
+
+def test_안_풀린_줄은_같은_폴더로_뺀_줄과_섞이지_않는다(tmp_path):
+    """둘 다 '안 보이는' 줄이지만 이유가 다르다 — 화면이 다르게 말해야 한다."""
+    cfg = 설정(tmp_path, {"고리": "@고리"})
+    고리 = next(f for f in folders.overview(cfg) if f.name == "고리")
+    assert 고리.hidden_duplicate_of is None      # 이건 '같은 폴더' 가 아니다
+    assert 고리.status == folders.UNRESOLVED
+    assert 고리 in folders.visible(folders.overview(cfg)), \
+        "안 풀린 줄은 개수 목록에도 남아야 한다 — 문제가 눈에 띄어야 하므로"
 
 
 def test_개수와_상태를_함께_준다(tmp_path):

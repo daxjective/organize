@@ -8,6 +8,7 @@
 
 from pathlib import Path
 
+from organize import folders
 from organize.folders import FolderInfo
 from organize.gui import (arrange_steps, builtin_places, control_locks, custom_places,
                           dest_text, foot_text, keeps_preview, kind_tabs,
@@ -267,9 +268,11 @@ def test_undo_prompt_이름을_모를_때도_말이_되게_적는다():
 # ── 화면 3 — 설정 · 폴더 위치 ────────────────────────────────────
 # 창을 못 띄우는 곳에서도 **무엇을 적을지**는 확인할 수 있어야 한다.
 
-def _info(name, label, path, *, count=3, status="", builtin=True):
+def _info(name, label, path, *, count=3, status="", builtin=True,
+          problem="", hidden_duplicate_of=None):
     return FolderInfo(name=name, label=label, path=Path(path), count=count,
-                      status=status, builtin=builtin)
+                      status=status, builtin=builtin, problem=problem,
+                      hidden_duplicate_of=hidden_duplicate_of)
 
 
 def test_builtin_places_정상인_줄은_조용히_둔다():
@@ -294,6 +297,34 @@ def test_builtin_places_폴더가_없으면_빨갛게():
     줄 = builtin_places([_info("pictures", "사진", "/x", count=None,
                                status="폴더 없음")], set())[0]
     assert 줄.alert is True and "폴더가 없습니다" == 줄.note
+
+
+def test_builtin_places_이름이_안_풀린_줄은_빨갛게_이유까지_적는다():
+    """줄이 사라지면 [다시 지정] 도 같이 사라져 창만으로는 고칠 수 없다."""
+    줄 = builtin_places([_info("desktop", "바탕화면", "@desktop", count=None,
+                              status=folders.UNRESOLVED,
+                              problem="'@desktop' 위치가 돌고 돌아 자기 자신을 가리킵니다")],
+                       set())[0]
+    assert 줄.alert is True
+    assert "돌고" in 줄.note, "무엇이 문제인지 그대로 적어야 한다"
+    assert 줄.path == "—", "어디인지 모르므로 경로 자리는 비운다(긴 이유에 자리를 내준다)"
+
+
+def test_builtin_places_같은_폴더라_뺀_줄도_이유를_달고_남는다():
+    """**빼는 것과 없애는 것은 다르다.**
+
+    '문서' 를 다운로드와 같은 폴더로 고르면 그 줄이 세 곳 모두에서 조용히
+    사라지고, [기본 위치로] 까지 같이 사라져 되돌릴 방법이 없었다. 실측한 결함.
+    잘못된 상태는 아니므로 **빨갛게 하지는 않는다** — 회색으로 이유만 적는다.
+    """
+    infos = [_info("downloads", "다운로드", "/x"),
+             _info("documents", "문서", "/x", hidden_duplicate_of="downloads")]
+    줄 = {p.name: p for p in builtin_places(infos, {"documents"})}
+    assert "documents" in 줄, "이름이 조용히 사라지면 안 된다"
+    assert 줄["documents"].alert is False
+    assert "다운로드" in 줄["documents"].note
+    assert 줄["documents"].pinned is True, \
+        "[기본 위치로] 가 있어야 창만으로 되돌릴 수 있다"
 
 
 def test_builtin_places_직접_지정한_줄만_pinned():

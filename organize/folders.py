@@ -38,6 +38,12 @@ class FolderInfo:
     # 화면이 그대로 보여 준다 — "확인할 수 없습니다" 만으로는 무엇을 고쳐야
     # 할지 알 수 없기 때문이다.
     problem: str = ""
+    # 앞서 나온 **다른 이름**이 이미 같은 폴더를 가리키는가. 그 이름이 들어 있다.
+    # 개수와 대상 목록에서는 빼되(같은 폴더를 두 번 셀 이유가 없다), 화면 3 은
+    # 이 값을 보고 "다운로드 와 같은 폴더입니다" 라고 **말할 수 있어야 한다** —
+    # 아무 말 없이 줄이 사라지면 [기본 위치로] 까지 같이 사라져 창만으로는
+    # 되돌릴 방법이 없다.
+    hidden_duplicate_of: str | None = None
 
 
 def count_files(path: Path) -> tuple[int | None, str]:
@@ -62,44 +68,67 @@ def count_text(path: Path) -> str:
     return _NO_FOLDER_TEXT if status == "폴더 없음" else status
 
 
+def visible(infos: list[FolderInfo]) -> list[FolderInfo]:
+    """개수를 세고 대상 목록을 만들 때 쓸 줄만.
+
+    같은 폴더를 가리키는 두 이름을 두 줄로 세면 "설정이 두 벌인가" 로 읽힌다.
+    **거르는 규칙도 여기 한 곳이다** — 화면 3 만은 거르지 않고 전부 받아
+    "왜 여기 안 보이는지" 를 말한다.
+    """
+    return [f for f in infos if f.hidden_duplicate_of is None]
+
+
 def overview(cfg: UserConfig) -> list[FolderInfo]:
     """내장 별칭 → 사용자가 등록한 이름(가나다순) 순서로 훑는다.
 
     **`doctor` 와 같은 순서다.** 두 화면이 같은 것을 다른 순서로 보여주면
     사용자는 같은 목록을 보고 있다고 믿지 못한다.
 
-    같은 경로가 두 번 나오면 뒤엣것은 넣지 않는다 — `@photos` 가 사진 폴더를
-    가리킬 때 같은 폴더를 두 줄로 셀 이유가 없다.
+    **아무 줄도 버리지 않는다.** 예전에는 두 가지를 조용히 건너뛰었고, 둘 다
+    실측한 결함이 됐다.
 
-    **안 풀리는 이름도 줄로 남긴다.** 예전에는 조용히 건너뛰었다. 손편집 설정에
-    `{"desktop": ["@desktop"]}` 같은 순환 별칭이 들어가면 바탕화면 줄이 화면
-    1·화면 3·대상 드롭다운에서 **아무 말 없이 사라졌고**, 그 줄이 사라지면서
-    [다시 지정] 버튼까지 같이 사라져 창만으로는 고칠 방법이 없었다. 실측한 결함이다.
+      · 안 풀리는 이름 — 손편집 설정의 `{"desktop": ["@desktop"]}` 같은 순환
+        별칭이면 바탕화면 줄이 화면 1·화면 3·대상 드롭다운에서 아무 말 없이
+        사라졌다. [다시 지정] 버튼까지 같이 사라져 창만으로는 고칠 수 없었다.
+        → `status=UNRESOLVED` + `problem` 을 달아 돌려준다.
+      · 같은 폴더를 가리키는 뒤엣 이름 — 화면 3 의 [다시 지정] 으로 '문서' 를
+        다운로드와 같은 폴더로 고르면 '문서' 줄이 세 곳 모두에서 사라지고,
+        [기본 위치로] 도 같이 사라져 되돌릴 방법이 없었다.
+        → `hidden_duplicate_of` 를 달아 돌려준다.
+
+    **거르는 것은 부르는 쪽의 몫이다**(`visible()`). 여기서 빼 버리면 "왜 안
+    보이는지" 를 아무도 말할 수 없다.
     """
     out: list[FolderInfo] = []
-    seen: set[Path] = set()
-    # 내장 이름을 사용자가 등록하면 아래 목록에 **두 번** 들어온다. 풀리는 줄은
-    # `seen`(경로)이 걸러 주지만, 안 풀리는 줄은 경로가 없어 그냥 두면 같은
-    # 이름이 두 줄로 나온다.
+    먼저본것: dict[Path, FolderInfo] = {}
+    # 내장 이름을 사용자가 등록하면 아래 목록에 **두 번** 들어온다. 그건 같은
+    # 줄이므로 두 번 그리지 않는다(같은 폴더를 가리키는 **다른** 이름과 다르다).
     이름본것: set[str] = set()
 
     for name in (*BUILTIN, *sorted(cfg.paths)):
         if name in 이름본것:
             continue
         이름본것.add(name)
+        label = LABEL.get(name, name)
         try:
             path = resolve_alias(f"@{name}", cfg)
         except AliasNotDefined as e:
             # 어디를 가리키는지 모르므로 경로 자리에는 이름 그대로를 적는다.
-            out.append(FolderInfo(name=name, label=LABEL.get(name, name),
-                                  path=Path(f"@{name}"), count=None,
-                                  status=UNRESOLVED, builtin=name in BUILTIN,
-                                  problem=e.message))
+            out.append(FolderInfo(name=name, label=label, path=Path(f"@{name}"),
+                                  count=None, status=UNRESOLVED,
+                                  builtin=name in BUILTIN, problem=e.message))
             continue
-        if path in seen:
+        먼저 = 먼저본것.get(path)
+        if 먼저 is not None:
+            # 같은 폴더다 — 개수를 다시 셀 이유가 없다. 먼저 센 값을 그대로 쓴다.
+            out.append(FolderInfo(name=name, label=label, path=path,
+                                  count=먼저.count, status=먼저.status,
+                                  builtin=name in BUILTIN,
+                                  hidden_duplicate_of=먼저.name))
             continue
-        seen.add(path)
         count, status = count_files(path)
-        out.append(FolderInfo(name=name, label=LABEL.get(name, name), path=path,
-                              count=count, status=status, builtin=name in BUILTIN))
+        info = FolderInfo(name=name, label=label, path=path, count=count,
+                          status=status, builtin=name in BUILTIN)
+        먼저본것[path] = info
+        out.append(info)
     return out
