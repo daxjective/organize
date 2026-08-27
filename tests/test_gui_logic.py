@@ -17,7 +17,8 @@ from organize.gui import (arrange_steps, builtin_places, control_locks, custom_p
                           KIND_LABEL, HELP_SECTIONS, why_disabled, recipe_display,
                           profile_folder_names, row_checks, toggle_file_key,
                           undo_label, undo_prompt, _raw_kind,
-                          _ORDER_NOTE, _MOVE_NOTE)
+                          _ORDER_NOTE, _MOVE_NOTE,
+                          blocked_steps, step_makes, step_needs)
 from organize.gui_model import Row, _KIND_LABEL
 from organize.userconfig import UserConfig
 
@@ -709,3 +710,146 @@ def test_실행_순서_안내가_ㅅㅐㄱ_선택과_말이_겹치지_않는다(
     assert "선택" in _MOVE_NOTE, "아래 줄은 '선택' 이 맞다(▲▼ 로 옮길 한 줄)"
     assert "선택" not in _ORDER_NOTE, "위 줄에까지 쓰면 같은 말이 두 뜻이 된다"
     assert "체크" in _ORDER_NOTE, "체크박스를 켠 것이라고 말해야 한다"
+
+
+# ── 켜 놨는데 아무 일도 못 하는 작업 ────────────────────────────
+# "연도별 분류를 선택해도 02_Media 폴더만 생긴다" 는 고장이 아니었다. 그 작업은
+# `02_Media/사진` 안만 보는데, 그 폴더를 만드는 「캡처·사진 분리」가 꺼져 있으면
+# 볼 것이 없다. **조용한 것이 문제였다** — 켠 사람은 고장으로 읽는다.
+
+def _프로파일들(tmp_path):
+    """진짜 프로파일 두 개를 흉내낸다(카탈로그가 그 이름으로 찾는다)."""
+    d = tmp_path / "profiles"
+    d.mkdir()
+    (d / "desktop.toml").write_text(
+        'name = "바탕화면"\n'
+        '[[rules]]\n to = "01_Docs"\n ext = [".pdf"]\n'
+        '[[rules]]\n to = "02_Media"\n ext = [".png"]\n', encoding="utf-8")
+    (d / "photos.toml").write_text(
+        'name = "사진"\n'
+        '[[rules]]\n to = "사진"\n has_exif_camera = true\n'
+        '[[rules]]\n to = "캡처"\n has_exif_camera = false\n', encoding="utf-8")
+    return d
+
+
+def test_step_makes_는_target_아래에_만든다(tmp_path):
+    """`route` 의 목적지는 dest(없으면 target) 아래다 — BlockConfig.out 그대로."""
+    d = _프로파일들(tmp_path)
+
+    assert step_makes({"block": "route", "profile": "desktop"}, d) == ["01_Docs", "02_Media"]
+    assert step_makes({"block": "route", "profile": "photos",
+                       "target": "02_Media"}, d) == ["02_Media/사진", "02_Media/캡처"]
+
+
+def test_step_makes_는_route_말고는_모른다(tmp_path):
+    """by_date 도 폴더를 만들지만 이름이 파일 날짜에 달려 미리 알 수 없다."""
+    d = _프로파일들(tmp_path)
+
+    assert step_makes({"block": "by_date", "target": "02_Media/사진"}, d) == []
+    assert step_makes({"block": "dedup"}, d) == []
+
+
+def test_step_makes_는_못_읽는_프로파일에_안_죽는다(tmp_path):
+    """체크박스 줄에 읽지도 못할 오류를 띄우는 것보다 조용한 편이 낫다."""
+    assert step_makes({"block": "route", "profile": "없는것"}, tmp_path) == []
+
+
+def test_step_needs_는_읽을_폴더다():
+    assert step_needs({"block": "by_date", "target": "02_Media/사진"}) == "02_Media/사진"
+    assert step_needs({"block": "dedup"}) == "", "빈 글자면 정리할 폴더 자신이다"
+
+
+# ── blocked_steps ───────────────────────────────────────────────
+_LABELS = {"route_kind": "종류별 분류", "route_photos": "캡처·사진 분리",
+           "by_date_year": "연도별 분류"}
+_NEEDS = {"route_kind": "", "route_photos": "02_Media", "by_date_year": "02_Media/사진"}
+_MAKES = {"route_kind": ["01_Docs", "02_Media"],
+          "route_photos": ["02_Media/사진", "02_Media/캡처"], "by_date_year": []}
+_ORDER = ["route_kind", "route_photos", "by_date_year"]
+
+
+def _막힌것(checked, 있는폴더=()):
+    return blocked_steps(_ORDER, labels=_LABELS, needs=_NEEDS, makes=_MAKES,
+                         checked=set(checked), exists=lambda rel: rel in 있는폴더)
+
+
+def test_연도별만_켜면_무엇을_같이_켜야_하는지_말해_준다():
+    """이것이 이번 작업의 전부다 — 빈 결과를 보고 고장으로 읽던 그 자리."""
+    막힘 = _막힌것(["by_date_year"])
+
+    assert "by_date_year" in 막힘
+    assert "캡처·사진 분리" in 막힘["by_date_year"], "무엇을 누르면 되는지까지"
+    assert "02_Media/사진" in 막힘["by_date_year"], "어느 폴더가 없는지"
+
+
+def test_필요한_작업을_앞에_켜면_막히지_않는다():
+    assert _막힌것(["route_kind", "route_photos", "by_date_year"]) == {}
+
+
+def test_켜져_있어도_뒤에_있으면_막힌다():
+    """앞 작업이 만든 폴더를 뒤 작업이 쓴다 — 순서가 뒤집히면 볼 것이 없다."""
+    거꾸로 = ["by_date_year", "route_kind", "route_photos"]
+
+    막힘 = blocked_steps(거꾸로, labels=_LABELS, needs=_NEEDS, makes=_MAKES,
+                       checked={"route_kind", "route_photos", "by_date_year"},
+                       exists=lambda _r: False)
+
+    assert "▲▼" in 막힘["by_date_year"], "순서를 바꾸라고 말해야 한다"
+    assert "캡처·사진 분리" in 막힘["by_date_year"]
+
+
+def test_그_폴더가_이미_디스크에_있으면_경고하지_않는다():
+    """지난번 정리로 이미 02_Media/사진 이 있으면 연도별만 켜도 제대로 돈다.
+
+    디스크를 안 보고 경고하면 **틀린 말**을 하게 된다.
+    """
+    assert _막힌것(["by_date_year"], 있는폴더={"02_Media/사진"}) == {}
+
+
+def test_꺼_놓은_작업은_경고하지_않는다():
+    """켜지도 않은 줄에 경고를 달면 목록이 온통 주황색이 된다."""
+    assert _막힌것([]) == {}
+    assert "by_date_year" not in _막힌것(["route_kind"])
+
+
+def test_진짜_카탈로그와_프로파일에서도_사슬이_이어진다():
+    """위 테스트들은 흉내낸 표로 **논리만** 본다.
+
+    실제로 그 사슬이 그렇게 이어져 있는지는 진짜 파일을 읽어야 안다 —
+    프로파일의 `to` 하나만 바뀌어도 화면의 안내가 조용히 틀린 말이 된다.
+    읽기만 한다.
+    """
+    from organize import catalog
+
+    repo = Path(__file__).resolve().parent.parent
+    entries = catalog.catalog()
+    makes = {e.id: step_makes(e.step, repo / "profiles") for e in entries}
+    needs = {e.id: step_needs(e.step) for e in entries}
+
+    assert "02_Media" in makes["route_kind"], "종류별 분류가 02_Media 를 만든다"
+    assert "02_Media/사진" in makes["route_photos"], "캡처·사진 분리가 사진 폴더를 만든다"
+    assert needs["by_date_year"] == "02_Media/사진", "연도별은 사진 폴더만 본다"
+
+    막힘 = blocked_steps([e.id for e in entries],
+                       labels={e.id: e.label for e in entries},
+                       needs=needs, makes=makes,
+                       checked={"by_date_year"}, exists=lambda _r: False)
+
+    assert "캡처·사진 분리" in 막힘["by_date_year"]
+
+
+def test_처음_켜져_있는_작업들만으로는_아무것도_막히지_않는다():
+    """창을 열자마자 주황색 경고가 뜨면 그것부터 고장으로 보인다."""
+    from organize import catalog
+
+    repo = Path(__file__).resolve().parent.parent
+    entries = catalog.catalog()
+
+    막힘 = blocked_steps([e.id for e in entries],
+                       labels={e.id: e.label for e in entries},
+                       needs={e.id: step_needs(e.step) for e in entries},
+                       makes={e.id: step_makes(e.step, repo / "profiles") for e in entries},
+                       checked={e.id for e in entries if e.default_on},
+                       exists=lambda _r: False)
+
+    assert 막힘 == {}, f"처음부터 막힌 줄이 있다: {막힘}"

@@ -535,6 +535,105 @@ def profile_folder_names(profiles_dir: Path) -> list[tuple[str, list[str], str]]
     return out
 
 
+# ── 켜 놨는데 아무 일도 못 하는 작업 ────────────────────────────
+# "연도별 분류를 선택해도 02_Media 폴더만 생긴다" 는 고장이 아니었다. 그
+# 작업은 `02_Media/사진` **안만** 보는데, 그 폴더를 만들어 주는 「캡처·사진
+# 분리」가 꺼져 있으면 볼 것이 없어 조용히 아무것도 안 한다. 조용한 것이
+# 문제다 — 켠 사람은 고장으로 읽는다.
+#
+# **여기에 "무엇이 무엇을 필요로 한다" 는 표를 적지 않는다.** 카탈로그와
+# 프로파일에서 끌어낸다 — 표를 또 적으면 규칙이 바뀌는 날 갈라진다.
+
+def step_needs(step: dict) -> str:
+    """이 작업이 **읽는** 폴더(정리할 폴더 기준 상대 경로).
+
+    빈 글자면 정리할 폴더 자신이라 늘 있다.
+    """
+    return step.get("target", "") or ""
+
+
+def step_makes(step: dict, profiles_dir: Path) -> list[str]:
+    """이 작업이 **만들어 주는** 폴더들(정리할 폴더 기준 상대 경로).
+
+    폴더 이름을 미리 알 수 있는 것은 `route` 뿐이다 — 프로파일의 `to` 값이
+    그대로 폴더 이름이 되고, `dest`(안 적었으면 `target`) 아래에 생긴다
+    (`BlockConfig.out` 이 정하는 그대로다).
+
+    `by_date` 도 폴더를 만들지만 이름이 파일 날짜에 달려 있어 미리 알 수 없고,
+    그 폴더를 읽는 작업도 없다. `unzip`·`dedup` 은 분류 폴더를 만들지 않는다.
+
+    프로파일을 못 읽으면 빈 목록이다 — 여기서 알릴 일이 아니고, 알리려다
+    체크박스 줄에 읽지도 못할 오류가 뜨는 편이 더 나쁘다.
+    """
+    if step.get("block") != "route":
+        return []
+    stem = step.get("profile")
+    if not stem:
+        return []
+    try:
+        profile = profiles.load_profile(Path(profiles_dir) / f"{stem}.toml")
+    except (OrganizeError, OSError):
+        return []
+    아래 = step.get("dest") if step.get("dest") is not None else step.get("target", "")
+    아래 = 아래 or ""
+    out: list[str] = []
+    for rule in profile.rules:
+        if not rule.to:
+            continue
+        rel = f"{아래}/{rule.to}" if 아래 else rule.to
+        if rel not in out:
+            out.append(rel)
+    return out
+
+
+def blocked_steps(order: list[str], *, labels: dict, needs: dict, makes: dict,
+                  checked: set, exists) -> dict[str, str]:
+    """켜 놨는데 볼 것이 없는 작업과 **무엇을 하면 되는지**.
+
+    작업이 읽을 폴더는 둘 중 하나로 마련된다 — 지금 디스크에 이미 있거나,
+    **앞선** 켜진 작업이 만들어 주거나. 둘 다 아니면 그 작업은 빈 폴더를 보고
+    아무것도 하지 않는다.
+
+    `exists(rel)` 로 디스크를 묻는다. 이 함수는 창도 파일도 모른다 — 이미
+    지난번 정리로 `02_Media/사진` 이 있는 폴더라면 「캡처·사진 분리」 없이도
+    연도별 분류가 제대로 돌기 때문에, 디스크를 안 보고 경고하면 거짓말이 된다.
+    """
+    만들어짐: set[str] = set()
+    막힘: dict[str, str] = {}
+    for entry_id in order:
+        필요 = needs.get(entry_id, "")
+        if entry_id in checked and 필요 and 필요 not in 만들어짐 and not exists(필요):
+            막힘[entry_id] = _왜_막혔나(필요, entry_id, order, labels, makes, checked)
+        if entry_id in checked:
+            만들어짐.update(makes.get(entry_id, ()))
+    return 막힘
+
+
+def _왜_막혔나(필요: str, entry_id: str, order: list[str], labels: dict,
+             makes: dict, checked: set) -> str:
+    """막힌 이유 한 줄. **무엇을 누르면 되는지까지** 적는다.
+
+    "이 작업은 지금 아무 일도 하지 않습니다" 로 끝내면 왜 그런지도, 어떻게
+    풀어야 하는지도 여전히 모른다.
+
+    **폴더 이름과 작업 이름 바로 뒤에는 조사를 붙이지 않는다.** 받침이 있는지
+    없는지에 따라 을/를·이/가가 갈리는데, 이름은 프로파일과 카탈로그에서 오는
+    값이라 미리 알 수 없다(실측: 「캡처·사진 분리」 **을**, 02_Media/사진 **가**
+    로 나왔다). 뒤에 '폴더가' 처럼 고정된 낱말을 두거나, '도' 처럼 받침을
+    가리지 않는 조사를 쓴다.
+    """
+    도와줄것 = [i for i in order if 필요 in makes.get(i, ())]
+    뒤에있음 = [i for i in 도와줄것 if i in checked and order.index(i) > order.index(entry_id)]
+    if 뒤에있음:
+        이름 = labels.get(뒤에있음[0], 뒤에있음[0])
+        return f"{필요} 폴더가 아직 없습니다. 「{이름}」 아래로 옮겨 주세요 (▲▼)"
+    꺼진것 = [i for i in 도와줄것 if i not in checked]
+    if 꺼진것:
+        이름 = labels.get(꺼진것[0], 꺼진것[0])
+        return f"{필요} 폴더가 없어 아무 일도 안 합니다. 「{이름}」 도 켜 주세요"
+    return f"{필요} 폴더가 없어 아무 일도 안 합니다"
+
+
 def run(repo_root: Path) -> int:
     """창을 띄운다. 창을 못 띄우면 한국어로 알리고 1 을 돌려준다."""
     try:
@@ -598,6 +697,7 @@ class App:
         self.step_selected: str | None = None              # ▲▼ 가 다룰 줄(체크와 다르다)
         self.step_vars: dict = {}
         self.step_rows: dict = {}
+        self._makes_cache: dict | None = None    # 프로파일을 되풀이해 읽지 않는다
         self.targets: dict = {}         # 드롭다운 글자 → FolderInfo
         # 이번 창에서 직접 고른 폴더들. 등록하지 않았으므로 창을 닫으면 사라진다 —
         # 목록에 남겨 두는 이유는 **다시 고를 수 있어야** 하기 때문이다.
@@ -981,6 +1081,10 @@ class App:
             self._generation += 1
         if note is not None:
             self._clear_result(note)
+        # 정리할 폴더가 바뀌면 "그 폴더에 02_Media/사진 이 있는가" 의 답도
+        # 바뀐다. **부르는 곳을 여기 하나로 둔다** — 대상·체크·▲▼·조합이 전부
+        # 이 길목을 지나므로, 흩어 놓으면 빠뜨린 조작에서만 이유가 안 뜬다.
+        self._mark_blocked()
         self._sync_buttons()
         return True
 
@@ -1279,6 +1383,10 @@ class App:
         self.step_vars, self.step_rows = {}, {}
 
         by_id = {e.id: e for e in self.entries}
+        # 요약 칸을 **목록 전체에서 가장 긴 것**에 맞춘다. 줄마다 제 길이대로
+        # 두면 뒤에 붙는 이유 줄이 들쭉날쭉해지고, 아무 값이나 고정하면 긴 요약이
+        # 잘린다(실측: 14 로 뒀더니 「바탕화면·다운로드 규칙」이 잘렸다).
+        요약폭 = name_width([e.summary for e in self.entries])
         for entry_id in self.step_order:
             entry = by_id[entry_id]
             if checked is not None:      # 레시피를 골랐다 — 그 레시피가 정한다
@@ -1302,32 +1410,77 @@ class App:
                                 disabledforeground=theme.FAINT)
             cb.pack(side="left", pady=1)
             요약 = tk.Label(줄, text=entry.summary, bg=theme.SURFACE, fg=theme.MUTED,
-                           font=theme.body_font(9), anchor="w")
+                           font=theme.body_font(9), anchor="w", width=요약폭)
             요약.pack(side="left", padx=(8, 0))
-            self.step_rows[entry_id] = (줄, cb, 요약)
+            # 켜 놨는데 볼 것이 없을 때만 글자가 찬다. **회색이 아니라 문제
+            # 색이다** — 이 줄은 사용자가 일부러 켠 줄이고, 그대로 두면 아무
+            # 일도 안 일어난다. 회색으로 두면 다른 설명 요약과 구별이 안 된다.
+            이유 = tk.Label(줄, text="", bg=theme.SURFACE, fg=theme.TRASH,
+                           font=theme.body_font(9), anchor="w")
+            이유.pack(side="left", padx=(8, 0))
+            self.step_rows[entry_id] = (줄, cb, 요약, 이유)
             # 체크와 선택은 다르다 — 체크는 "실행한다", 선택은 "지금 이 줄을
             # 다루고 있다"(▲▼ 의 대상). 줄 아무 데나 누르면 선택된다.
-            for w in (줄, 요약):
+            for w in (줄, 요약, 이유):
                 w.bind("<Button-1>", lambda _e, i=entry_id: self._select_step(i))
+        self._mark_blocked()
         self._paint_steps()
         # 줄을 통째로 새로 만들었으니 잠금도 다시 발라야 한다. 새 체크박스는
         # 기본이 켜짐이라, 이걸 빼면 도는 중에 다시 그려진 줄만 눌린다.
         self._sync_buttons()
+
+    def _step_makes(self) -> dict:
+        """{작업 id: 그 작업이 만드는 폴더들}. **한 번만 읽는다.**
+
+        프로파일 파일을 읽는 일이라, 체크를 누를 때마다 다시 읽으면 파일을
+        수십 번 연다. 창이 떠 있는 동안 프로파일을 고칠 방법은 없다.
+        """
+        if self._makes_cache is None:
+            폴더 = self.repo_root / "profiles"
+            self._makes_cache = {e.id: step_makes(e.step, 폴더) for e in self.entries}
+        return self._makes_cache
+
+    def _mark_blocked(self) -> None:
+        """켜 놨는데 볼 것이 없는 줄에 이유를 적는다.
+
+        디스크를 보는 일은 여기서 한다 — `blocked_steps` 는 창도 파일도 모른다.
+        정리할 폴더를 아직 안 골랐으면 "없다" 로 답한다(그 폴더가 어디인지
+        모르는데 있다고 할 수는 없다).
+        """
+        root = self.session.root
+
+        def 있는가(rel: str) -> bool:
+            try:
+                return root is not None and (root / rel).is_dir()
+            except OSError:
+                return False        # 안 꽂힌 USB 등 — 없는 것으로 본다
+
+        막힌것 = blocked_steps(
+            self.step_order,
+            labels={e.id: e.label for e in self.entries},
+            needs={e.id: step_needs(e.step) for e in self.entries},
+            makes=self._step_makes(),
+            checked={i for i, v in self.step_vars.items() if v.get()},
+            exists=있는가)
+        for entry_id, (_줄, _cb, _요약, 이유) in self.step_rows.items():
+            말 = 막힌것.get(entry_id, "")
+            이유.configure(text=f"⚠ {말}" if 말 else "")
 
     def _select_step(self, entry_id: str) -> None:
         self.step_selected = entry_id
         self._paint_steps()
 
     def _paint_steps(self) -> None:
-        for entry_id, (줄, cb, 요약) in self.step_rows.items():
+        for entry_id, (줄, cb, 요약, 이유) in self.step_rows.items():
             bg = theme.SUNKEN if entry_id == self.step_selected else theme.SURFACE
             줄.configure(bg=bg)
             cb.configure(bg=bg, selectcolor=bg, activebackground=bg)
             요약.configure(bg=bg)
+            이유.configure(bg=bg)
 
     def _on_step_toggle(self, entry_id: str) -> None:
         self._select_step(entry_id)
-        self._push_steps()
+        self._push_steps()        # `_after_change` 가 이유 줄을 다시 칠한다
 
     def _push_steps(self, *, quiet: bool = False) -> None:
         """체크·순서를 **즉시** 세션에 넘긴다. 화면과 실행이 갈라지지 않게."""
@@ -1385,7 +1538,7 @@ class App:
         for mb, key in ((self.recipe_menu, "recipe"), (self.target_menu, "target")):
             mb.configure(state="normal" if on[key] else "disabled")
         상태 = "normal" if on["steps"] else "disabled"
-        for _줄, cb, _요약 in self.step_rows.values():
+        for _줄, cb, _요약, _이유 in self.step_rows.values():
             cb.configure(state=상태)
         # 켜고 끄는 것만으로는 부족하다 — **왜** 꺼졌는지도 같이 적는다.
         self.why_note.config(text=why_disabled(
