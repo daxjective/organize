@@ -307,6 +307,80 @@ class Session:
         # 조용히 오염된다.
         return [copy.deepcopy(step) for step in self._steps if step not in catalog_steps]
 
+    def _recipe_path(self, name: str) -> Path:
+        """조합 이름을 파일 경로로 바꾼다. **여기가 이름 검사의 유일한 자리다.**
+
+        사용자가 타이핑한 값을 그대로 경로에 붙이므로, 손으로 쓴 이름으로는
+        저장소 밖에 못 나간다는 전역 규칙을 여기서 지킨다. 저장·이름 바꾸기가
+        따로 검사하면 한쪽만 고쳐지는 날이 온다.
+
+        앞뒤 공백을 뗀 이름을 **끝까지** 쓴다 — 안 그러면 "  desktop  " 이
+        진짜 desktop.json 과의 겹침 검사를 피해 "  desktop  .json" 이라는
+        다른 파일을 만든다.
+        """
+        이름 = (name or "").strip()
+        if not 이름:
+            raise OrganizeError("조합 이름을 입력해 주세요.", hint="예: 내조합")
+        if "/" in 이름 or "\\" in 이름 or ".." in 이름:
+            raise OrganizeError(
+                f"조합 이름에 쓸 수 없는 문자가 있습니다: {이름}",
+                hint="폴더 구분자(/, \\)나 '..' 없이 이름만 입력해 주세요.")
+        return self.repo_root / "recipes" / f"{이름}.json"
+
+    def rename_recipe(self, old: str, new: str, *, overwrite: bool = False) -> Path:
+        """조합 이름을 바꾼다. **파일 이름과 파일 안의 이름을 같이 바꾼다.**
+
+        파일 이름만 바꾸면 `Recipe.name` 이 옛 이름으로 남아, 목록에 보이는
+        이름과 파일 안의 이름이 갈라진다.
+
+        **새 파일을 먼저 쓰고 옛 파일을 지운다.** 반대로 하면 쓰기가 실패했을
+        때 조합이 통째로 사라진다. 이 순서에서 최악은 같은 조합이 둘로 보이는
+        것이고, 그건 사용자가 하나 지우면 된다.
+        """
+        옛것 = find_recipe(self.repo_root / "recipes", old)
+        새것 = self._recipe_path(new)
+        if 새것 == 옛것:
+            return 옛것               # 같은 이름을 그대로 넣었다 — 바꿀 것이 없다
+        if 새것.exists() and not overwrite:
+            raise OrganizeError(
+                f"'{새것.stem}' 조합이 이미 있습니다.",
+                hint="덮어쓰려면 같은 이름으로 다시 눌러 주세요.")
+        recipe = load_recipe(옛것)
+        recipe.name = 새것.stem
+        try:
+            write_recipe_file(새것, recipe)
+        except OSError as e:
+            raise OrganizeError(
+                f"'{새것.stem}' 으로 바꾸지 못했습니다.",
+                hint="이름에 시스템 예약어를 쓰지 않았는지, 너무 길지 않은지, "
+                     "폴더에 쓸 권한이 있는지 확인해 주세요.") from e
+        try:
+            옛것.unlink()
+        except OSError as e:
+            raise OrganizeError(
+                f"새 이름으로는 만들었지만 옛 이름('{old}')을 지우지 못했습니다.",
+                hint="목록에 둘 다 보일 수 있습니다. 옛 것을 [지우기] 로 지워 주세요."
+                ) from e
+        if self._recipe_name == old:
+            self._recipe_name = 새것.stem
+        return 새것
+
+    def delete_recipe(self, name: str) -> None:
+        """조합 파일을 지운다. **되돌릴 수 없다** — 묻는 일은 창이 한다.
+
+        지운 뒤에도 켜 둔 할 일은 남긴다(`detach_recipe` 와 같은 이유). 이름을
+        지웠다고 지금 하려던 일까지 없앨 이유가 없다.
+        """
+        path = find_recipe(self.repo_root / "recipes", name)
+        try:
+            path.unlink()
+        except OSError as e:
+            raise OrganizeError(
+                f"'{name}' 조합을 지우지 못했습니다.",
+                hint="파일이 다른 프로그램에서 열려 있지 않은지 확인해 주세요.") from e
+        if self._recipe_name == name:
+            self._recipe_name = None   # 없는 것을 계속 가리키고 있을 수 없다
+
     def save_recipe(self, name: str, *, overwrite: bool = False) -> Path:
         """지금 steps 와 **정리할 폴더**를 레시피 JSON 으로 저장한다.
 
@@ -319,24 +393,12 @@ class Session:
         이름을 붙여 저장하는 이유는 **다음에 똑같이 하려고** 이므로, 폴더도 같이
         기억한다. 등록된 폴더는 `@이름` 으로 적어 다른 PC 에서도 살아 있게 한다.
         """
-        if not name or not name.strip():
-            raise OrganizeError("레시피 이름을 입력해 주세요.",
-                                hint="예: 내조합")
-        # 앞뒤 공백을 뗀 이름을 끝까지 쓴다 — 검사도, 경로도, _recipe_name 도.
-        # 안 그러면 "  desktop  " 이 진짜 desktop.json 과의 겹침 검사를 피해
-        # "  desktop  .json" 이라는 다른 파일을 만든다.
-        name = name.strip()
-        # 사용자가 타이핑하는 값을 그대로 경로에 붙이므로, 손으로 쓴 경로로는
-        # 저장소 밖으로 못 나간다는 전역 규칙을 여기서도 지킨다.
-        if "/" in name or "\\" in name or ".." in name:
-            raise OrganizeError(
-                f"레시피 이름에 쓸 수 없는 문자가 있습니다: {name}",
-                hint="폴더 구분자(/, \\)나 '..' 없이 이름만 입력해 주세요.")
+        path = self._recipe_path(name)
+        name = path.stem
         if not self._steps:
             raise OrganizeError("저장할 작업이 없습니다.",
                                 hint="체크박스를 하나 이상 켜 주세요.")
 
-        path = self.repo_root / "recipes" / f"{name}.json"
         if path.exists() and not overwrite:
             raise OrganizeError(
                 f"'{name}' 레시피가 이미 있습니다.",

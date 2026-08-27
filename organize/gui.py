@@ -976,6 +976,22 @@ class App:
         self.btn_save = ttk.Button(위, text="저장", style="Ghost.TButton",
                                    command=self._save_recipe)
         self.btn_save.grid(row=0, column=3, sticky="e", padx=(10, 0))
+        # 조합을 **골랐을 때만** 나타난다. 늘 두면 아직 아무것도 안 고른 화면에
+        # 지울 것도 없는 [지우기] 가 보인다(「이 폴더 기억하기」와 같은 규칙).
+        # 둘을 한 프레임에 담아 **한 번에** 나타나고 사라지게 한다.
+        self.recipe_tools = ttk.Frame(위)
+        self.recipe_tools.grid(row=0, column=2, sticky="w", padx=(10, 0))
+        # `width` 를 준다. 안 주면 ttk 가 단추의 **최소 글자 수**를 적용해
+        # 둘 다 [저장] 만큼 커진다 — 보조 단추로 안 읽힌다([?] 와 같은 일).
+        self.btn_rename = ttk.Button(self.recipe_tools, text="이름 바꾸기", width=11,
+                                     style="Tiny.Ghost.TButton",
+                                     command=self._rename_recipe)
+        self.btn_rename.pack(side="left")
+        self.btn_drop = ttk.Button(self.recipe_tools, text="지우기", width=6,
+                                   style="Tiny.Ghost.TButton",
+                                   command=self._delete_recipe)
+        self.btn_drop.pack(side="left", padx=(6, 0))
+        self.recipe_tools.grid_remove()
 
         ttk.Label(위, text="정리할 폴더", width=10).grid(row=1, column=0, sticky="w",
                                                    padx=(0, 12), pady=(10, 0))
@@ -1238,8 +1254,71 @@ class App:
                     self.status_var.set("저장하지 않았습니다.")
                     return
                 path = self.session.save_recipe(name, overwrite=True)
-            self._refresh_recipes(select=path.stem)
+            self._select_recipe_in_list(path.stem)
             self.status_var.set(f"'{path.stem}' 조합으로 저장했습니다.")
+
+    def _rename_recipe(self) -> None:
+        옛이름 = self.session.recipe_name
+        if not 옛이름:
+            return
+        with self._reporting("조합 이름 바꾸기"):
+            # 이름 뒤에 조사를 붙이지 않는다 — 받침에 따라 을/를이 갈리는데
+            # 이름은 사용자가 지은 값이라 미리 알 수 없다(`_왜_막혔나` 와 같은
+            # 이유다. 실측: "'내 사진정리' **으로**" 가 나왔다).
+            새이름 = self._ask_text("조합 이름 바꾸기",
+                                 f"'{옛이름}' 조합의 새 이름을 적어 주세요.",
+                                 example="예: 내 바탕화면 정리")
+            if 새이름 is None:
+                self.status_var.set("이름을 바꾸지 않았습니다.")
+                return
+            try:
+                path = self.session.rename_recipe(옛이름, 새이름)
+            except OrganizeError:
+                # 겹치는 이름인가를 **파일로** 확인한다. 오류 문구를 글자로
+                # 비교하면 문구가 바뀌는 날 조용히 안 물어보게 된다.
+                있는것 = self.repo_root / "recipes" / f"{새이름.strip()}.json"
+                if not 있는것.is_file():
+                    raise
+                if not self._confirm(
+                        "조합 이름 바꾸기",
+                        f"'{있는것.stem}' 조합이 이미 있습니다. 덮어쓸까요?"):
+                    self.status_var.set("이름을 바꾸지 않았습니다.")
+                    return
+                path = self.session.rename_recipe(옛이름, 새이름, overwrite=True)
+            self._select_recipe_in_list(path.stem)
+            self.status_var.set(f"이름을 바꿨습니다: {옛이름} → {path.stem}")
+        self._sync_buttons()
+
+    def _delete_recipe(self) -> None:
+        이름 = self.session.recipe_name
+        if not 이름:
+            return
+        # **되돌릴 수 없다고 먼저 말한다.** 되돌리기는 파일 정리에만 있고
+        # 조합에는 없다 — 물어보지 않으면 되찾을 방법이 없다.
+        if not self._confirm("조합 지우기",
+                             f"'{이름}' 조합을 지웁니다.\n\n되돌릴 수 없습니다."):
+            self.status_var.set("지우지 않았습니다.")
+            return
+        with self._reporting("조합 지우기"):
+            before = self._settings_fingerprint()
+            self.session.delete_recipe(이름)
+            self.recipe_var.set(_NO_RECIPE)
+            self._refresh_recipes()
+            # 켜 둔 할 일은 남는다 — 이름만 사라졌다. 그 말을 해 주지 않으면
+            # 체크가 그대로인 것을 보고 "안 지워졌나" 로 읽는다.
+            self._after_change(before,
+                               f"'{이름}' 조합을 지웠습니다."
+                               "\n\n켜 둔 할 일은 그대로입니다.")
+        self._sync_buttons()
+
+    def _select_recipe_in_list(self, name: str) -> None:
+        """목록을 새로 채우고 **그 조합을 가리키게** 한다.
+
+        드롭다운 글자는 `recipe_display` 가 정한다 — 목록에는 「이름 → 폴더」로
+        보이는데 고른 자리에만 이름만 남으면 같은 것이 둘로 보인다.
+        """
+        보일글자 = recipe_display(name, self.session.recipe_root_label(name))
+        self._refresh_recipes(select=보일글자)
 
     # ── 대상 ─────────────────────────────────────────────────────
     def _fill_targets(self, infos) -> None:
@@ -1565,6 +1644,11 @@ class App:
             self.btn_remember.grid()
         else:
             self.btn_remember.grid_remove()
+        # 조합을 골랐을 때만 [이름 바꾸기]·[지우기] 를 보여준다.
+        if self.session.recipe_name and not self._busy:
+            self.recipe_tools.grid()
+        else:
+            self.recipe_tools.grid_remove()
 
     def _do_preview(self) -> None:
         self._run_job("미리보기", self.session.preview, self._preview_done,

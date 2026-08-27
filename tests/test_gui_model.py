@@ -1028,3 +1028,94 @@ def test_detach_recipe_는_set_recipe_None_과_다르다(repo):
     s.set_recipe(None)
 
     assert s.checked_ids() == [], "이쪽은 비우는 것이 맞다(둘을 헷갈리지 말 것)"
+
+
+# ── 조합 이름 바꾸기 · 지우기 ───────────────────────────────────
+# 조합은 지금까지 **만들 수만** 있었다. 잘못 지은 이름을 고칠 수도, 필요 없어진
+# 것을 치울 수도 없어서 목록이 늘어나기만 했다.
+
+def test_이름을_바꾸면_파일_이름과_안의_이름이_같이_바뀐다(repo):
+    """파일 이름만 바꾸면 목록의 이름과 파일 안의 이름이 갈라진다."""
+    s = Session(repo)
+    s.set_recipe("정리")
+
+    path = s.rename_recipe("정리", "내 바탕화면")
+
+    assert path.name == "내 바탕화면.json"
+    assert not (repo / "recipes" / "정리.json").exists(), "옛 파일이 남으면 안 된다"
+    assert load_recipe(path).name == "내 바탕화면", "파일 안의 이름도 바뀌어야 한다"
+    assert s.recipe_name == "내 바탕화면", "드롭다운이 가리키는 이름도 따라간다"
+
+
+def test_이름을_바꿔도_할_일은_그대로(repo):
+    s = Session(repo)
+    s.set_recipe("정리")
+    켠것 = s.checked_ids()
+
+    s.rename_recipe("정리", "새이름")
+
+    assert s.checked_ids() == 켠것
+
+
+def test_같은_이름을_그대로_넣으면_아무_일도_안_한다(repo):
+    s = Session(repo)
+
+    path = s.rename_recipe("정리", "  정리  ")
+
+    assert path.is_file() and load_recipe(path).steps
+
+
+def test_이미_있는_이름으로는_묻기_전에는_안_바꾼다(repo):
+    (repo / "recipes" / "다른것.json").write_text(
+        json.dumps({"name": "다른것", "steps": [{"block": "dedup"}]}, ensure_ascii=False),
+        encoding="utf-8")
+    s = Session(repo)
+
+    with pytest.raises(OrganizeError):
+        s.rename_recipe("정리", "다른것")
+
+    assert (repo / "recipes" / "정리.json").is_file(), "옛 것이 사라지면 안 된다"
+    assert load_recipe(repo / "recipes" / "다른것.json").steps == [{"block": "dedup"}]
+
+
+def test_덮어쓰기를_허락하면_바꾼다(repo):
+    (repo / "recipes" / "다른것.json").write_text(
+        json.dumps({"name": "다른것", "steps": [{"block": "dedup"}]}, ensure_ascii=False),
+        encoding="utf-8")
+    s = Session(repo)
+
+    s.rename_recipe("정리", "다른것", overwrite=True)
+
+    assert not (repo / "recipes" / "정리.json").exists()
+    assert load_recipe(repo / "recipes" / "다른것.json").steps == [
+        {"block": "route", "profile": "desktop"}], "'정리' 의 내용으로 덮인다"
+
+
+@pytest.mark.parametrize("나쁜이름", ["", "   ", "../밖", "밖/으로", "밖\\으로"])
+def test_이름으로_저장소_밖에_못_나간다(repo, 나쁜이름):
+    """손으로 쓴 이름을 그대로 경로에 붙이므로 여기서 막는다."""
+    s = Session(repo)
+
+    with pytest.raises(OrganizeError):
+        s.rename_recipe("정리", 나쁜이름)
+
+
+def test_지우면_파일이_사라지고_이름만_떨어진다(repo):
+    """켜 둔 할 일까지 없애지 않는다 — 이름을 지웠다고 하려던 일이 없어지진 않는다."""
+    s = Session(repo)
+    s.set_recipe("정리")
+    켠것 = s.checked_ids()
+
+    s.delete_recipe("정리")
+
+    assert not (repo / "recipes" / "정리.json").exists()
+    assert s.recipe_name is None
+    assert s.checked_ids() == 켠것
+    assert "정리" not in s.recipe_names()
+
+
+def test_없는_조합을_지우려_하면_한국어로_알린다(repo):
+    s = Session(repo)
+
+    with pytest.raises(OrganizeError):
+        s.delete_recipe("없는것")
