@@ -45,6 +45,13 @@ _NO_RECIPE_FILES = "(저장된 조합 없음)"
 # 먼저 보여야 하고, 이건 그것들로 안 될 때 쓰는 것이다.
 _PICK_FOLDER = "+ 폴더 직접 고르기…"
 
+# 할 일 칸의 두 안내. **한 화면에서 "선택" 이라는 말을 두 뜻으로 쓰지 않는다.**
+# 아래 줄의 "선택한 작업" 은 ▲▼ 로 옮길 **한 줄을 고른 것**이고, 위 줄이 말하는
+# 것은 **체크를 켠 여러 작업**이다. 위 줄까지 "선택한 항목" 이라고 쓰면 같은
+# 말이 두 가지를 가리켜, 무엇을 ▲▼ 하는 것인지 알 방법이 없어진다.
+_ORDER_NOTE = "체크한 것을 위에서부터 차례로 실행합니다"
+_MOVE_NOTE = "선택한 작업 ▲▼ 순서 변경"
+
 # 표에 한 번에 그리는 줄 수의 한계. 다운로드 폴더는 수천 개일 수 있고, 줄마다
 # 위젯을 서너 개 만들면 창이 몇 초씩 멈춘다(체크 하나 끌 때마다 다시 그린다).
 _MAX_ROWS = 200
@@ -264,32 +271,49 @@ def foot_text(counts: dict, skipped: int, hidden: int = 0) -> str:
     return "  ".join(말)
 
 
-# 화면 2 의 [?] 가 여는 도움말. **글자를 여기 모아 둔다** — 창을 그리는 코드
+# 머리줄의 [?] 가 여는 도움말. **글자를 여기 모아 둔다** — 창을 그리는 코드
 # 사이에 흩어 두면 무엇을 설명하고 있는지 한눈에 안 보이고, 말이 바뀔 때
 # 빠뜨린다. (제목, 줄들) 의 목록이다.
+#
+# **여는 말에 붙임표(—)를 쓰지 않는다.** "압축 해제 — zip 안의…" 처럼 쓰면
+# 사람이 쓴 안내가 아니라 기계가 뽑아 준 목록처럼 읽힌다는 지적을 받았다.
+# 이름 뒤에는 쌍점(:)을 쓰고, 문장 가운데서는 그냥 마침표로 끊는다.
 HELP_SECTIONS: list[tuple[str, list[str]]] = [
     ("할 일", [
-        "압축 해제 — zip 안의 파일을 꺼냅니다. 원본 압축 파일은 남습니다.",
-        "중복 제거 — 내용이 똑같은 파일을 찾아 하나만 남기고 나머지를 보류합니다.",
-        "종류별 분류 — 확장자를 보고 01_Docs · 02_Media 같은 폴더로 나눕니다.",
-        "캡처·사진 분리 — 02_Media 안을 촬영정보(EXIF)로 사진과 캡처로 가릅니다.",
-        "연도별 분류 — 사진을 찍은 해마다 폴더를 만들어 나눕니다.",
-        "켠 것은 위에서부터 순서대로 실행됩니다. ▲▼ 로 순서를 바꿀 수 있습니다.",
+        "압축 해제: zip 안의 파일을 꺼냅니다. 원본 압축 파일은 남습니다.",
+        "중복 제거: 내용이 똑같은 파일을 찾아 하나만 남기고 나머지를 보류합니다.",
+        "종류별 분류: 확장자를 보고 01_Docs · 02_Media 같은 폴더로 나눕니다.",
+        "캡처·사진 분리: 02_Media 안을 촬영정보(EXIF)로 사진과 캡처로 가릅니다.",
+        "연도별 분류: 02_Media/사진 안을 찍은 해마다 폴더로 나눕니다.",
+        "체크한 것은 위에서부터 차례로 실행됩니다. ▲▼ 로 순서를 바꿀 수 있습니다.",
+    ]),
+    # **이 칸이 "연도별을 켰는데 아무 일도 안 한다" 에 답하는 자리다.** 할 일
+    # 다섯 가지를 따로따로 설명해 놓아도, 어느 것을 **같이** 켜야 하는지는
+    # 어디에도 없었다 — 실제로 그것을 몰라 빈 결과를 보고 고장으로 읽었다.
+    ("이럴 땐 이렇게", [
+        "바탕화면·다운로드가 지저분할 때: 중복 제거 + 종류별 분류.",
+        "사진 폴더를 정리할 때: 종류별 분류 + 캡처·사진 분리 + 연도별 분류."
+        " 앞 작업이 만든 폴더를 뒤 작업이 쓰기 때문에 이 순서를 지켜야 합니다.",
+        "연도별 분류를 켰는데 아무 일도 안 한다면, 02_Media/사진 폴더가 비어"
+        " 있는 것입니다. 그 앞의 캡처·사진 분리를 같이 켜 주세요.",
+        "촬영정보(EXIF)에 카메라가 적혀 있어야 사진입니다. 스크린샷, 메신저로"
+        " 받은 그림, 웹에서 내려받은 그림은 촬영정보가 없어 02_Media/캡처 로"
+        " 갑니다. 그런 그림만 있는 폴더에서는 사진 폴더가 아예 생기지 않습니다.",
     ]),
     ("결과 읽는 법", [
-        "이동 — 정리할 폴더 안에서 자리를 옮긴 파일입니다.",
-        f"{KIND_LABEL['quarantine']} — 지운 것이 아닙니다. .organize/trash 로 옮겨 두는"
+        "이동: 정리할 폴더 안에서 자리를 옮긴 파일입니다.",
+        f"{KIND_LABEL['quarantine']}: 지운 것이 아닙니다. .organize/trash 로 옮겨 두는"
         " 것이며, [되돌리기] 로 제자리에 되살릴 수 있습니다.",
-        "폴더 생성 — 만들어질 폴더입니다. 파일이 아니라서 따로 셉니다.",
-        "손대지 않음 — 규칙에 걸리지 않아 그대로 둔 파일입니다. 체크를 꺼서"
+        "폴더 생성: 만들어질 폴더입니다. 파일이 아니라서 따로 셉니다.",
+        "손대지 않음: 규칙에 걸리지 않아 그대로 둔 파일입니다. 체크를 꺼서"
         " 직접 뺀 파일도 여기 들어갑니다.",
-        "'보류' 와 '손대지 않음' 은 다릅니다 — 보류는 폴더가 옮겨졌고,"
+        "'보류' 와 '손대지 않음' 은 다릅니다. 보류는 폴더가 옮겨졌고,"
         " 손대지 않음은 있던 자리 그대로입니다.",
     ]),
     ("미리보기 · 실행 · 되돌리기", [
-        "미리보기 — 무엇이 어디로 갈지 계산만 합니다. 파일을 하나도 건드리지 않습니다.",
-        "실행 — 미리보기에서 본 그 계획을 그대로 수행합니다. 보지 않고는 실행할 수 없습니다.",
-        "되돌리기 — 마지막 실행을 통째로 제자리에 돌려놓습니다.",
+        "미리보기: 무엇이 어디로 갈지 계산만 합니다. 파일을 하나도 건드리지 않습니다.",
+        "실행: 미리보기에서 본 그 계획을 그대로 수행합니다. 보지 않고는 실행할 수 없습니다.",
+        "되돌리기: 마지막 실행을 통째로 제자리에 돌려놓습니다.",
         "표의 체크를 끄면 그 파일은 이번 실행에서 빠지고, 계획을 처음부터 다시 세웁니다.",
     ]),
 ]
@@ -816,16 +840,26 @@ class App:
         # 않으면 끌 방법이 없다(▲▼ 가 남았던 것과 같은 이유다).
         # 이름이 "설정 · 폴더 위치" 였을 때는 아래 체크박스 칸도 「설정」이라
         # 같은 말이 두 곳을 가리켰다. 이제 칸은 「할 일」, 링크는 「폴더 위치 설정」.
+        # [?] 가 **먼저** 붙어야 오른쪽 끝(창의 모서리)에 온다. 이 도움말은
+        # 할 일뿐 아니라 결과 읽는 법과 세 버튼까지 설명하는 **화면 전체의
+        # 도움말**이라, 할 일 칸 옆에 붙여 두면 그 칸만의 설명으로 읽힌다.
+        # `width=2` 를 준다. 안 주면 ttk 가 단추의 **최소 글자 수**를 적용해
+        # 물음표 하나가 104px 짜리 하늘색 덩어리가 된다(실측).
+        ttk.Button(머리, text="?", style="Help.TButton", width=2,
+                   command=self._show_help).pack(side="right")
         self.btn_settings = ttk.Button(머리, text="폴더 위치 설정", style="Link.TButton",
                                        command=lambda: self._go("settings"))
-        self.btn_settings.pack(side="right")
+        self.btn_settings.pack(side="right", padx=(0, 10))
 
         # ── 저장한 조합 · 정리할 폴더 ─────────────────────────
         위 = ttk.Frame(parent)
         위.pack(fill="x", pady=(14, 0))
         위.columnconfigure(2, weight=1)          # 가운데를 비워 [저장] 을 오른쪽 끝으로
 
-        ttk.Label(위, text="저장한 조합", width=10).grid(row=0, column=0, sticky="w")
+        # 이름표와 드롭다운이 **맞붙어** 있었다. `width=10` 은 글자 자리만 잡고
+        # 여백은 만들지 않는다 — 이름이 열 칸을 꽉 채우면 바로 옆에 붙는다.
+        ttk.Label(위, text="저장한 조합", width=10).grid(row=0, column=0, sticky="w",
+                                                   padx=(0, 12))
         self.recipe_var = tk.StringVar(value=_NO_RECIPE)
         self.recipe_menu = self._dropdown(위, self.recipe_var)
         self.recipe_menu.grid(row=0, column=1, sticky="w")
@@ -834,16 +868,16 @@ class App:
         self.btn_save.grid(row=0, column=3, sticky="e", padx=(10, 0))
 
         ttk.Label(위, text="정리할 폴더", width=10).grid(row=1, column=0, sticky="w",
-                                                   pady=(8, 0))
+                                                   padx=(0, 12), pady=(10, 0))
         self.target_var = tk.StringVar(value=_LOADING)
         self.target_menu = self._dropdown(위, self.target_var)
-        self.target_menu.grid(row=1, column=1, sticky="w", pady=(8, 0))
+        self.target_menu.grid(row=1, column=1, sticky="w", pady=(10, 0))
         # 직접 고른 폴더를 쓰고 있을 때만 나타난다. 자주 쓸 것 같으면 그때
         # 등록하면 된다 — 쓰기도 전에 이름부터 지으라고 하지 않는다.
         self.btn_remember = ttk.Button(위, text="이 폴더 기억하기",
                                        style="Tiny.Ghost.TButton",
                                        command=self._remember_target)
-        self.btn_remember.grid(row=1, column=3, sticky="e", padx=(10, 0))
+        self.btn_remember.grid(row=1, column=3, sticky="e", padx=(10, 0), pady=(10, 0))
         self.btn_remember.grid_remove()
 
         # 레시피에 목록에 없는 작업이 섞여 있을 때만 보이는 줄. **조용히 넘어가지
@@ -858,12 +892,8 @@ class App:
         제목줄 = ttk.Frame(parent)
         제목줄.pack(fill="x", pady=(14, 4))
         ttk.Label(제목줄, text="할 일", style="Lead.TLabel").pack(side="left")
-        # 긴 설명은 여기 뒤에 숨긴다. 표 아래에 늘어놓으면 매번 달라지는 숫자와
-        # ⚠ 경고가 그 안에 묻힌다.
-        ttk.Button(제목줄, text="?", style="Help.TButton",
-                   command=self._show_help).pack(side="left", padx=(8, 0))
-        ttk.Label(제목줄, text="켠 것을 위에서부터 순서대로 실행합니다",
-                  style="Faint.TLabel").pack(side="left", padx=(10, 0))
+        ttk.Label(제목줄, text=_ORDER_NOTE,
+                  style="Faint.TLabel").pack(side="left", padx=(12, 0))
         판 = self._card(parent)
         판.pack(fill="x")
         self.step_box = tk.Frame(판, bg=theme.SURFACE)
@@ -871,7 +901,7 @@ class App:
 
         순서줄 = tk.Frame(판, bg=theme.SURFACE)
         순서줄.pack(fill="x", padx=12, pady=(0, 10))
-        tk.Label(순서줄, text="선택한 작업 ▲▼ 순서 변경", bg=theme.SURFACE,
+        tk.Label(순서줄, text=_MOVE_NOTE, bg=theme.SURFACE,
                  fg=theme.MUTED, font=theme.body_font(9)).pack(side="left")
         # **변수로 들고 있는다.** `_sync_buttons` 가 도는 동안 이 둘도 꺼야 하는데,
         # 붙잡아 두지 않으면 끌 방법이 없다(이것이 이번 결함이 남은 이유다).
@@ -1047,7 +1077,7 @@ class App:
             return None               # 못 풀면 그냥 둔다. 여기서 실패를 알릴 일은 아니다
         for text, info in self.targets.items():
             if info.path == path:
-                self._pick_target(text)
+                self._pick_target(text, keep_recipe=True)
                 return info.label       # 상태 꼬리표("— 폴더 없음")는 문장에 안 섞는다
         # 등록 목록에 없는 곳이라도 레시피가 가리키는 곳은 대상이 될 수 있다.
         # 그럴 때도 **글자로 보여야** 한다 — 안 보이면 조용히 바뀐 것과 같다.
@@ -1138,7 +1168,11 @@ class App:
             before = self._settings_fingerprint()
             self.session.set_root(chosen)
             self.target_var.set(text)
-            self._after_change(before, f"정리할 폴더: {_short(chosen)}")
+            푼조합 = self._detach_recipe(before[0])
+            말 = f"정리할 폴더: {_short(chosen)}"
+            if 푼조합:
+                말 += f"\n\n'{푼조합}' 조합에서 풀었습니다. 켜 둔 할 일은 그대로입니다."
+            self._after_change(before, 말)
         self._start_counting(force=True)      # 목록에 새 줄을 넣어 다시 그린다
         self._sync_buttons()
 
@@ -1165,7 +1199,31 @@ class App:
         self._start_counting(force=True)
         self._sync_buttons()
 
-    def _pick_target(self, text: str) -> None:
+    def _detach_recipe(self, 옛폴더) -> str | None:
+        """정리할 폴더가 **진짜 바뀌었으면** [저장한 조합] 이름을 푼다.
+
+        조합은 폴더까지 묶어 저장한 것이다. 폴더만 바꿔 놓고 조합 이름이 그대로
+        남아 있으면 「사진 → 사진」 이라고 적힌 채 바탕화면을 정리하게 된다.
+
+        **할 일 체크는 건드리지 않는다** — 그 조합에서 불러온 할 일을 그대로
+        쓰고 싶어서 폴더만 바꾼 것일 수 있다. 푼 조합 이름을 돌려주므로 창이
+        상태줄에 그 사실을 적을 수 있다.
+        """
+        이름 = self.session.recipe_name
+        if 이름 is None or self.session.root == 옛폴더:
+            return None               # 같은 폴더를 다시 골랐다 — 풀 것이 없다
+        if not self.session.detach_recipe():
+            return None
+        self.recipe_var.set(_NO_RECIPE)
+        return 이름
+
+    def _pick_target(self, text: str, *, keep_recipe: bool = False) -> None:
+        """드롭다운에서 폴더 하나를 고른다.
+
+        `keep_recipe` 는 **조합을 따라 폴더가 옮겨질 때만** 참이다
+        (`_follow_recipe_root`). 그때까지 조합을 풀어 버리면 방금 고른 조합이
+        스스로를 지우는 꼴이 된다.
+        """
         info = self.targets.get(text)
         if info is None:
             return
@@ -1179,10 +1237,16 @@ class App:
             before = self._settings_fingerprint()
             self.session.set_root(info.path)
             self.target_var.set(text)
+            푼조합 = None if keep_recipe else self._detach_recipe(before[0])
+            말 = f"정리할 폴더: {info.path}"
+            if 푼조합:
+                # 줄을 나눈다 — 긴 경로 뒤에 이어 붙이면 한 덩어리로 접혀서
+                # 조합이 풀렸다는 말이 경로 속에 묻힌다(실측: 캡처에서 그랬다).
+                말 += f"\n\n'{푼조합}' 조합에서 풀었습니다. 켜 둔 할 일은 그대로입니다."
             # 같은 폴더를 다시 골랐으면 표도 [실행] 도 그대로 둔다. 무조건
             # 지우면 표만 비고 [실행] 은 켜진 채로 남아, 확인 대화상자의 요약이
             # 빈칸으로 뜬다.
-            if not self._after_change(before, f"정리할 폴더: {info.path}"):
+            if not self._after_change(before, 말):
                 self.status_var.set(f"정리할 폴더: {info.path}"
                                     "  — 이미 고른 폴더입니다. 미리보기를 그대로 둡니다.")
         self._sync_buttons()
@@ -2052,11 +2116,19 @@ class App:
         return win, 몸
 
     def _show_dialog(self, win, focus=None) -> None:
-        """부모 창 가운데에 놓고, 닫힐 때까지 기다린다."""
+        """부모 창 가운데에 놓고, 닫힐 때까지 기다린다.
+
+        **화면 밖으로 내보내지 않는다.** 대화상자는 `resizable(False, False)`
+        라, 아래가 잘리면 사용자가 늘려서 볼 방법이 없다 — [확인] 단추가 화면
+        밖에 있으면 창을 닫을 수도 없다. 도움말처럼 긴 창이 부모 창보다 110px
+        아래에서 시작하면 노트북 화면에서 실제로 그렇게 된다.
+        """
         win.update_idletasks()
         가로 = max(0, (self.window.winfo_width() - win.winfo_width()) // 2)
-        win.geometry(f"+{self.window.winfo_rootx() + 가로}"
-                     f"+{self.window.winfo_rooty() + 110}")
+        x = self.window.winfo_rootx() + 가로
+        바닥 = win.winfo_screenheight() - win.winfo_height() - 40   # 작업표시줄 자리
+        y = max(0, min(self.window.winfo_rooty() + 110, 바닥))
+        win.geometry(f"+{x}+{y}")
         if focus is not None:
             focus.focus_set()
         try:
@@ -2141,15 +2213,18 @@ class App:
         win, 몸 = self._dialog("도움말")
         for i, (제목, 줄들) in enumerate(HELP_SECTIONS):
             ttk.Label(몸, text=제목, style="Lead.TLabel",
-                      ).pack(anchor="w", pady=(0 if not i else 14, 6))
+                      ).pack(anchor="w", pady=(0 if not i else 12, 5))
             판 = self._card(몸)
             판.pack(fill="x")
             for j, 줄 in enumerate(줄들):
+                # 줄바꿈 폭을 넓게 잡는다. 좁으면 한 항목이 세 줄로 접혀 창이
+                # 세로로 길어지고, 대화상자는 늘릴 수 없어 아래가 잘린다
+                # (실측: 520 일 때 813px, 780 일 때 화면에 들어온다).
                 tk.Label(판, text=f"· {줄}", bg=theme.SURFACE, fg=theme.TEXT,
                          font=theme.body_font(9), anchor="w", justify="left",
-                         wraplength=520).pack(fill="x", padx=12,
-                                              pady=(10 if not j else 4,
-                                                    10 if j == len(줄들) - 1 else 0))
+                         wraplength=780).pack(fill="x", padx=12,
+                                              pady=(8 if not j else 3,
+                                                    8 if j == len(줄들) - 1 else 0))
 
         줄 = ttk.Frame(몸)
         줄.pack(fill="x", pady=(18, 0))

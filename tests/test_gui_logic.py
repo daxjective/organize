@@ -16,7 +16,8 @@ from organize.gui import (arrange_steps, builtin_places, control_locks, custom_p
                           openable, place_path_width,
                           KIND_LABEL, HELP_SECTIONS, why_disabled, recipe_display,
                           profile_folder_names, row_checks, toggle_file_key,
-                          undo_label, undo_prompt, _raw_kind)
+                          undo_label, undo_prompt, _raw_kind,
+                          _ORDER_NOTE, _MOVE_NOTE)
 from organize.gui_model import Row, _KIND_LABEL
 from organize.userconfig import UserConfig
 
@@ -659,3 +660,52 @@ def test_recipe_display_폴더가_있으면_같이_보인다():
 def test_recipe_display_폴더가_없으면_이름만():
     """모르면 아무 말도 안 하는 편이, 틀린 폴더 이름을 적는 것보다 낫다."""
     assert recipe_display("내조합", "") == "내조합"
+
+
+# ── 도움말 ───────────────────────────────────────────────────────
+def test_도움말이_기계가_뽑은_목록처럼_읽히지_않는다():
+    """"압축 해제 — zip 안의…" 처럼 붙임표로 여는 줄이 열두 개였다.
+
+    사람이 쓴 안내가 아니라 뽑아 준 표처럼 읽힌다는 지적을 받았다. 이름 뒤에는
+    쌍점(:)을 쓰고, 문장 가운데서는 마침표로 끊는다.
+    """
+    붙임표줄 = [줄 for _, 줄들 in HELP_SECTIONS for 줄 in 줄들 if "—" in 줄]
+
+    assert not 붙임표줄, f"붙임표가 남은 줄: {붙임표줄}"
+
+
+def test_도움말이_연도별이_왜_아무_일도_안_하는지_알려준다():
+    """켜 놨는데 결과가 비면 고장으로 읽힌다 — 실제로 그렇게 읽혔다.
+
+    연도별 분류는 `02_Media/사진` 안만 본다. 그 앞의 캡처·사진 분리가 꺼져
+    있거나, 촬영정보 없는 그림뿐이면 사진 폴더 자체가 안 생긴다.
+    """
+    도움말 = " ".join(줄 for _, 줄들 in HELP_SECTIONS for 줄 in 줄들)
+
+    assert "02_Media/사진" in 도움말, "어느 폴더를 보는지 적어야 한다"
+    assert "캡처·사진 분리를 같이 켜" in 도움말, "무엇을 하면 되는지까지 말해야 한다"
+    assert "EXIF" in 도움말 and "스크린샷" in 도움말, "왜 사진으로 안 가는지"
+
+
+def test_도움말이_어느_작업을_같이_켜야_하는지_알려준다():
+    """할 일 다섯 가지를 따로 설명해도, 묶어 쓰는 법은 어디에도 없었다."""
+    제목들 = [제목 for 제목, _ in HELP_SECTIONS]
+
+    assert "이럴 땐 이렇게" in 제목들
+
+    줄들 = dict(HELP_SECTIONS)["이럴 땐 이렇게"]
+    assert any("바탕화면" in 줄 for 줄 in 줄들)
+    assert any("사진 폴더를 정리할 때" in 줄 for 줄 in 줄들)
+
+
+# ── 한 화면에서 "선택" 을 두 뜻으로 쓰지 않는다 ─────────────────
+def test_실행_순서_안내가_ㅅㅐㄱ_선택과_말이_겹치지_않는다():
+    """`선택한 항목을 순서대로` 로 바꾸자는 제안이 있었다 — 바꾸면 더 헷갈린다.
+
+    바로 아래 줄의 "선택한 작업 ▲▼ 순서 변경" 에서 '선택' 은 **▲▼ 로 옮길 한
+    줄을 고른 것**이다. 위 줄까지 '선택' 을 쓰면 같은 말이 두 가지를 가리켜,
+    무엇을 ▲▼ 하는 것인지 알 방법이 없어진다.
+    """
+    assert "선택" in _MOVE_NOTE, "아래 줄은 '선택' 이 맞다(▲▼ 로 옮길 한 줄)"
+    assert "선택" not in _ORDER_NOTE, "위 줄에까지 쓰면 같은 말이 두 뜻이 된다"
+    assert "체크" in _ORDER_NOTE, "체크박스를 켠 것이라고 말해야 한다"

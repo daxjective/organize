@@ -994,3 +994,37 @@ def test_등록된_폴더로_저장하면_이름으로_들어간다(repo, tmp_pa
     s.set_recipe("정리")
 
     assert s.saved_roots() == ["@백업"]
+
+
+# ── 폴더를 바꾸면 조합 이름이 풀린다 ────────────────────────────
+# 조합은 **폴더까지 묶어서** 저장한 것이다. 폴더만 바꿔 놓고 조합 이름이 그대로
+# 남아 있으면 「사진 → 사진」 이라고 적힌 채 바탕화면을 정리하게 된다.
+# 실측: 그것이 화면 2 에서 "바로 와닿지 않는다" 던 첫 번째 이유였다.
+
+def test_detach_recipe_이름만_떼고_할_일은_남긴다(repo, work):
+    s = Session(repo)
+    s.set_recipe("정리")
+    켜둔것 = s.checked_ids()
+    assert 켜둔것, "이 테스트는 조합에 할 일이 있어야 의미가 있다"
+
+    떼었나 = s.detach_recipe()
+
+    assert 떼었나 is True
+    assert s.recipe_name is None, "이름은 떨어져야 한다"
+    assert s.checked_ids() == 켜둔것, "켜 둔 할 일까지 지우면 안 된다"
+
+
+def test_detach_recipe_뗄_이름이_없으면_아무_일도_안_한다(repo):
+    s = Session(repo)
+
+    assert s.detach_recipe() is False, "괜히 무효화를 부르지 않게 알려 줘야 한다"
+
+
+def test_detach_recipe_는_set_recipe_None_과_다르다(repo):
+    """`set_recipe(None)` 은 할 일까지 비운다 — 그래서 여기에 쓸 수 없다."""
+    s = Session(repo)
+    s.set_recipe("정리")
+
+    s.set_recipe(None)
+
+    assert s.checked_ids() == [], "이쪽은 비우는 것이 맞다(둘을 헷갈리지 말 것)"

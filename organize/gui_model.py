@@ -249,6 +249,25 @@ class Session:
             self._clear_excluded()
         self._recipe_name, self._steps = name, new_steps
 
+    def detach_recipe(self) -> bool:
+        """조합 **이름만** 뗀다. 켜 둔 할 일(steps)은 그대로 남긴다.
+
+        `set_recipe(None)` 과 다르다 — 그쪽은 steps 까지 비운다. 정리할 폴더를
+        바꿨다고 켜 둔 할 일까지 사라지면, 사용자는 자기가 무엇을 지웠는지 알
+        방법이 없다.
+
+        이름만 떼는 이유: 조합은 **폴더까지 묶어서** 저장한 것이다. 폴더가
+        달라진 순간에도 화면이 그 조합 이름을 달고 있으면 거짓말이 된다
+        (「사진 → 사진」 이라고 적힌 채 실제로는 바탕화면을 정리하게 된다).
+
+        이미 이름이 없으면 아무 일도 하지 않는다 — 미리보기를 괜히 버리지 않기
+        위해 돌려주는 값으로 "뗐는지" 를 알린다.
+        """
+        if self._recipe_name is None:
+            return False
+        self._recipe_name = None
+        return True
+
     def set_steps(self, ids: list[str]) -> None:
         """켠 작업들을 **보이는 순서 그대로** steps 로 만든다.
 
