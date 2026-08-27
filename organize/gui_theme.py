@@ -186,6 +186,13 @@ def apply_theme(window) -> None:
     style.map("Help.TButton",
               background=[("active", SUNKEN), ("pressed", SUNKEN)])
 
+    # 도는 중임을 알리는 막대. **상태줄 글자만으로는 부족하다** — 눈은 방금
+    # 누른 버튼에 가 있는데 안내는 창 맨 아래에 있어서, "눌러도 아무 반응이
+    # 없다" 로 읽힌다. 색은 강조색(하늘빛) 그대로 쓴다.
+    style.configure("Accent.Horizontal.TProgressbar",
+                    background=ACCENT, troughcolor=SUNKEN, bordercolor=LINE,
+                    lightcolor=ACCENT, darkcolor=ACCENT, thickness=6)
+
     # 대화상자의 글자 입력칸. **OS 기본 모양을 그대로 두지 않는다** — 창은
     # Finder 톤인데 입력칸만 회색 네모면 딴 프로그램에서 뜬 창처럼 보인다.
     style.configure("TEntry", fieldbackground=SURFACE, foreground=TEXT,

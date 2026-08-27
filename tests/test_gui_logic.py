@@ -18,7 +18,8 @@ from organize.gui import (arrange_steps, builtin_places, control_locks, custom_p
                           profile_folder_names, row_checks, toggle_file_key,
                           undo_label, undo_prompt, _raw_kind,
                           _ORDER_NOTE, _MOVE_NOTE,
-                          blocked_steps, step_makes, step_needs)
+                          blocked_steps, step_makes, step_needs,
+                          text_width, _short)
 from organize.gui_model import Row, _KIND_LABEL
 from organize.userconfig import UserConfig
 
@@ -853,3 +854,44 @@ def test_처음_켜져_있는_작업들만으로는_아무것도_막히지_않�
                        exists=lambda _r: False)
 
     assert 막힘 == {}, f"처음부터 막힌 줄이 있다: {막힘}"
+
+
+# ── 경로 접기는 글자 수가 아니라 칸 수로 ────────────────────────
+# 한글은 라틴 글자의 두 배 넓이로 그려진다. 글자 수로 접으면 한글 경로만
+# 칸 밖으로 밀려 끝이 잘린다 — 하필 폴더 이름이 있는 쪽이라 눈에 띈다.
+# 실측: 설정 화면에서 '없는드라이브' 가 '없는드라(' 로 났다.
+
+def test_text_width_한글은_두_칸():
+    assert text_width("abc") == 3
+    assert text_width("한글") == 4
+    assert text_width("a한b") == 4
+
+
+def test_짧은_경로는_그대로_둔다():
+    assert _short("/home/davin/Desktop", 56) == "/home/davin/Desktop"
+
+
+def test_한글_경로도_칸_수를_넘지_않는다():
+    긴것 = "/tmp/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/home/없는드라이브"
+
+    접힌것 = _short(긴것, 34)
+
+    assert text_width(접힌것) <= 34, f"칸을 넘었다: {text_width(접힌것)}"
+    assert 접힌것.endswith("없는드라이브"), "폴더 이름은 남아야 알아본다"
+
+
+def test_라틴_경로도_칸_수를_넘지_않는다():
+    긴것 = "/tmp/claude-1000/-home-davin-project/scratchpad/sandbox/home/Pictures"
+
+    접힌것 = _short(긴것, 34)
+
+    assert text_width(접힌것) <= 34
+    assert 접힌것.endswith("Pictures"), "폴더 이름은 남아야 알아본다"
+    assert 접힌것.startswith("/tmp/"), "앞쪽(드라이브·루트)도 남는다"
+
+
+def test_글자_가운데를_쪼개지_않는다():
+    """두 칸짜리 글자가 경계에 걸리면 통째로 뺀다 — 반쪽 글자는 못 읽는다."""
+    for limit in range(16, 40):
+        접힌것 = _short("/aaaa/가나다라마바사아자차카타파하/끝폴더", limit)
+        assert text_width(접힌것) <= limit, f"limit={limit} 에서 넘쳤다"

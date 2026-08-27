@@ -354,8 +354,13 @@ def openable(info) -> bool:
 # ── 화면 3 이 쓰는 것 (역시 위젯을 모른다) ───────────────────────
 
 # 설정 화면의 경로 칸 길이. 표 기본값(56)보다 짧다 — 오른쪽에 상태 글자와
-# 버튼 둘이 더 붙어서, 길면 서로 밀고 들어온다(실측: 캡처에서 그렇게 됐다).
-_PLACE_PATH = 46
+# 버튼 **셋**이 더 붙어서, 길면 서로 밀고 들어온다(실측: 46 인 채로 [복사] 를
+# 더했더니 경로가 '…/sandbox/ho' 로 잘렸다).
+#
+# 상태 글자가 가장 길 때(「없음 · 다시 지정」·「폴더가 없습니다」 = 15칸)까지
+# 견디는 값이다. 38 로 뒀더니 「비어 있습니다」가 붙은 줄에서 'Pictures' 가
+# 'Picture' 로 한 글자 잘렸다 — 잘리는 끝이 하필 폴더 이름 쪽이라 눈에 띈다.
+_PLACE_PATH = 34
 
 # 별칭 이름 → 사람이 부르는 이름. `folders.LABEL` 그대로다(표를 두 벌 만들지 않는다).
 LABEL_OF = folders.LABEL
@@ -386,11 +391,7 @@ def name_width(labels) -> int:
     이름은 사용자가 지은 것이라 자르면 안 된다. 대신 `_PLACE_PATH` 로 이미
     접혀 있는 경로 쪽이 자리를 내준다.
     """
-    def 폭(s: str) -> int:
-        # U+2E80 위쪽은 한글·한자·이모지 — 폭이 대략 두 배다.
-        return sum(2 if ord(c) > 0x2E80 else 1 for c in s)
-
-    return max([12, *(폭(str(l)) for l in labels)])
+    return max([12, *(text_width(str(l)) for l in labels)])
 
 
 def place_path_width(labels) -> int:
@@ -902,6 +903,7 @@ class App:
         ttk = self.ttk
         row = ttk.Frame(parent, style="Card.TFrame")
         row.columnconfigure(0, weight=1)
+        열수있나 = str(info.path) if openable(info) else ""
 
         ttk.Label(row, text=info.label, style="CardName.TLabel", anchor="w",
                   ).grid(row=0, column=0, sticky="w")
@@ -909,21 +911,29 @@ class App:
                   ).grid(row=1, column=0, sticky="w", pady=(3, 0))
 
         문제 = _문제인가(info)
-        # 개수는 세 줄 옆에서 **가운데**에 선다. 어느 줄에 붙이면 그 줄만 커 보인다.
         ttk.Label(row, text=("—" if info.count is None else str(info.count)),
                   style="CardAlertCount.TLabel" if 문제 else "CardCount.TLabel",
-                  anchor="e", width=5).grid(row=0, column=1, rowspan=3,
+                  anchor="e", width=5).grid(row=0, column=1, columnspan=2,
                                             sticky="e", padx=(12, 0))
 
         # 전체 경로를 **눌러서 여는 링크**로. 글자만 봐서는 그 폴더가 내가 아는
         # 그 폴더인지 알 수 없다 — 열어 봐야 안다. 개수가 0 인 줄이야말로 그렇다.
-        self._path_link(row, text=_short(info.path), size=8,
-                        folder=str(info.path) if openable(info) else "",
-                        ).grid(row=2, column=0, sticky="w", pady=(2, 0))
+        #
+        # **개수 아래, 오른쪽에 둔다.** 왼쪽 맨 아래에 깔면 줄에서 가장 길고
+        # 진한 것이 정작 가장 덜 중요한 글자가 되어, 이름과 꼬리 경로보다
+        # 먼저 눈에 들어온다. 오른쪽으로 보내면 개수와 한 덩어리로 읽힌다.
+        self._path_link(row, text=_short(info.path), size=8, folder=열수있나,
+                        ).grid(row=1, column=1, sticky="e", padx=(12, 0), pady=(3, 0))
+        # [복사] 는 **제 열을 갖는다.** 경로 뒤에 붙여 놓으면 경로 길이에 따라
+        # 줄마다 다른 자리에 서고, 복사할 것이 없는 줄에서는 아예 사라져
+        # 세로줄이 깨진다.
+        row.columnconfigure(2, minsize=self._COPY_PIXELS)
+        self._copy_button(row, 열수있나).grid(row=1, column=2, sticky="e",
+                                            padx=(8, 0), pady=(3, 0))
         if 문제:
             ttk.Label(row, text=_why(info), style="CardAlert.TLabel",
                       wraplength=480, justify="left",
-                      ).grid(row=3, column=0, columnspan=2, sticky="w", pady=(4, 0))
+                      ).grid(row=2, column=0, columnspan=3, sticky="w", pady=(4, 0))
         return row
 
     # ── 화면 2 — 메인 ────────────────────────────────────────────
@@ -1030,6 +1040,10 @@ class App:
         self.why_note = ttk.Label(줄, style="Faint.TLabel", wraplength=460,
                                   justify="left")
         self.why_note.pack(side="left", padx=(14, 0))
+        # 도는 동안만 나타나는 막대. **버튼 바로 옆이어야 한다** — 눈이 거기
+        # 가 있다. 상태줄은 창 맨 아래라 누른 직후에는 보지 않는다.
+        self.spinner = ttk.Progressbar(줄, mode="indeterminate", length=110,
+                                       style="Accent.Horizontal.TProgressbar")
 
         # ── 결과 ──────────────────────────────────────────────
         결과 = ttk.Frame(parent)
@@ -1607,6 +1621,7 @@ class App:
         if self._busy:
             return
         self._busy = True
+        self._spin(True)
         self._sync_buttons()
         # 잠근 이유가 화면에 보여야 한다 — 회색이 된 대상·체크박스를 보고
         # 고장으로 읽지 않도록, 무엇을 하는 중이고 언제 풀리는지 적는다.
@@ -1626,12 +1641,26 @@ class App:
             # 스레드를 못 띄웠는데 `_busy` 를 켠 채로 두면 **창이 영영 굳는다**
             # (아무도 `_drain_jobs` 를 부르지 않는다). 반드시 되돌려 놓고 알린다.
             self._busy = False
+            self._spin(False)
             self._sync_buttons()
             self._report(what, OrganizeError(
                 f"{what} 를 시작하지 못했습니다.",
                 hint="다른 프로그램을 닫고 잠시 뒤에 다시 눌러 주세요."))
             return
         self.window.after(60, self._drain_jobs)
+
+    def _spin(self, on: bool) -> None:
+        """도는 막대를 보이거나 감춘다.
+
+        감출 때 `stop()` 을 반드시 부른다 — 안 부르면 tkinter 가 보이지도 않는
+        위젯을 계속 다시 그린다(창을 켜 둔 채 오래 두면 그게 쌓인다).
+        """
+        if on:
+            self.spinner.pack(side="left", padx=(14, 0), before=self.why_note)
+            self.spinner.start(12)
+        else:
+            self.spinner.stop()
+            self.spinner.pack_forget()
 
     def _drain_jobs(self) -> None:
         try:
@@ -1640,6 +1669,7 @@ class App:
             self.window.after(60, self._drain_jobs)
             return
         self._busy = False
+        self._spin(False)
         if 세대 is not None and 세대 != self._generation:
             # 띄울 때와 지금의 세대가 다르다 — 도는 동안 설정이 바뀌었다.
             # **세션이 계산해 둔 계획도 함께 버린다.** 창이 결과를 안 그리는
@@ -1982,7 +2012,8 @@ class App:
         # ① 자동으로 찾은 위치 — 정상이면 조용히 둔다
         칸 = self._settings_group(
             body, "자동으로 찾은 위치",
-            "문제가 있는 줄만 눈에 띕니다. PC 를 옮겼으면 그 줄만 다시 지정하면 됩니다.")
+            "OS 가 찾아 준 자리입니다. 어느 줄이든 [다시 지정] 으로 바꿀 수 있고, "
+            "[기본 위치로] 로 되돌립니다.")
         내장 = builtin_places(self._infos, pinned)
         if not 내장:
             self._settings_line(칸, "폴더를 확인하는 중입니다…")
@@ -2056,12 +2087,14 @@ class App:
                  ).pack(side="left", padx=(0, 10))
 
         if builtin:
-            # 정상인 줄에는 버튼을 두지 않는다 — 고칠 것이 없는데 고치는 단추가
-            # 있으면 무엇이 문제인지 눈에 안 들어온다.
-            if place.alert:
-                ttk.Button(줄, text="다시 지정", style="Tiny.Ghost.TButton",
-                           command=lambda p=place: self._pick_place(p.name, p.label),
-                           ).pack(side="right", padx=(6, 0))
+            # **정상인 줄에도 둔다.** 전에는 문제가 있는 줄에만 뒀는데, 그러면
+            # 바탕화면·다운로드는 아예 못 바꾸는 것으로 읽힌다 — OneDrive 를
+            # 쓰면 OS 가 찾아 주는 자리가 내가 쓰는 자리와 다를 수 있어서,
+            # 멀쩡해 보이는 줄이야말로 바꿔야 할 때가 있다. 문제가 있는 줄은
+            # 단추가 아니라 옆의 주황 글자가 알린다.
+            ttk.Button(줄, text="다시 지정", style="Tiny.Ghost.TButton",
+                       command=lambda p=place: self._pick_place(p.name, p.label),
+                       ).pack(side="right", padx=(6, 0))
             if place.pinned:
                 # 직접 지정한 줄은 **되돌릴 수 있어야 한다.** 안 그러면 한 번
                 # 잘못 고른 뒤로 OS 가 찾아 주는 자리로 못 돌아온다.
@@ -2081,6 +2114,9 @@ class App:
                        command=lambda p=place: self._pick_place(p.name, p.label),
                        ).pack(side="right", padx=(6, 0))
 
+        # [복사] 는 **단추들 바로 옆**에 세운다. 길이가 들쭉날쭉한 상태 글자
+        # 뒤에 두면 줄마다 다른 자리에 서서 세로줄이 안 맞는다(실측).
+        self._copy_button(줄, place.open_path).pack(side="right", padx=(6, 0))
         if place.note:
             tk.Label(줄, text=place.note, bg=theme.SURFACE,
                      fg=(theme.TRASH if place.alert else theme.MUTED),
@@ -2219,6 +2255,45 @@ class App:
                        font=theme.link_font(size), anchor="w", cursor="hand2")
         lab.bind("<Button-1>", lambda _e, p=folder: self._open_folder(p))
         return lab
+
+    # [복사] 단추의 폭. 글자 수(`width`)와 빈자리(픽셀)를 **한 쌍으로** 둔다 —
+    # 둘이 어긋나면 복사할 것이 없는 줄에서 옆 단추들이 밀려 세로줄이 깨진다.
+    # 픽셀 값은 실측이다(글자 수만으로는 테두리·여백을 알 수 없다).
+    _COPY_CHARS = 4
+    _COPY_PIXELS = 52
+
+    def _copy_button(self, parent, folder: str):
+        """경로를 클립보드로 옮기는 작은 단추. **글자를 끌어서 못 고르기 때문이다.**
+
+        화면이 전부 라벨이라 마우스로 긁어 복사할 수가 없다. 링크는 탐색기를
+        열어 주지만, 경로 자체를 다른 곳에 붙여 넣고 싶을 때는 방법이 없었다.
+
+        열 수 없는 줄(어디인지 모르는 위치)에는 복사할 것도 없다 — 그럴 때는
+        빈 프레임을 돌려주어 자리만 지킨다(단추가 있다 없다 하면 줄이 흔들린다).
+        """
+        ttk = self.ttk
+        if not folder:
+            # **빈 프레임이지만 폭은 그대로 차지한다.** 자리를 안 지키면 복사할
+            # 것이 없는 줄에서 옆 단추들이 오른쪽으로 밀려 세로줄이 깨진다.
+            return ttk.Frame(parent, style="Card.TFrame", width=self._COPY_PIXELS)
+        return ttk.Button(parent, text="복사", style="Tiny.Ghost.TButton",
+                          width=self._COPY_CHARS,
+                          command=lambda p=folder: self._copy_path(p))
+
+    def _copy_path(self, folder: str) -> None:
+        """클립보드에 넣고 **넣었다고 알린다.**
+
+        복사는 눈에 보이는 변화가 하나도 없는 조작이다 — 알리지 않으면 눌린
+        것인지 알 방법이 없어 몇 번씩 다시 누르게 된다.
+        """
+        try:
+            self.window.clipboard_clear()
+            self.window.clipboard_append(folder)
+            self.window.update_idletasks()      # 창을 닫아도 남게 한다
+        except self.tk.TclError:
+            self.status_var.set("클립보드를 쓸 수 없습니다.")
+            return
+        self.status_var.set(f"복사했습니다: {_short(folder)}")
 
     def _open_folder(self, folder: str) -> None:
         """링크를 눌렀을 때. 못 열면 한국어로 알리고 **창은 살아 있다.**
@@ -2450,17 +2525,49 @@ def _tail(path: Path) -> str:
     return f"…{sep}{path.name}" if path.name else str(path)
 
 
+def text_width(text: str) -> int:
+    """화면에서 차지하는 **칸 수**. 글자 수가 아니다 — 한글·한자는 두 칸이다.
+
+    글자 수로 세면 한글 경로가 라틴 경로보다 두 배 넓게 그려져, 같은 값으로
+    접어도 한글 쪽만 칸 밖으로 밀려 끝이 잘린다(실측: '없는드라이브' 가
+    '없는드라(' 로 났다).
+    """
+    return sum(2 if ord(c) > 0x2E80 else 1 for c in text)
+
+
+def _앞에서(text: str, width: int) -> str:
+    """앞에서부터 `width` 칸만큼. **글자 가운데를 쪼개지 않는다.**"""
+    쓴폭, 끝 = 0, 0
+    for i, ch in enumerate(text):
+        칸 = 2 if ord(ch) > 0x2E80 else 1
+        if 쓴폭 + 칸 > width:
+            break
+        쓴폭, 끝 = 쓴폭 + 칸, i + 1
+    return text[:끝]
+
+
+def _뒤에서(text: str, width: int) -> str:
+    """뒤에서부터 `width` 칸만큼. 폴더 이름이 있는 쪽이라 여기를 남긴다."""
+    쓴폭, 앞 = 0, len(text)
+    for i in range(len(text) - 1, -1, -1):
+        칸 = 2 if ord(text[i]) > 0x2E80 else 1
+        if 쓴폭 + 칸 > width:
+            break
+        쓴폭, 앞 = 쓴폭 + 칸, i
+    return text[앞:]
+
+
 def _short(text_path: Path, limit: int = 56) -> str:
-    """긴 경로는 가운데를 접는다.
+    """긴 경로는 가운데를 접는다. `limit` 은 글자 수가 아니라 **칸 수**다.
 
     접지 않으면 라벨이 개수 칸까지 밀고 들어와 **숫자와 글자가 겹친다**
     (실측: 임시 폴더 경로에서 그렇게 됐다). 앞(드라이브·루트)과 끝(폴더 이름)은
     남긴다 — 사용자가 알아보는 두 조각이 그것이다.
     """
     text = str(text_path)
-    if len(text) <= limit:
+    if text_width(text) <= limit:
         return text
-    return f"{text[:14]}…{text[-(limit - 15):]}"
+    return f"{_앞에서(text, 14)}…{_뒤에서(text, limit - 15)}"
 
 
 def _문제인가(info) -> bool:
