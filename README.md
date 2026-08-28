@@ -56,7 +56,10 @@ python -m organize undo --root @desktop       방금 실행을 되돌린다
 
 ## 문서
 
-- 설계: [`docs/superpowers/specs/2026-08-19-organize-design.md`](docs/superpowers/specs/2026-08-19-organize-design.md)
+- 엔진 설계: [`docs/superpowers/specs/2026-08-19-organize-design.md`](docs/superpowers/specs/2026-08-19-organize-design.md)
+- GUI 설계: [`docs/superpowers/specs/2026-08-25-gui-design.md`](docs/superpowers/specs/2026-08-25-gui-design.md)
+- 보류 파일 무리 보기: [`docs/superpowers/specs/2026-08-28-보류-무리보기-design.md`](docs/superpowers/specs/2026-08-28-보류-무리보기-design.md)
+- 검증 시나리오: [`docs/superpowers/specs/2026-08-24-acceptance-scenarios.md`](docs/superpowers/specs/2026-08-24-acceptance-scenarios.md)
 - 이전 스크립트: [`legacy/`](legacy/) — **실행하지 말 것.** 옛 PC 경로가 하드코딩되어 있다
 
 ## 현재 상태
@@ -73,10 +76,9 @@ python -m organize undo --root @desktop       방금 실행을 되돌린다
 | 되돌리기(undo) | 됨 |
 | CLI · 레시피 | 됨 |
 | GUI (`organize gui`) | 됨 — 화면 셋(처음 실행 · 메인 · 폴더 위치 설정) |
+| 보류(중복 파일)를 무리로 묶어 보여주기 | 됨 — 아래 [보류 파일 다루기](#보류-파일-다루기) |
 | 등록한 위치로 **밖에 내보내기** | 됨 — 아래 [정리가 일어나는 범위](#정리가-일어나는-범위) |
 | **윈도우에서 실사용 검증** | **일부만** — 아래 참고 |
-
-작업은 `feat/organize-engine-cli` 브랜치에서 한다. `main` 은 아직 초기 상태다.
 
 만들어진 부분이 실제로 도는지는 이렇게 확인한다:
 
@@ -127,6 +129,19 @@ python3 -m pytest -q
 `--apply` 를 붙이지 않으면 **어떤 파일도 생성·이동·삭제하지 않는다.**
 치우는 것(`보류`)은 전부 `.organize/trash/` 로 **옮기는** 것이며, 지우지 않는다.
 `undo` 로 제자리에 되살릴 수 있다.
+
+### 보류 파일 다루기
+
+내용이 완전히 같은 파일(크기 · 전체 해시까지 비교)은 하나만 남고 나머지가 보류된다.
+GUI 미리보기의 「보류」 탭은 같은 무리끼리 묶어서, **남기는 파일**의 자리 · 수정일 ·
+크기를 무리 머리에 한 번만 보여준다. 파일 이름을 누르면 탐색기가 그 파일을 **선택한
+채로** 뜬다 — 열거나 실행하지 않는다(다운로드 폴더의 중복 설치 파일을 확인하려다
+실행되는 사고를 막기 위해서다).
+
+실행을 마친 뒤에는 결과 창에서 **그 실행이 보류시킨 파일만** 지울 수 있다
+(`.organize/trash/` 폴더 전체가 아니라 그 실행의 기록에 적힌 것만 — 같은 초에 실행한
+다른 작업의 보류 파일까지 지우지 않는다). 지운 뒤에도 **옮긴 파일은 여전히
+되돌릴 수 있다**. 이 지우기는 되돌릴 수 없고, CLI 명령은 없다 — GUI 전용이다.
 
 ### 정리가 일어나는 범위
 
