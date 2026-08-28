@@ -2682,18 +2682,22 @@ class App:
         win, 몸 = self._dialog("도움말")
         for i, (제목, 줄들) in enumerate(HELP_SECTIONS):
             ttk.Label(몸, text=제목, style="Lead.TLabel",
-                      ).pack(anchor="w", pady=(0 if not i else 12, 5))
+                      ).pack(anchor="w", pady=(0 if not i else 5, 2))
             판 = self._card(몸)
             판.pack(fill="x")
             for j, 줄 in enumerate(줄들):
                 # 줄바꿈 폭을 넓게 잡는다. 좁으면 한 항목이 세 줄로 접혀 창이
                 # 세로로 길어지고, 대화상자는 늘릴 수 없어 아래가 잘린다
                 # (실측: 520 일 때 813px, 780 일 때 화면에 들어온다).
+                # 여백을 줄였다. 새 도움말 항목이 늘어나면서 793px 가 되었는데,
+                # 여백을 조정해 712px 임계값 아래로 내린다. 줄바꿈 폭(780)은
+                # 유지한다 — 줄인다면 기존 항목들이 다시 접혀 더 길어질 수 있다.
+                # (실측: 줄여 전 848×793px, 첫 시도 후 848×731px).
                 tk.Label(판, text=f"· {줄}", bg=theme.SURFACE, fg=theme.TEXT,
                          font=theme.body_font(9), anchor="w", justify="left",
                          wraplength=780).pack(fill="x", padx=12,
-                                              pady=(8 if not j else 3,
-                                                    8 if j == len(줄들) - 1 else 0))
+                                              pady=(4 if not j else 1,
+                                                    3 if j == len(줄들) - 1 else 0))
 
         줄 = ttk.Frame(몸)
         줄.pack(fill="x", pady=(18, 0))
