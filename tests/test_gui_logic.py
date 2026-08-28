@@ -946,3 +946,21 @@ def test_첫_무리부터_한도를_넘으면_그것만은_그린다():
 
 def test_빈_목록이면_빈_결과():
     assert group_rows([], limit=200) == ([], 0)
+
+
+def test_도움말이_보류를_왜_비교하지_않아도_되는지_말한다():
+    """같은 무리는 바이트까지 같다 — 내용을 비교할 일이 없다.
+
+    이 말이 없으면 사용자는 "정말 같은가" 를 확인할 방법을 찾아 헤맨다.
+    """
+    도움말 = " ".join(줄 for _, 줄들 in HELP_SECTIONS for 줄 in 줄들)
+
+    assert "내용이 완전히 같" in 도움말
+    assert "어느 자리" in 도움말, "무엇을 판단하면 되는지까지"
+
+
+def test_도움말이_지우기를_설명한다():
+    도움말 = " ".join(줄 for _, 줄들 in HELP_SECTIONS for 줄 in 줄들)
+
+    assert "지우기" in 도움말
+    assert "되돌릴 수 없" in 도움말, "대가를 말해야 한다"
