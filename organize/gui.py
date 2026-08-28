@@ -319,6 +319,33 @@ HELP_SECTIONS: list[tuple[str, list[str]]] = [
 ]
 
 
+def group_rows(rows: list, limit: int) -> tuple[list[tuple[str, list]], int]:
+    """보류 줄을 **같은 파일끼리** 묶는다. (무리들, 못 그린 줄 수).
+
+    `keeper` 가 빈 줄들은 무리가 아니다 — 한 덩어리로 묶어 맨 뒤에 둔다.
+
+    **자르는 단위는 무리다.** 줄을 하나씩 세어 자르면 무리 중간에서 끊겨,
+    머리줄만 있고 파일이 없는 조각이 남는다. 다만 **첫 무리가 혼자 한도를
+    넘어도 그것만은 그린다** — 아무것도 안 그리면 표가 텅 비어 고장으로 보인다.
+    """
+    묶음: dict[str, list] = {}
+    for r in rows:
+        묶음.setdefault(getattr(r, "keeper", "") or "", []).append(r)
+    # keeper 경로의 사전순. 무리 아닌 줄("")은 맨 뒤로 보낸다.
+    차례 = sorted(묶음, key=lambda k: (k == "", k))
+
+    out: list[tuple[str, list]] = []
+    쓴줄, 남은줄 = 0, 0
+    for keeper in 차례:
+        무리 = 묶음[keeper]
+        if out and 쓴줄 + len(무리) > limit:
+            남은줄 += len(무리)
+            continue
+        out.append((keeper, 무리))
+        쓴줄 += len(무리)
+    return out, 남은줄
+
+
 def dest_text(dest: str, root) -> str:
     """표 오른쪽에 적을 도착 자리.
 

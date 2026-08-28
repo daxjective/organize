@@ -11,7 +11,7 @@ from pathlib import Path
 from organize import folders
 from organize.folders import FolderInfo
 from organize.gui import (arrange_steps, builtin_places, control_locks, custom_places,
-                          dest_text, foot_text, keeps_preview, kind_tabs,
+                          dest_text, foot_text, group_rows, keeps_preview, kind_tabs,
                           local_place_names, move_item, name_width, new_place_error,
                           openable, place_path_width,
                           KIND_LABEL, HELP_SECTIONS, why_disabled, recipe_display,
@@ -895,3 +895,54 @@ def test_글자_가운데를_쪼개지_않는다():
     for limit in range(16, 40):
         접힌것 = _short("/aaaa/가나다라마바사아자차카타파하/끝폴더", limit)
         assert text_width(접힌것) <= limit, f"limit={limit} 에서 넘쳤다"
+
+
+# ── 보류를 무리로 묶는다 ────────────────────────────────────────
+def _보류줄(name, keeper):
+    return Row(kind="보류", name=name, dest="", reason="", keeper=keeper)
+
+
+def test_같은_keeper_끼리_묶인다():
+    줄들 = [_보류줄("b.pdf", "/집/a.pdf"), _보류줄("x.jpg", "/집/w.jpg"),
+           _보류줄("c.pdf", "/집/a.pdf")]
+
+    무리들, 잘린것 = group_rows(줄들, limit=200)
+
+    assert 잘린것 == 0
+    assert [k for k, _ in 무리들] == ["/집/a.pdf", "/집/w.jpg"], "keeper 사전순"
+    assert [r.name for r in 무리들[0][1]] == ["b.pdf", "c.pdf"], "무리 안은 원래 순서"
+
+
+def test_keeper_가_없는_줄은_맨_뒤에_한_덩어리로():
+    줄들 = [_보류줄("혼자.pdf", ""), _보류줄("b.pdf", "/집/a.pdf")]
+
+    무리들, _ = group_rows(줄들, limit=200)
+
+    assert [k for k, _ in 무리들] == ["/집/a.pdf", ""]
+    assert [r.name for r in 무리들[-1][1]] == ["혼자.pdf"]
+
+
+def test_무리_중간에서_자르지_않는다():
+    """머리줄만 있고 파일이 없는 조각이 남으면 안 된다."""
+    줄들 = ([_보류줄(f"a{i}.pdf", "/집/A.pdf") for i in range(3)]
+           + [_보류줄(f"b{i}.pdf", "/집/B.pdf") for i in range(3)])
+
+    무리들, 잘린것 = group_rows(줄들, limit=4)
+
+    assert [k for k, _ in 무리들] == ["/집/A.pdf"], "두 번째 무리는 통째로 뺀다"
+    assert len(무리들[0][1]) == 3, "첫 무리는 통째로 들어간다"
+    assert 잘린것 == 3, "못 그린 줄 수를 사실대로 알린다"
+
+
+def test_첫_무리부터_한도를_넘으면_그것만은_그린다():
+    """아무것도 안 그리면 표가 비어 고장으로 보인다."""
+    줄들 = [_보류줄(f"a{i}.pdf", "/집/A.pdf") for i in range(10)]
+
+    무리들, 잘린것 = group_rows(줄들, limit=3)
+
+    assert len(무리들) == 1 and len(무리들[0][1]) == 10
+    assert 잘린것 == 0
+
+
+def test_빈_목록이면_빈_결과():
+    assert group_rows([], limit=200) == ([], 0)
