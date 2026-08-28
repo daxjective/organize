@@ -145,3 +145,44 @@ def test_when_is_checked_only_on_files_that_formed_a_duplicate_group(tmp_path,
     assert quarantined(plan) == ["사진 (1).png"]
     # 무리를 이룬 세 파일에만 물었다. 하위 폴더 사진 20개는 건드리지 않는다.
     assert sorted(seen) == ["메모.txt", "사진 (1).png", "사진.png"]
+
+
+def test_quarantine_carries_the_keeper_path(tmp_path):
+    """`reason` 글자를 파싱하지 않고도 남기는 파일을 알 수 있어야 한다.
+
+    이름만으로는 부족하다. 같은 이름이 여러 폴더에 있으면 어느 것인지 알 수
+    없고, 화면이 「어느 자리를 남길까」를 보여줄 수 없다.
+    """
+    write(tmp_path / "가이드.pdf", b"SAME-CONTENT")
+    write(tmp_path / "가이드 (1).pdf", b"SAME-CONTENT")
+
+    plan = build(ctx_for(tmp_path), BlockConfig())
+
+    보류 = [a for a in plan.actions if a.kind == "quarantine"]
+    assert 보류, "이 테스트는 보류가 하나는 나와야 의미가 있다"
+    for a in 보류:
+        assert a.keeper is not None and a.keeper.is_absolute()
+        assert a.keeper != a.src, "자기 자신을 남길 파일로 가리킬 수 없다"
+        assert a.keeper.name == "가이드.pdf", "복사본 표식이 없는 쪽이 남는다"
+
+
+def test_one_group_points_at_one_keeper(tmp_path):
+    for 이름 in ("가이드.pdf", "가이드 (1).pdf", "가이드 (2).pdf"):
+        write(tmp_path / 이름, b"SAME-CONTENT")
+
+    plan = build(ctx_for(tmp_path), BlockConfig())
+
+    보류 = [a for a in plan.actions if a.kind == "quarantine"]
+    assert len(보류) == 2, "셋 중 하나만 남는다"
+    assert len({a.keeper for a in 보류}) == 1, "한 무리는 keeper 가 하나다"
+
+
+def test_non_quarantine_actions_have_no_keeper(tmp_path):
+    write(tmp_path / "가이드.pdf", b"SAME-CONTENT")
+    write(tmp_path / "가이드 (1).pdf", b"SAME-CONTENT")
+
+    plan = build(ctx_for(tmp_path), BlockConfig())
+
+    for a in plan.actions:
+        if a.kind != "quarantine":
+            assert a.keeper is None

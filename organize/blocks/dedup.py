@@ -106,6 +106,7 @@ def build(ctx: Context, cfg: BlockConfig) -> Plan:
                 dst=ctx.trash_dir / ctx.claim_name(_TRASH_REL.format(run_id=ctx.run_id),
                                                    ctx.current_path(other).name),
                 reason=f"내용이 같음 · 남긴 파일 {ctx.current_path(keeper).name}",
+                keeper=ctx.current_path(keeper),
                 block=BLOCK,
             ))
     return plan

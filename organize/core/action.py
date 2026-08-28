@@ -38,6 +38,12 @@ class Action:
     # 보낸다 — 실제로 그렇게 됐다.
     size: int = 0
     mtime: float = 0.0
+    # quarantine 전용 — **남기기로 정한 파일**의 현재 절대경로. 화면이 무리를
+    # 묶고 「어느 자리를 남길까」를 보여주는 근거다.
+    #
+    # `reason` 글자("내용이 같음 · 남긴 파일 a.pdf")를 파싱하지 않는다 — 문구가
+    # 바뀌는 날 조용히 깨지고, 이름만으로는 어느 폴더인지도 알 수 없다.
+    keeper: Path | None = None
 
 
 @dataclass
