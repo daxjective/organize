@@ -1189,6 +1189,43 @@ def test_보류가_아닌_줄에는_무리_정보가_없다(repo, work):
         assert r.keeper == "", f"{r.kind} 줄에 keeper 가 붙었다"
 
 
+def test_file_facts는_keeper_없는_줄에서_불리지_않는다(repo, tmp_path, monkeypatch):
+    """file_facts 는 os.stat 을 한다 — move·mkdir 줄까지 매번 두 번씩 부르면
+    다운로드 폴더처럼 파일이 많을 때 미리보기가 그만큼 느려진다.
+
+    dedup(보류 1개) + route_kind(이동·폴더 생성 여러 줄) 를 같이 돌려서,
+    보류 아닌 줄이 실제로 있는 상황을 만든다.
+    """
+    import organize.gui_model as gui_model
+
+    불린것: list = []
+    원래 = gui_model.file_facts
+
+    def 세는것(path, root):
+        불린것.append(path)
+        return 원래(path, root)
+
+    monkeypatch.setattr(gui_model, "file_facts", 세는것)
+
+    작업 = tmp_path / "작업"
+    작업.mkdir()
+    old_file(작업 / "a.txt", b"SAME")
+    old_file(작업 / "b.txt", b"SAME")
+    old_file(작업 / "보고서.pdf", b"DOC")
+    s = Session(repo)
+    s.set_root(작업)
+    s.set_steps(["dedup", "route_kind"])
+
+    view = s.preview()
+
+    보류줄 = [r for r in view.rows if r.kind == _KIND_LABEL["quarantine"]]
+    다른줄 = [r for r in view.rows if r.kind != _KIND_LABEL["quarantine"]]
+    assert 보류줄, "이 테스트는 보류가 나와야 의미가 있다"
+    assert 다른줄, "move·mkdir 같은 다른 줄도 있어야 의미가 있다"
+    assert len(불린것) == len(보류줄) * 2, \
+        f"보류 아닌 줄({len(다른줄)}개)에서도 file_facts 가 불렸다: {len(불린것)}회"
+
+
 # ── 실행 뒤 보류한 것 지우기 ────────────────────────────────────
 def test_실행_결과가_보류_개수와_실행번호를_알려준다(repo, tmp_path):
     """[보류한 N개 지우기] 를 그리려면 이 둘이 있어야 한다."""

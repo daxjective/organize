@@ -11,9 +11,10 @@ from pathlib import Path
 from organize import folders
 from organize.folders import FolderInfo
 from organize.gui import (arrange_steps, builtin_places, control_locks, custom_places,
-                          dest_text, foot_text, group_rows, keeps_preview, kind_tabs,
+                          dest_text, foot_text, group_rows, keeper_link_path,
+                          keeps_preview, kind_tabs,
                           local_place_names, move_item, name_width, new_place_error,
-                          openable, place_path_width,
+                          openable, place_path_width, quarantine_reason,
                           KIND_LABEL, HELP_SECTIONS, why_disabled, recipe_display,
                           profile_folder_names, row_checks, toggle_file_key,
                           undo_label, undo_prompt, _raw_kind,
@@ -944,8 +945,85 @@ def test_첫_무리부터_한도를_넘으면_그것만은_그린다():
     assert 잘린것 == 0
 
 
+def test_잘린_뒤_더_작은_무리가_끼어들면_안_된다_3무리x3줄():
+    """`continue` 로 이 무리만 건너뛰면, 뒤에 오는 더 작은 무리가 슬쩍 들어간다.
+
+    A(3) B(3) C(3), limit=4 — A 를 넣으면 4 를 넘어 B 부터는 못 그린다.
+    옛 코드는 B(3+3=6>4) 를 건너뛰고도 계속 돌아 C 도 다시 검사했는데, 여기선
+    C 도 3+3=6>4 라 결국 안 들어갔지만 — **B 보다 작은 무리가 있었다면
+    옛 코드는 그걸 끼워 넣었다.** 여기서는 "멈췄다"는 사실 자체를 못박는다.
+    """
+    줄들 = ([_보류줄(f"a{i}.pdf", "/집/A.pdf") for i in range(3)]
+           + [_보류줄(f"b{i}.pdf", "/집/B.pdf") for i in range(3)]
+           + [_보류줄(f"c{i}.pdf", "/집/C.pdf") for i in range(3)])
+
+    무리들, 잘린것 = group_rows(줄들, limit=4)
+
+    assert [k for k, _ in 무리들] == ["/집/A.pdf"], "첫 무리만 그린다"
+    assert 잘린것 == 6, "잘린 두 무리(B·C) 의 줄 수를 전부 더해야 한다"
+
+
+def test_큰_무리_뒤에_작은_무리가_숨어들지_않는다_3_5_2_한도5():
+    """중간 무리가 한도를 넘긴 뒤, 그 뒤의 더 작은 무리가 몰래 들어가면 안 된다.
+
+    A(3) B(5) C(2), limit=5 — A 로 3줄, B 를 더하면 3+5=8>5 라 여기서 멈춰야
+    한다. 옛 코드는 B 를 건너뛰고 C(3+2=5, 한도 이내) 를 넣어 표에
+    "A, C" 가 남았다 — "여기서 잘렸습니다" 라 해 놓고 잘린 지점 뒤의 무리가
+    다시 나타나는 거짓말이었다.
+    """
+    줄들 = ([_보류줄(f"a{i}.pdf", "/집/A.pdf") for i in range(3)]
+           + [_보류줄(f"b{i}.pdf", "/집/B.pdf") for i in range(5)]
+           + [_보류줄(f"c{i}.pdf", "/집/C.pdf") for i in range(2)])
+
+    무리들, 잘린것 = group_rows(줄들, limit=5)
+
+    assert [k for k, _ in 무리들] == ["/집/A.pdf"], "B 뒤에 C 가 몰래 끼면 안 된다"
+    assert 잘린것 == 7, "B(5) + C(2) 를 전부 더해야 한다"
+
+
 def test_빈_목록이면_빈_결과():
     assert group_rows([], limit=200) == ([], 0)
+
+
+# ── 보류 사유 · 남기는 파일 링크 (fix wave) ────────────────────────
+def test_keeper_없는_보류줄은_사유를_보여준다():
+    """unzip 의 delete_original 처럼 keeper 가 없는 보류는 머리줄이 없다 —
+    왜 보류됐는지 알 방법이 이 사유뿐이다."""
+    row = Row(kind="보류", name="원본.zip", dest="",
+              reason="압축을 푼 원본 (3개 꺼냄)", keeper="")
+
+    assert quarantine_reason(row) == "압축을 푼 원본 (3개 꺼냄)"
+
+
+def test_keeper_있는_보류줄은_사유를_다시_보여주지_않는다():
+    """무리로 묶인 줄은 머리줄이 이미 이유(남기는 것)를 보여줬다 — 두 번 말하지 않는다."""
+    row = Row(kind="보류", name="b.pdf", dest="",
+              reason="내용이 같음 · 남긴 파일 a.pdf", keeper="/집/a.pdf")
+
+    assert quarantine_reason(row) == ""
+
+
+def test_사유가_비어_있으면_keeper_가_없어도_빈_글자():
+    row = Row(kind="보류", name="x", dest="", reason="", keeper="")
+
+    assert quarantine_reason(row) == ""
+
+
+def test_keeper_파일이_있으면_링크_경로를_그대로_돌려준다():
+    """file_facts 가 그 자리를 실제로 찾았을 때(keeper_when 이 있음)만 링크다."""
+    row = Row(kind="보류", name="b.pdf", dest="", reason="",
+              keeper="/집/a.pdf", keeper_when="2026-08-01")
+
+    assert keeper_link_path("/집/a.pdf", row) == "/집/a.pdf"
+
+
+def test_keeper_파일이_아직_없으면_빈_경로를_돌려준다():
+    """route 뒤로 dedup 순서를 옮기면 keeper 자리가 아직 없을 수 있다 —
+    그런 링크는 눌러도 매번 실패한다."""
+    row = Row(kind="보류", name="b.pdf", dest="", reason="",
+              keeper="/집/a.pdf", keeper_when="")
+
+    assert keeper_link_path("/집/a.pdf", row) == ""
 
 
 def test_도움말이_보류를_왜_비교하지_않아도_되는지_말한다():

@@ -342,14 +342,44 @@ def group_rows(rows: list, limit: int) -> tuple[list[tuple[str, list]], int]:
 
     out: list[tuple[str, list]] = []
     쓴줄, 남은줄 = 0, 0
-    for keeper in 차례:
+    for i, keeper in enumerate(차례):
         무리 = 묶음[keeper]
         if out and 쓴줄 + len(무리) > limit:
-            남은줄 += len(무리)
-            continue
+            # 여기서 멈춘다 — 예전엔 continue 로 이 무리만 건너뛰고 다음
+            # (더 작을 수 있는) 무리를 계속 채웠다. 그러면 "여기서 잘렸습니다"
+            # 라고 해 놓고 잘린 지점 뒤의 무리가 표에 다시 나타난다. 남은줄은
+            # 이 무리부터 끝까지 **전부**를 더한다 — 하나씩 세며 넘어가지
+            # 않았으니 낱개로 이어 셀 수 없다.
+            남은줄 = sum(len(묶음[k]) for k in 차례[i:])
+            break
         out.append((keeper, 무리))
         쓴줄 += len(무리)
     return out, 남은줄
+
+
+def quarantine_reason(row) -> str:
+    """`_quarantine_row` 가 사유 글자를 보여줄지 정한다. 안 보여주면 빈 글자.
+
+    `keeper` 가 있는 줄(무리에 묶인 줄)은 머리줄(`_group_head`)이 이미
+    「남기는 것」으로 이유를 보여준다 — 여기서 또 적으면 같은 말이 두 번
+    나온다. `keeper` 가 없는 보류는(예: unzip 의 delete_original 이 압축을
+    푼 원본을 치우는 줄) 머리줄이 없으므로, 왜 보류됐는지 알 방법이 이
+    사유 글자뿐이다.
+    """
+    return row.reason if not row.keeper and row.reason else ""
+
+
+def keeper_link_path(keeper: str, row) -> str:
+    """`_group_head` 가 남기는 파일 이름을 **누를 수 있게** 그릴지 정한다.
+
+    `keeper` 는 아직 존재하지 않을 수 있는 **계획상** 경로다 — dedup 이 지금
+    생각하는 자리일 뿐, ▲▼ 로 순서를 바꿔 route 가 dedup 뒤에 돌면 그 폴더는
+    아직 없다. `row.keeper_when` 은 `file_facts` 가 `os.stat` 으로 그 자리를
+    실제로 찾았을 때만 채워진다(못 찾으면 세 값 다 빈 글자 — `file_facts`
+    참고) — 그때만 진짜 경로를 건넨다. 못 찾았으면 빈 글자를 돌려줘
+    `_file_link` 가 눌러도 매번 실패하는 링크 대신 평범한 글자를 그리게 한다.
+    """
+    return keeper if row.keeper_when else ""
 
 
 def dest_text(dest: str, root) -> str:
@@ -2114,8 +2144,10 @@ class App:
         # 남기는 파일의 **이름이 링크**다. 단추를 줄마다 두면 무리 10개에
         # 60개가 되고, 이 표는 이미 "줄마다 위젯 서넛이면 창이 멈춘다" 를
         # 실측한 자리다(_MAX_ROWS 가 있는 이유).
-        self._file_link(아래, Path(keeper).name, keeper, bg=theme.SUNKEN,
-                        ).pack(side="left", padx=(12, 0))
+        # keeper 는 아직 없을 수도 있는 계획상 경로라, file_facts 가 실제로
+        # 찾았을 때만(keeper_link_path) 누를 수 있는 링크로 그린다.
+        self._file_link(아래, Path(keeper).name, keeper_link_path(keeper, row),
+                        bg=theme.SUNKEN).pack(side="left", padx=(12, 0))
 
     def _quarantine_row(self, row, 켜짐, index: int) -> None:
         """무리에 딸린 보류 파일 한 줄. 이름이 링크다."""
@@ -2132,6 +2164,13 @@ class App:
                            command=lambda k=row.key, v=var: self._on_file_check(k, v.get()),
                            ).pack(side="left")
         self._file_link(줄, row.name, row.key, bg=bg).pack(side="left")
+        # keeper 가 없는 줄(무리 아닌 보류)은 머리줄이 없어 왜 보류됐는지
+        # 알 방법이 이 사유뿐이다 — 무리에 묶인 줄은 머리줄이 이미 말했으니
+        # 여기서 또 적지 않는다(quarantine_reason 이 그 구분을 가른다).
+        사유 = quarantine_reason(row)
+        if 사유:
+            tk.Label(줄, text=사유, bg=bg, fg=theme.FAINT, font=theme.body_font(8),
+                     anchor="w").pack(side="left", padx=(10, 0))
         tk.Label(줄, text=row.when, bg=bg, fg=theme.MUTED,
                  font=theme.mono_font(9)).pack(side="right", padx=(8, 12))
         tk.Label(줄, text=row.at, bg=bg, fg=theme.FAINT,

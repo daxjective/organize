@@ -580,10 +580,15 @@ class Session:
                         if a.kind != "mkdir":
                             나가는것[base] = 나가는것.get(base, 0) + 1
                         break
-            # 보류 줄만 무리 정보를 싣는다. 다른 kind 는 keeper 가 None 이라
-            # 아래 file_facts 가 전부 빈 값을 돌려준다.
-            k_at, k_when, k_size = file_facts(a.keeper, built.root)
-            내_at, 내_when, _ = file_facts(a.src, built.root)
+            # 보류 줄만 무리 정보를 싣는다. `a.keeper` 가 None 이면(quarantine
+            # 이 아니거나, unzip 의 delete_original 처럼 keeper 없는 보류)
+            # file_facts 를 아예 안 부른다 — file_facts 는 os.stat 을 한다.
+            # move·mkdir·extract 줄까지 매번 두 번씩 디스크를 읽을 이유가 없다.
+            if a.keeper is not None:
+                k_at, k_when, k_size = file_facts(a.keeper, built.root)
+                내_at, 내_when, _ = file_facts(a.src, built.root)
+            else:
+                k_at = k_when = k_size = 내_at = 내_when = ""
             rows.append(Row(
                 kind=_KIND_LABEL.get(a.kind, a.kind),
                 # 폴더 생성에는 **원본 파일이 없다**(`src=None`). 그대로 두면 이름
