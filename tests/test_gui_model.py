@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from organize import catalog
+from organize.core.action import KIND_LABEL as _KIND_LABEL
 from organize.errors import OrganizeError
 from organize.gui_model import Session, landing_folders
 from organize.recipes import load_recipe
@@ -1119,3 +1120,70 @@ def test_없는_조합을_지우려_하면_한국어로_알린다(repo):
 
     with pytest.raises(OrganizeError):
         s.delete_recipe("없는것")
+
+
+# ── 보류 줄이 무리 정보를 싣는다 ────────────────────────────────
+from organize.gui_model import file_facts          # noqa: E402
+
+
+def test_file_facts_정리할_폴더_기준으로_적는다(tmp_path):
+    (tmp_path / "백업").mkdir()
+    파일 = old_file(tmp_path / "백업" / "보고서.pdf", b"X" * 2048)
+
+    위치, 수정일, 크기 = file_facts(파일, tmp_path)
+
+    assert 위치 == "백업"
+    assert len(수정일) == 10 and 수정일[4] == "-", f"YYYY-MM-DD 여야 한다: {수정일}"
+    assert 크기 == "2.0KB"
+
+
+def test_file_facts_최상단이면_그렇게_적는다(tmp_path):
+    파일 = old_file(tmp_path / "보고서.pdf", b"X")
+
+    위치, _, _ = file_facts(파일, tmp_path)
+
+    assert 위치 == "(최상단)"
+
+
+def test_file_facts_정리할_폴더_밖이면_전체_경로(tmp_path):
+    밖 = tmp_path.parent / "밖에있는것"
+    밖.mkdir(exist_ok=True)
+    파일 = old_file(밖 / "보고서.pdf", b"X")
+
+    위치, _, _ = file_facts(파일, tmp_path)
+
+    assert 위치 == str(밖)
+
+
+def test_file_facts_못_읽으면_빈_값이고_죽지_않는다(tmp_path):
+    assert file_facts(tmp_path / "없는것.pdf", tmp_path) == ("", "", "")
+    assert file_facts(None, tmp_path) == ("", "", "")
+
+
+def test_보류_줄이_남기는_파일을_싣는다(repo, tmp_path):
+    """표가 무리를 묶으려면 줄마다 keeper 가 있어야 한다."""
+    작업 = tmp_path / "작업"
+    작업.mkdir()
+    old_file(작업 / "a.txt", b"SAME")
+    old_file(작업 / "b.txt", b"SAME")
+    s = Session(repo)
+    s.set_root(작업)
+    s.set_steps(["dedup"])
+
+    보류 = [r for r in s.preview().rows if r.kind == _KIND_LABEL["quarantine"]]
+
+    assert 보류, "이 테스트는 보류가 나와야 의미가 있다"
+    for r in 보류:
+        assert r.keeper, "남기는 파일의 경로"
+        assert r.keeper_at == "(최상단)"
+        assert r.keeper_when and r.keeper_size
+        assert r.at == "(최상단)" and r.when
+
+
+def test_보류가_아닌_줄에는_무리_정보가_없다(repo, work):
+    s = Session(repo)
+    s.set_root(work)
+    s.set_steps(["route_kind"])
+
+    for r in s.preview().rows:
+        assert r.keeper == "", f"{r.kind} 줄에 keeper 가 붙었다"

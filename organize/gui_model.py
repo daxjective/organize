@@ -41,6 +41,15 @@ class Row:
     # 묶는 열쇠다 — 한 파일이 두 번 옮겨지면 줄이 둘인데 체크박스는 하나여야
     # 한다. 폴더 생성처럼 어느 파일 것도 아닌 줄은 빈 문자열.
     key: str = ""
+    # ── 보류 줄만 채우는 무리 정보 ──────────────────────────────
+    # 표가 "같은 파일 5개" 로 묶고 「어느 자리를 남길까」를 보여주는 근거다.
+    # 빈 글자면 무리가 아니다(무리 아닌 보류도 있을 수 있다).
+    keeper: str = ""          # 남기는 파일의 절대경로 — 이것으로 묶는다
+    keeper_at: str = ""       # 남기는 파일의 위치
+    keeper_when: str = ""     # 남기는 파일의 수정일
+    keeper_size: str = ""     # 남기는 파일의 크기
+    at: str = ""              # 이 줄 파일의 위치
+    when: str = ""            # 이 줄 파일의 수정일
 
 
 @dataclass
@@ -129,6 +138,43 @@ def _어디라고_적을까(folder: Path, root: Path) -> str:
         return str(folder.relative_to(root)) or "(정리 대상 폴더 바로 밑)"
     except ValueError:
         return str(folder)
+
+
+def file_facts(path: Path | None, root: Path) -> tuple[str, str, str]:
+    """(위치, 수정일, 크기). 못 읽으면 전부 빈 글자다.
+
+    **여기서 디스크를 읽는다.** `Action` 에 수정일·크기를 싣지 않기 때문이다 —
+    `Action` 은 미리보기와 실행이 공유하는 계약이지 화면 표시용 자루가 아니다.
+    부르는 자리가 미리보기 스레드 안이라 창이 멈추지 않는다.
+
+    파일이 이미 없어도 **죽지 않는다.** 두 미리보기 사이에 사용자가 탐색기에서
+    지웠을 수 있고, 그건 정상적인 일이다. 줄은 그대로 그리고 이 칸만 비운다.
+    """
+    if path is None:
+        return "", "", ""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return "", "", ""
+    위치 = _어디라고_적을까(Path(path).parent, root)
+    # **`.` 도 받는다.** `_어디라고_적을까` 는 `str(폴더.relative_to(root)) or …`
+    # 인데, root 자신이면 `relative_to` 가 `Path('.')` 를 주고 `str()` 이 `'.'`
+    # 이라 truthy 다 — `or` 뒤 문구는 **절대 걸리지 않는다**(실측). 그 함수는
+    # 실행 결과 목록이 같이 쓰므로 거기서 고치지 않고, 이 자리에서 받아 낸다.
+    if 위치 in (".", "(정리 대상 폴더 바로 밑)"):
+        위치 = "(최상단)"          # 표에서는 짧아야 한다 — 줄마다 나오는 말이다
+    when = datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d")
+    return 위치, when, human_size(st.st_size)
+
+
+def human_size(n: int) -> str:
+    """사람이 읽는 크기. 바이트 수를 그대로 보여주면 큰지 작은지 안 읽힌다."""
+    칸 = float(n)
+    for 단위 in ("B", "KB", "MB", "GB"):
+        if 칸 < 1024 or 단위 == "GB":
+            return f"{int(칸)}{단위}" if 단위 == "B" else f"{칸:.1f}{단위}"
+        칸 /= 1024
+    return f"{칸:.1f}GB"
 
 
 def _공통폴더(paths: list[Path]) -> str:
@@ -529,6 +575,10 @@ class Session:
                         if a.kind != "mkdir":
                             나가는것[base] = 나가는것.get(base, 0) + 1
                         break
+            # 보류 줄만 무리 정보를 싣는다. 다른 kind 는 keeper 가 None 이라
+            # 아래 file_facts 가 전부 빈 값을 돌려준다.
+            k_at, k_when, k_size = file_facts(a.keeper, built.root)
+            내_at, 내_when, _ = file_facts(a.src, built.root)
             rows.append(Row(
                 kind=_KIND_LABEL.get(a.kind, a.kind),
                 # 폴더 생성에는 **원본 파일이 없다**(`src=None`). 그대로 두면 이름
@@ -539,7 +589,10 @@ class Session:
                 dest=str(a.dst) if a.dst else "",
                 reason=a.reason,
                 leaving=leaving,
-                key=str(origin) if origin is not None else ""))
+                key=str(origin) if origin is not None else "",
+                keeper=str(a.keeper) if a.keeper else "",
+                keeper_at=k_at, keeper_when=k_when, keeper_size=k_size,
+                at=내_at, when=내_when))
 
         warnings = [
             f"이 정리는 파일 {n}개를 정리 대상 폴더 밖으로 내보냅니다 → {base}"
