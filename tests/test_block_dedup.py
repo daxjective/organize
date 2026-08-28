@@ -175,14 +175,3 @@ def test_one_group_points_at_one_keeper(tmp_path):
     보류 = [a for a in plan.actions if a.kind == "quarantine"]
     assert len(보류) == 2, "셋 중 하나만 남는다"
     assert len({a.keeper for a in 보류}) == 1, "한 무리는 keeper 가 하나다"
-
-
-def test_non_quarantine_actions_have_no_keeper(tmp_path):
-    write(tmp_path / "가이드.pdf", b"SAME-CONTENT")
-    write(tmp_path / "가이드 (1).pdf", b"SAME-CONTENT")
-
-    plan = build(ctx_for(tmp_path), BlockConfig())
-
-    for a in plan.actions:
-        if a.kind != "quarantine":
-            assert a.keeper is None

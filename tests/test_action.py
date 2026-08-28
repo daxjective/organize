@@ -46,3 +46,15 @@ def test_extract_action_carries_the_member_name():
     a = Action(kind="extract", src=Path("자료.zip"), dst=Path("문서.pdf"),
                reason="자료.zip 에서 꺼냄", block="unzip", member="안쪽폴더/문서.pdf")
     assert a.member == "안쪽폴더/문서.pdf"
+
+
+def test_keeper_defaults_to_none():
+    """`keeper` 는 quarantine 전용이다. 다른 kind 는 아무것도 가리키지 않는다.
+
+    기본값이 있어야 `dedup` 말고 다른 블록들이 이 인자를 몰라도 된다 —
+    실제로 route·by_date·unzip 은 이 필드를 넘기지 않는다.
+    """
+    a = Action(kind="mkdir", src=None, dst=Path("/어딘가/새폴더"),
+               reason="분류 결과를 담을 폴더", block="route")
+
+    assert a.keeper is None
