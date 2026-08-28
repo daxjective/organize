@@ -1855,9 +1855,41 @@ class App:
         줄.pack(fill="x", pady=(18, 0))
         확인 = ttk.Button(줄, text="확인", style="Primary.TButton", command=win.destroy)
         확인.pack(side="right")
+        # 보류가 있을 때만. 없는데 그리면 지울 것도 없는 단추가 보인다.
+        if result.quarantined and result.run_id:
+            ttk.Button(줄, text=f"보류한 {result.quarantined}개 지우기",
+                       style="Ghost.TButton",
+                       command=lambda: self._purge_quarantine(win, result),
+                       ).pack(side="left")
         win.bind("<Return>", lambda _e: win.destroy())
         win.bind("<Escape>", lambda _e: win.destroy())
         self._show_dialog(win, 확인)
+
+    def _purge_quarantine(self, win, result) -> None:
+        """[보류한 N개 지우기] — **되돌릴 수 없다고 먼저 말한다.**
+
+        이 도구는 파일을 지우지 않기 때문에 되돌릴 수 있다. 여기만 예외라서,
+        누르는 사람이 그 대가를 알고 눌러야 한다.
+        """
+        if not self._confirm(
+                "보류한 파일 지우기",
+                f"보류한 {result.quarantined}개를 완전히 지웁니다.\n\n"
+                "되돌릴 수 없고, 이 실행의 [되돌리기] 로도 되살릴 수 없습니다.\n"
+                "옮긴 파일은 그대로 되돌릴 수 있습니다."):
+            self.status_var.set("지우지 않았습니다.")
+            return
+        # `_reporting` 은 안에서 터진 예외를 삼키고 계속 진행한다(창이 죽지
+        # 않게). 그래서 `out` 을 미리 비워 둔다 — 안 비워 두면 지우다 터졌을 때
+        # 아래 `out.messages` 가 존재하지도 않는 이름을 참조해 다시 한 번 터진다.
+        out = None
+        with self._reporting("보류한 파일 지우기"):
+            out = self.session.purge_quarantine(result.run_id)
+            self.status_var.set(
+                f"보류한 파일 {out.removed}개를 지웠습니다."
+                + (f"  못 지운 것 {out.failed}개." if out.failed else ""))
+        win.destroy()          # 결과 창의 숫자가 이미 옛말이 됐다
+        if out and out.messages:
+            self._show_messages("지우지 못한 것", out.messages)
 
     def _undo_done(self, result) -> None:
         self.view = None

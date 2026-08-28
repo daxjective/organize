@@ -21,6 +21,7 @@ from organize.aliases import BUILTIN
 from organize.core.action import KIND_LABEL as _KIND_LABEL
 from organize.core.executor import execute, prepare_runlog, write_runlog
 from organize.core.runner import BuiltPlan, build_plan, external_names, make_run_id
+from organize.core.purge import purge_run
 from organize.core.undo import latest_run_id, undo as undo_run
 from organize.errors import OrganizeError
 from organize.recipes import (Recipe, find_recipe, list_recipes, load_recipe,
@@ -201,6 +202,10 @@ class ApplyResult:
     # 눌러서 열 수 있는 목록으로 그린다. 숫자만으로는 "잘 됐나" 를 확인할
     # 방법이 없어서, **확인하러 갈 곳**을 같이 준다.
     landed: list[tuple[str, int, str]] = field(default_factory=list)
+    # 실행 뒤 [보류한 N개 지우기] 를 그리는 근거. 창이 이 둘 없이는 그 단추를
+    # 그릴 수도, 무엇을 지울지 정할 수도 없다.
+    run_id: str = ""
+    quarantined: int = 0
 
 
 @dataclass
@@ -633,9 +638,12 @@ class Session:
             moved=sum(1 for r in result.done if r.get("kind") != "mkdir"),
             folders=sum(1 for r in result.done if r.get("kind") == "mkdir"),
             failed=len(result.failed), skipped=len(result.stale),
+            quarantined=sum(1 for r in result.done
+                            if r.get("kind") == "quarantine"),
             landed=landing_folders(result.done, root))
         try:
             out.log_path = write_runlog(built, result)
+            out.run_id = out.log_path.stem      # 지울 때 어느 실행인지 알아야 한다
         except OrganizeError as e:
             # 기록을 못 남겼어도 무엇을 옮겼는지는 화면에 남긴다 — 사람이
             # 손으로 되돌릴 수 있는 유일한 근거다.
@@ -648,6 +656,19 @@ class Session:
         self._applied_root = root
         self._invalidate()          # 실행했으면 그 미리보기는 이미 쓴 것이다
         return out
+
+    def purge_quarantine(self, run_id: str):
+        """그 실행이 보류시킨 파일을 지운다. **되돌릴 수 없다.**
+
+        묻는 일은 창이 한다 — 여기는 묻지 않는다. 되돌리기를 끄지도 않는다:
+        옮긴 파일은 여전히 되돌아가고, 보류만 못 되살아난다.
+        """
+        root = self._root or self._applied_root
+        if root is None:
+            raise OrganizeError(
+                "어느 폴더의 보류를 지울지 알 수 없습니다.",
+                hint="[정리할 폴더] 를 고른 뒤에 다시 눌러 주세요.")
+        return purge_run(root, run_id)
 
     # ── 되돌리기 ─────────────────────────────────────────────────
     def undo(self) -> UndoResult:

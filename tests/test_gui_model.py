@@ -1187,3 +1187,88 @@ def test_보류가_아닌_줄에는_무리_정보가_없다(repo, work):
 
     for r in s.preview().rows:
         assert r.keeper == "", f"{r.kind} 줄에 keeper 가 붙었다"
+
+
+# ── 실행 뒤 보류한 것 지우기 ────────────────────────────────────
+def test_실행_결과가_보류_개수와_실행번호를_알려준다(repo, tmp_path):
+    """[보류한 N개 지우기] 를 그리려면 이 둘이 있어야 한다."""
+    작업 = tmp_path / "작업"
+    작업.mkdir()
+    old_file(작업 / "a.txt", b"SAME")
+    old_file(작업 / "b.txt", b"SAME")
+    s = Session(repo)
+    s.set_root(작업)
+    s.set_steps(["dedup"])
+    s.preview()
+
+    out = s.apply()
+
+    assert out.quarantined == 1
+    assert out.run_id and out.run_id == out.log_path.stem
+
+
+def test_보류가_없으면_개수가_0(repo, work):
+    s = Session(repo)
+    s.set_root(work)
+    s.set_steps(["route_kind"])
+    s.preview()
+
+    out = s.apply()
+
+    assert out.quarantined == 0
+
+
+def test_purge_quarantine_이_보류한_것을_지운다(repo, tmp_path):
+    작업 = tmp_path / "작업"
+    작업.mkdir()
+    old_file(작업 / "a.txt", b"SAME")
+    old_file(작업 / "b.txt", b"SAME")
+    s = Session(repo)
+    s.set_root(작업)
+    s.set_steps(["dedup"])
+    s.preview()
+    out = s.apply()
+
+    지운것 = s.purge_quarantine(out.run_id)
+
+    assert 지운것.removed == 1
+    trash = 작업 / ".organize" / "trash"
+    남은것 = list(trash.rglob("*.txt")) if trash.is_dir() else []
+    assert 남은것 == [], f"보류 폴더에 파일이 남았다: {남은것}"
+
+
+def test_지운_뒤에도_되돌리기는_켜져_있다(repo, tmp_path):
+    """옮긴 것은 여전히 되돌아간다. 보류만 못 되살아난다."""
+    작업 = tmp_path / "작업"
+    작업.mkdir()
+    old_file(작업 / "a.txt", b"SAME")
+    old_file(작업 / "b.txt", b"SAME")
+    s = Session(repo)
+    s.set_root(작업)
+    s.set_steps(["dedup"])
+    s.preview()
+    out = s.apply()
+
+    s.purge_quarantine(out.run_id)
+
+    assert s.can_undo is True
+
+
+def test_지운_뒤_되돌려도_죽지_않는다(repo, tmp_path):
+    """보류 파일은 못 되살아나지만 되돌리기 자체가 터지면 안 된다."""
+    작업 = tmp_path / "작업"
+    작업.mkdir()
+    old_file(작업 / "a.txt", b"SAME")
+    old_file(작업 / "b.txt", b"SAME")
+    old_file(작업 / "보고서.pdf", b"DOC")
+    s = Session(repo)
+    s.set_root(작업)
+    s.set_steps(["dedup", "route_kind"])
+    s.preview()
+    out = s.apply()
+    s.purge_quarantine(out.run_id)
+
+    되돌림 = s.undo()
+
+    assert 되돌림.restored >= 1, "옮긴 것은 되돌아간다"
+    assert (작업 / "보고서.pdf").is_file()
