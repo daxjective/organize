@@ -186,6 +186,13 @@ def apply_theme(window) -> None:
     style.map("Help.TButton",
               background=[("active", SUNKEN), ("pressed", SUNKEN)])
 
+    # 보류 무리의 머리줄. 밑에 딸린 파일들과 **다른 층**으로 보여야 묶임이
+    # 읽힌다 — 같은 톤이면 그냥 줄 하나가 더 있는 것으로 보인다.
+    style.configure("GroupHead.TLabel", background=SUNKEN, foreground=TEXT,
+                    font=body_font(10, weight="bold"))
+    style.configure("GroupFact.TLabel", background=SUNKEN, foreground=MUTED,
+                    font=mono_font(9))
+
     # 도는 중임을 알리는 막대. **상태줄 글자만으로는 부족하다** — 눈은 방금
     # 누른 버튼에 가 있는데 안내는 창 맨 아래에 있어서, "눌러도 아무 반응이
     # 없다" 로 읽힌다. 색은 강조색(하늘빛) 그대로 쓴다.

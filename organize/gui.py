@@ -1957,19 +1957,43 @@ class App:
 
         보일줄 = [r for r in view.rows if _raw_kind(r.kind) == self.tab_kind]
         상태 = row_checks(보일줄, self.session.excluded_keys())
-        for i, (row, 켜짐) in enumerate(zip(보일줄[:_MAX_ROWS], 상태[:_MAX_ROWS])):
-            self._file_row(row.name, dest_text(row.dest, self.session.root),
-                           row.reason, 켜짐, row.key, row.leaving, i)
+        if self.tab_kind == "quarantine":
+            가린줄 = self._draw_groups(보일줄, 상태)
+        else:
+            for i, (row, 켜짐) in enumerate(zip(보일줄[:_MAX_ROWS], 상태[:_MAX_ROWS])):
+                self._file_row(row.name, dest_text(row.dest, self.session.root),
+                               row.reason, 켜짐, row.key, row.leaving, i)
+            가린줄 = max(0, len(보일줄) - _MAX_ROWS)
         # 여기서 잘렸다는 **표시**만 남긴다. 이유를 적은 문장은 아래 줄(foot)에
         # 둔다 — 250줄이면 이 줄은 4233px 중 맨 아래라 200줄을 내려야 보인다.
-        가린줄 = max(0, len(보일줄) - _MAX_ROWS)
         if 가린줄:
             tk.Label(self.table_inner,
                      text=f"… 여기서 잘렸습니다 — 이 탭의 나머지 {가린줄}줄.",
                      bg=theme.SURFACE, fg=theme.MUTED, font=theme.body_font(9),
                      anchor="w").pack(fill="x", padx=14, pady=(6, 8))
 
-        self.foot.config(text=foot_text(view.counts, view.skipped, 가린줄))
+        말 = foot_text(view.counts, view.skipped, 가린줄)
+        if self.tab_kind == "quarantine" and view.counts.get("quarantine"):
+            말 += "\n보류한 파일은 전부 .organize/trash 로 갑니다. 지우지 않습니다."
+        self.foot.config(text=말)
+
+    def _draw_groups(self, 보일줄: list, 상태: list) -> int:
+        """보류 탭 — 무리로 묶어 그린다. 못 그린 줄 수를 돌려준다.
+
+        도착 경로 칸을 그리지 않는다. 보류는 **전부 같은 폴더**로 가므로
+        줄마다 반복하면 오른쪽 절반을 먹으면서 아무것도 알려주지 않는다.
+        그 말은 표 아래 한 줄(`foot`)에 둔다.
+        """
+        켜짐표 = {id(r): 켬 for r, 켬 in zip(보일줄, 상태)}
+        무리들, 가린줄 = group_rows(보일줄, _MAX_ROWS)
+        i = 0
+        for keeper, 줄들 in 무리들:
+            if keeper:
+                self._group_head(keeper, 줄들[0], len(줄들) + 1)
+            for row in 줄들:
+                self._quarantine_row(row, 켜짐표.get(id(row)), i)
+                i += 1
+        return 가린줄
 
     def _tab(self, kind: str, text: str):
         """탭 하나. 누르면 그 종류만 표에 남는다(계획을 다시 세우지는 않는다)."""
@@ -2027,6 +2051,68 @@ class App:
         if reason:
             tk.Label(줄, text=reason, bg=bg, fg=theme.FAINT, font=theme.body_font(8),
                      anchor="w").pack(side="left", padx=(10, 0))
+
+    def _group_head(self, keeper: str, row, 개수: int) -> None:
+        """무리 머리줄 — 「같은 파일 N개 / 남기는 것: …」.
+
+        같은 무리의 파일들은 **바이트 하나까지 같다**(전체 해시로 걸렀다).
+        그래서 여기서 보여줄 것은 내용이 아니라 **어느 자리, 어느 이름을
+        남기는가** 다 — 위치·수정일·크기가 판단 근거다.
+        """
+        tk, ttk = self.tk, self.ttk
+        머리 = tk.Frame(self.table_inner, bg=theme.SUNKEN)
+        머리.pack(fill="x", pady=(10, 0))
+        ttk.Label(머리, text=f"같은 파일 {개수}개", style="GroupHead.TLabel",
+                  ).pack(side="left", padx=(12, 0), pady=(6, 0))
+        ttk.Label(머리, text="남기는 것", style="GroupFact.TLabel",
+                  ).pack(side="left", padx=(16, 0), pady=(6, 0))
+
+        아래 = tk.Frame(self.table_inner, bg=theme.SUNKEN)
+        아래.pack(fill="x", pady=(0, 6))
+        사실 = "  ".join(x for x in (row.keeper_at, row.keeper_when,
+                                    row.keeper_size) if x)
+        ttk.Label(아래, text=사실, style="GroupFact.TLabel",
+                  ).pack(side="right", padx=(8, 12))
+        # 남기는 파일의 **이름이 링크**다. 단추를 줄마다 두면 무리 10개에
+        # 60개가 되고, 이 표는 이미 "줄마다 위젯 서넛이면 창이 멈춘다" 를
+        # 실측한 자리다(_MAX_ROWS 가 있는 이유).
+        self._file_link(아래, Path(keeper).name, keeper, bg=theme.SUNKEN,
+                        ).pack(side="left", padx=(12, 0))
+
+    def _quarantine_row(self, row, 켜짐, index: int) -> None:
+        """무리에 딸린 보류 파일 한 줄. 이름이 링크다."""
+        tk = self.tk
+        bg = theme.SURFACE if index % 2 == 0 else theme.SURFACE_ALT
+        줄 = tk.Frame(self.table_inner, bg=bg)
+        줄.pack(fill="x")
+        if 켜짐 is None:
+            tk.Label(줄, text=" ", bg=bg, width=3).pack(side="left")
+        else:
+            var = tk.BooleanVar(value=켜짐)
+            tk.Checkbutton(줄, variable=var, bg=bg, activebackground=bg,
+                           selectcolor=bg, highlightthickness=0, bd=0, takefocus=0,
+                           command=lambda k=row.key, v=var: self._on_file_check(k, v.get()),
+                           ).pack(side="left")
+        self._file_link(줄, row.name, row.key, bg=bg).pack(side="left")
+        tk.Label(줄, text=row.when, bg=bg, fg=theme.MUTED,
+                 font=theme.mono_font(9)).pack(side="right", padx=(8, 12))
+        tk.Label(줄, text=row.at, bg=bg, fg=theme.FAINT,
+                 font=theme.body_font(9)).pack(side="right", padx=(8, 0))
+
+    def _file_link(self, parent, text: str, path: str, *, bg: str):
+        """파일 이름 하나. 누르면 탐색기가 그 파일을 가리킨다.
+
+        `_path_link` 와 규칙이 같다 — 열 수 없으면 링크로 그리지 않는다.
+        눌러도 아무 일이 없는 링크는 "안 열리네" 가 아니라 "고장났네" 로 읽힌다.
+        """
+        tk = self.tk
+        if not path:
+            return tk.Label(parent, text=text, bg=bg, fg=theme.TEXT,
+                            font=theme.body_font(), anchor="w")
+        lab = tk.Label(parent, text=text, bg=bg, fg=theme.ACCENT,
+                       font=theme.link_font(10), anchor="w", cursor="hand2")
+        lab.bind("<Button-1>", lambda _e, p=path: self._reveal_file(p))
+        return lab
 
     def _draw_excluded(self) -> None:
         """뺀 파일을 표 **맨 위에** 남긴다. 사라지면 다시 켤 방법이 없다.
@@ -2416,6 +2502,12 @@ class App:
         with self._reporting("폴더 열기"):
             picker.open_folder(Path(folder))
             self.status_var.set(f"탐색기에서 열었습니다 — {_short(Path(folder))}")
+
+    def _reveal_file(self, path: str) -> None:
+        """탐색기를 열어 그 파일을 가리킨다. **파일을 실행하지 않는다.**"""
+        with self._reporting("파일 위치 열기"):
+            picker.reveal_file(Path(path))
+            self.status_var.set(f"탐색기에서 열었습니다: {_short(path)}")
 
     def _card(self, parent):
         """판 하나. 얇은 테두리를 두른 밝은 면.
