@@ -157,3 +157,51 @@ def open_folder(folder: Path) -> None:
         subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except (OSError, ValueError) as e:
         raise _cannot_open(folder) from e
+
+
+def reveal_command(system: str, *, wsl: bool = False) -> list[str]:
+    """그 파일을 **골라서** 여는 명령의 앞부분.
+
+    윈도우 탐색기는 `/select,` 로 파일 하나를 지목할 수 있다. 파일을 여는
+    것이 아니라 **가리키기만** 하므로 실행되지 않는다 — 다운로드 폴더의 중복
+    `.exe` 를 확인하려다 설치 프로그램이 뜨면 안 된다.
+
+    맥·리눅스에는 같은 일을 시키는 표준이 없다. 그쪽은 부모 폴더를 연다
+    (`reveal_file` 이 경로를 폴더로 바꿔 넘긴다).
+    """
+    if wsl:
+        return ["explorer.exe", "/select,"]
+    if system == "Windows":
+        return ["explorer", "/select,"]
+    return ["open"] if system == "Darwin" else ["xdg-open"]
+
+
+def reveal_file(path: Path) -> None:
+    """탐색기를 열어 그 파일을 가리킨다. **파일을 실행하지 않는다.**
+
+    `open_folder` 와 달리 `os.startfile` 을 쓰지 않는다 — 그것은 파일을 **연다**.
+    윈도우에서도 `explorer /select,` 를 직접 부른다.
+    """
+    path = Path(path)
+    if path.is_dir():
+        raise OrganizeError(
+            f"폴더는 이 방법으로 열 수 없습니다: {path}",
+            hint="폴더를 열 때는 폴더 이름 쪽 링크를 눌러 주세요.")
+    if not path.is_file():
+        raise OrganizeError(
+            f"파일을 찾을 수 없습니다: {path}",
+            hint="이미 옮겨졌거나 지워졌을 수 있습니다. [미리보기] 를 다시 눌러 주세요.")
+
+    wsl = is_wsl()
+    앞 = reveal_command(platform.system(), wsl=wsl)
+    if 앞[-1] == "/select,":
+        cmd = [*앞, _windows_path(path) if wsl else str(path)]
+    else:
+        # 고를 수 없는 OS — 부모 폴더를 연다. 아무 일도 안 하는 것보다 낫다.
+        cmd = [*앞, str(path.parent)]
+    try:
+        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except (OSError, ValueError) as e:
+        raise OrganizeError(
+            f"탐색기를 열지 못했습니다: {path}",
+            hint="파일이 있는 폴더를 직접 열어 확인해 주세요.") from e

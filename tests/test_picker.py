@@ -148,3 +148,53 @@ def test_open_folder_윈도우에서는_startfile_을_쓴다(tmp_path, monkeypat
     picker.open_folder(tmp_path)
 
     assert 연것 == [str(tmp_path)]
+
+
+# ── 파일을 탐색기에서 골라서 열기 ────────────────────────────────
+# **파일을 실행하지 않는다.** 다운로드 폴더를 정리하면 중복 .exe 가 나오는데,
+# 확인하려고 누른 것이 설치 프로그램을 띄우면 안 된다.
+
+def test_reveal_command_윈도우는_select_로_고른다():
+    assert picker.reveal_command("Windows") == ["explorer", "/select,"]
+
+
+def test_reveal_command_wsl_은_exe_를_부른다():
+    assert picker.reveal_command("Linux", wsl=True) == ["explorer.exe", "/select,"]
+
+
+def test_reveal_command_그_외에는_선택_없이_폴더만():
+    """맥·리눅스에는 '그 파일을 골라서' 를 시키는 표준이 없다."""
+    assert picker.reveal_command("Darwin") == ["open"]
+    assert picker.reveal_command("Linux") == ["xdg-open"]
+
+
+def test_reveal_file_없는_파일이면_한국어로_알린다(tmp_path):
+    with pytest.raises(OrganizeError) as e:
+        picker.reveal_file(tmp_path / "없는파일.pdf")
+
+    assert "찾을 수 없" in e.value.message
+    assert e.value.hint
+
+
+def test_reveal_file_폴더를_주면_거절한다(tmp_path):
+    """폴더는 open_folder 가 연다. 여기로 오면 부르는 쪽이 틀린 것이다."""
+    with pytest.raises(OrganizeError):
+        picker.reveal_file(tmp_path)
+
+
+def test_reveal_file_그_외_OS_에서는_부모_폴더를_연다(tmp_path, monkeypatch):
+    파일 = tmp_path / "보고서.pdf"
+    파일.write_bytes(b"X")
+    부른것 = {}
+    monkeypatch.setattr(picker, "is_wsl", lambda: False)
+    monkeypatch.setattr(picker.platform, "system", lambda: "Linux")
+    monkeypatch.delattr(picker.os, "startfile", raising=False)
+
+    class Shim:
+        Popen = staticmethod(lambda cmd, **kw: 부른것.update(cmd=cmd))
+        DEVNULL = None
+    monkeypatch.setattr(picker, "subprocess", Shim)
+
+    picker.reveal_file(파일)
+
+    assert 부른것["cmd"] == ["xdg-open", str(tmp_path)], "부모 폴더를 연다"
