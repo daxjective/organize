@@ -33,6 +33,10 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
         step={"block": "unzip"},
     ),
     CatalogEntry(
+        id="empty_files", label="빈 파일 치우기", summary="0바이트만", default_on=True,
+        step={"block": "empty_files"},
+    ),
+    CatalogEntry(
         id="dedup", label="중복 제거", summary="해시 기준", default_on=True,
         step={"block": "dedup"},
     ),

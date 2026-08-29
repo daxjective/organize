@@ -36,6 +36,7 @@ BlockFn = Callable[[Context, BlockConfig], Plan]
 # `profil` 같은 오타 하나가 조용히 무시되면 사용자는 왜 안 되는지 알 길이 없다.
 BLOCK_OPTIONS: dict[str, tuple[str, ...]] = {
     "unzip": ("delete_original",),
+    "empty_files": (),
     "dedup": (),
     "route": ("profile",),
     "by_date": ("layout",),
@@ -121,9 +122,10 @@ def already_there(ctx: Context, entry, rel: str, sub: str, cfg: BlockConfig) -> 
 
 
 def _registry() -> dict[str, BlockFn]:
-    from organize.blocks import by_date, dedup, route, unzip
+    from organize.blocks import by_date, dedup, empty_files, route, unzip
     return {
         "unzip": unzip.build,
+        "empty_files": empty_files.build,
         "dedup": dedup.build,
         "route": route.build,
         "by_date": by_date.build,
